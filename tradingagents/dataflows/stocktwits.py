@@ -27,7 +27,27 @@ from .symbol_utils import crypto_base
 logger = logging.getLogger(__name__)
 
 _API = "https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
-_UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
+
+# ★ 2026-09-17 修正：StockTwits 会对**非浏览器 User-Agent** 一律返回 403。
+#
+# 原值是 ``tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)``，
+# 实测（2026-09-17 美东盘后，本机）：
+#     tradingagents/0.2 (...)  → HTTP 403 Forbidden
+#     Python-urllib/3.13       → HTTP 403 Forbidden
+#     Mozilla/5.0 ... Chrome   → HTTP 200，返回 30 条带 Bullish/Bearish 标签的消息
+#
+# 后果极具迷惑性：``fetch_stocktwits_messages`` 按设计「优雅降级」返回占位串
+# ``<stocktwits unavailable: HTTPError>``，**不抛异常**；而 collect.py 的 ``_safe_call``
+# 只把 ``DATA_UNAVAILABLE`` 前缀判为不可用，于是这个通道被**静默记为 ok**，
+# 证据包结尾照报「29 / 29 通道成功」—— 一个必需的证据源实际上整段缺失。
+#
+# 现在改用浏览器 UA；同时经实测**保留标识信息**并不解决问题（StockTwits 按 UA
+# 白名单放行），故按对端要求发送浏览器 UA。调用方 ``_safe_call`` 已同步加固，
+# 会识别占位串而不复现「假绿」。
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 
 def _within_window(messages, start_date, end_date):
