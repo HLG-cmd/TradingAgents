@@ -221,3 +221,17 @@ __marimo__/
 # Enterprise env file (secrets) and generated run reports
 .env.enterprise
 reports/
+
+# ── 本项目自建：瞬态产物（跑完会被封存进 reports/**/_source.zip，平时应为空）──
+wb_analysis/evidence/
+wb_analysis/drafts/
+wb_analysis/analysis/
+wb_analysis/_cache/
+reports/_datasets/
+
+# ── 删除前的回滚包（体积大、且是一次性保险，不进版本库）──
+.workbuddy/backup/
+
+# ── 一次性探针的编译缓存（探针本身要跟踪，它是审计线索）──
+scripts/_oneoff/__pycache__/
+wb_analysis/_oneoff/__pycache__/
