@@ -21,6 +21,7 @@
 """
 import argparse
 import ast
+import os
 import re
 import subprocess
 import sys
@@ -122,22 +123,83 @@ def chk_quant() -> tuple[str, str]:
            ("FAIL", f"自建包或凭证异常：{out.strip().splitlines()[-1][:70] if out.strip() else rc}")
 
 
-def chk_pycache() -> tuple[str, str]:
-    """编译缓存体检。
+# ── 长期堆积预算 ──────────────────────────────────────────────────────────────
+# 目标：项目**长期运行不积累没用的东西**。做法不是"天天清"，而是
+#   ① 占用**可见**（PASS 消息也带各项尺寸）；② 每类堆积物有**预算**；③ 超预算时给出**明确出口**。
+# 预算依据（2026-09-23 实测基线）：reports 10.0 / _cache 0.13 / backup 4.2 / memory 0.24 MB，
+#   **外部缓存 ~/.tradingagents 591 MB**（prices 265 + cache 220 + edgar 101）——
+#   它是全项目最大的堆积物、且在仓库之外，此前对任何检查都不可见。
+# 预算取余量 ⇒ 正常增长不报警，只在"真积累"时说话（误报过多的闸门等于没有闸门）。
+# 「磁盘占用」不是正确性问题 ⇒ 本检查永远不 FAIL。
+DISK_BUDGETS: list[tuple[str, str, float, str]] = [
+    # (显示名, 路径【绝对=项目外，相对=ROOT 下】, 预算 MB, 超预算时的处置)
+    ("reports", "reports", 200.0, "旧版报告可清：scripts/_cleanup_reports.py（删前先打包回滚包）"),
+    ("_cache", "wb_analysis/_cache", 50.0, "共享参考数据，可删后由 erp_context.py 等重采"),
+    ("backup", ".workbuddy/backup", 30.0, "scripts/_prune_backup.py"),
+    ("memory", ".workbuddy/memory", 10.0, "旧日志归档进 _backup/ 并精简"),
+    ("外部缓存", str(Path.home() / ".tradingagents"), 1024.0,
+     "quant/cleanup_cache.py --status 先看占用，再选 --keep-edgar / --yes"),
+]
+PYC_BUDGET_MB = 20.0  # .pyc 正常约 1 MB；超过 20 MB 属异常（不是"该清了"而是"哪里坏了"）
 
-    ⚠️ 曾经的 bug（2026-09-23 修）：判据写成 `any(s in d.parts for s in SKIP)`，
-    而迭代出来的 `d` 本身就叫 `__pycache__`、`SKIP` 里又含 `"__pycache__"`
-    ⇒ **条件恒真、检测器恒 PASS**，实测漏掉 82 个 .pyc 却报「无残留」。
-    这是「检测器看着在工作、其实什么也没检」的典型（铁律 3 / 32）。
-    ⇒ 正确判据：只看 `__pycache__` **之上的**目录是否落在排除集里。
+
+def _dir_mb(p: Path) -> float:
+    t = 0
+    if not p.is_dir():
+        return 0.0
+    for dp, _dn, fn in os.walk(p):
+        for f in fn:
+            try:
+                t += os.path.getsize(os.path.join(dp, f))
+            except OSError:
+                pass
+    return t / 1024 / 1024
+
+
+def _pyc_mb() -> float:
+    """项目内 .pyc 总量（排除 .venv 等运行时目录）。
+
+    ⚠️ 判据沿自 2026-09-23 修过的 bug：不能写 `any(s in d.parts for s in SKIP)`——
+    `rglob` 迭代出的目录本身就叫 `__pycache__` 而 `SKIP` 里也含它，条件恒真、检测器恒 PASS
+    （实测漏掉 82 个 .pyc 却报"无残留"）。必须只看 `__pycache__` **之上**的目录。
     """
     excluded = SKIP - {"__pycache__"}
-    n = 0
+    t = 0
     for d in ROOT.rglob("__pycache__"):
         if any(s in d.relative_to(ROOT).parts[:-1] for s in excluded):
             continue
-        n += len(list(d.glob("*.pyc")))
-    return ("PASS", "无编译缓存残留") if n == 0 else ("WARN", f"{n} 个 .pyc（可清理，不影响功能）")
+        for f in d.glob("*.pyc"):
+            try:
+                t += f.stat().st_size
+            except OSError:
+                pass
+    return t / 1024 / 1024
+
+
+def chk_disk_budget() -> tuple[str, str]:
+    """堆积预算体检（取代原「编译缓存」单项检查，2026-09-23）。
+
+    为什么取代：.pyc 被 .gitignore 覆盖、每次运行必然重生 —— 逐个计数只会产出
+    **永远黄的噪声闸门**。把它并进整体占用后，只在总量异常的量级上说话。
+    路径支持绝对（项目外，如 ~/.tradingagents）与相对（ROOT 下）两种。
+    """
+    def _path(rel: str) -> Path:
+        return Path(rel) if os.path.isabs(rel) else ROOT / rel
+
+    sizes = [(name, _dir_mb(_path(rel))) for name, rel, _b, _r in DISK_BUDGETS]
+    pyc = _pyc_mb()
+    overview = " · ".join(f"{n} {v:.1f}MB" for n, v in sizes) + f" · pyc {pyc:.1f}MB"
+    over = [
+        f"{name} {v:.0f}MB 超预算 {b:.0f}MB ⇒ {remedy}"
+        for (name, _rel, b, remedy), (_n, v) in zip(DISK_BUDGETS, sizes)
+        if v > b
+    ]
+    if pyc > PYC_BUDGET_MB:
+        over.append(f"pyc {pyc:.0f}MB 异常（正常 ≈1MB）⇒ 逐文件清理项目内 __pycache__")
+    if over:
+        return "WARN", "；".join(over)
+    return "PASS", overview
+
 
 
 def chk_memory_size() -> tuple[str, str]:
@@ -210,7 +272,7 @@ CHECKS = [
     ("自建包与凭证", chk_quant),
     ("版本库忽略", chk_gitignore),
     ("根目录整洁", chk_root_clean),
-    ("编译缓存", chk_pycache),
+    ("堆积预算", chk_disk_budget),
     ("记忆体积", chk_memory_size),
     ("回归基线", chk_tests),
     ("质量记分卡", chk_scorecard),

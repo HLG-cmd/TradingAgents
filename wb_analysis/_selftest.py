@@ -203,34 +203,43 @@ def main() -> int:
         except Exception as e:                                   # noqa: BLE001
             check("白名单一致：lint 与 verify_ratings", False, f"加载失败 {e}")
 
-        # ---- 7. 健康检查的「编译缓存」检测器（双边；防再次退化成恒 PASS）----
-        # 实测过一次真实缺陷（2026-09-23）：判据写成 `any(s in d.parts for s in SKIP)`，
-        # 而 `rglob` 迭代出来的目录本身就叫 `__pycache__`、`SKIP` 里也含 `"__pycache__"`
-        # ⇒ **条件恒真 ⇒ 检测器恒 PASS**，82 个 .pyc 却报「无编译缓存残留」。
-        # 这正是本文件存在的理由：**看着在工作、其实什么也没检**。
-        # ⇒ 双边夹具：有 .pyc 必报 WARN；无 .pyc 必 PASS；且被排除目录里的 .pyc 不得计数。
+        # ---- 7. 健康检查的「堆积预算」检测器（双边；防退化成恒 PASS 或恒 WARN）----
+        # 前身是「编译缓存」单项检查 —— 2026-09-23 实测它曾因判据恒真而**恒 PASS**
+        #（82 个 .pyc 报「无残留」），这正是本文件要防的「看着在工作、其实什么也没检」。
+        # 现改为整体堆积预算 ⇒ 双边夹具改为：超预算必 WARN（且消息带处置命令）、
+        # 预算内必 PASS（且消息带各项尺寸 —— **占用可见性本身是功能**，PASS 也不能只说"正常"）。
+        # 夹具刻意用**合成预算表**（含相对 + 绝对两种路径），不依赖真实机器的磁盘状态——
+        # 否则真实磁盘一旦合法超预算，自检会跟着假红。
         try:
             h = load_module("_health_h", str(HERE.parent / "scripts" / "_health.py"))
             fake = tmp / "fakeproj"
-            (fake / "pkg" / "__pycache__").mkdir(parents=True)
-            (fake / "pkg" / "__pycache__" / "mod.cpython-313.pyc").write_bytes(b"\x00")
-            # 被排除目录里的缓存：不得计入（否则 .venv 会让它永远变红）
-            (fake / ".venv" / "lib" / "__pycache__").mkdir(parents=True)
-            (fake / ".venv" / "lib" / "__pycache__" / "lib.pyc").write_bytes(b"\x00")
+            (fake / ".workbuddy" / "backup").mkdir(parents=True)
+            (fake / ".workbuddy" / "backup" / "b.zip").write_bytes(b"\x00" * 4096)
 
-            orig_root = h.ROOT
+            orig_root, orig_budgets = h.ROOT, h.DISK_BUDGETS
             h.ROOT = fake
-            lvl_bad, msg_bad = h.chk_pycache()
-            (fake / "pkg" / "__pycache__" / "mod.cpython-313.pyc").unlink()
-            lvl_ok, msg_ok = h.chk_pycache()
-            h.ROOT = orig_root
+            # 反例：预算 0.001MB ⇒ 4096 字节的包也必须被拦下（相对路径命中）
+            h.DISK_BUDGETS = [
+                ("backup", ".workbuddy/backup", 0.001, "scripts/_prune_backup.py"),
+                ("外部缓存", str(fake / ".tradingagents"), 0.001, "quant/cleanup_cache.py"),
+            ]
+            lvl_bad, msg_bad = h.chk_disk_budget()
+            # 正例：同一夹具、真实量级的预算 ⇒ 必须安静通过且报尺寸（绝对路径不存在的目录 ⇒ 0.0MB）
+            h.DISK_BUDGETS = [
+                ("backup", ".workbuddy/backup", 30.0, "scripts/_prune_backup.py"),
+                ("外部缓存", str(fake / ".tradingagents"), 1024.0, "quant/cleanup_cache.py"),
+            ]
+            lvl_ok, msg_ok = h.chk_disk_budget()
+            h.ROOT, h.DISK_BUDGETS = orig_root, orig_budgets
 
-            check("health: 检出 .pyc（不再恒 PASS）", lvl_bad == "WARN" and "1 个" in msg_bad,
-                  f"{lvl_bad} / {msg_bad}")
-            check("health: 无 .pyc 时 PASS，且 .venv 被排除", lvl_ok == "PASS",
-                  f"{lvl_ok} / {msg_ok}")
+            check("health: 超预算必 WARN 且带处置",
+                  lvl_bad == "WARN" and "_prune_backup" in msg_bad,
+                  f"{lvl_bad} / {msg_bad[:60]}")
+            check("health: 预算内 PASS 且报尺寸",
+                  lvl_ok == "PASS" and "backup" in msg_ok and "外部缓存" in msg_ok,
+                  f"{lvl_ok} / {msg_ok[:60]}")
         except Exception as e:                                   # noqa: BLE001
-            check("health: chk_pycache 双边", False, f"加载失败 {e}")
+            check("health: chk_disk_budget 双边", False, f"加载失败 {e}")
 
         if args.verbose:
             print("\n----- lint 好夹具输出 -----\n" + g_out[-800:])
