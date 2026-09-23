@@ -1,3 +1,6 @@
+# lifecycle: maintenance
+# created: 2026-09-23
+# usage: ./.venv/Scripts/python.exe scripts/smoke_structured_output.py
 """End-to-end smoke for structured-output agents against a real LLM provider.
 
 Runs the three decision-making agents (Research Manager, Trader, Portfolio
