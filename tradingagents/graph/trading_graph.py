@@ -30,7 +30,7 @@ from tradingagents.agents.utils.agent_utils import (
 )
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.dataflows.config import set_config
-from tradingagents.dataflows.utils import safe_ticker_component
+from tradingagents.dataflows.utils import get_current_date, safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_llm_client
 from tradingagents.reporting import write_report_tree
@@ -383,9 +383,14 @@ class TradingAgentsGraph:
         those already resolved by the trade date. A current-date run returns
         None, disabling the filter so live behavior and pre-migration entries
         (which have no stored resolution date) are unaffected.
+
+        ⚠️ 「today」必须取**美股日历日**（``get_current_date()``），不能用本机日期。
+        本机在 UTC+8 时，美东「今天」在本机日历上常已是「昨天」⇒ 当前交易日会被
+        误判为历史回填，lesson 过滤被错误启用（静默丢教训）。同族缺陷见
+        ``stockstats_utils._market_today_eastern`` 与铁律 34。
         """
         td = str(trade_date)
-        return td if td < datetime.now().strftime("%Y-%m-%d") else None
+        return td if td < get_current_date() else None
 
     def _run_signature(self, asset_type: str) -> str:
         """Graph-shape inputs that must invalidate a checkpoint if changed.
