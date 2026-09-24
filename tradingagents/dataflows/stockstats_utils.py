@@ -164,6 +164,58 @@ def _assert_ohlcv_not_stale(
         )
 
 
+def _market_today_eastern():
+    """本机"今天"换算到 **US/Eastern** 后的日期（tz-naive Timestamp）。
+
+    为什么需要：本项目从 UTC+8 分析美股，基准日（如 2026-09-23）在本机日历上
+    已经是"昨天"（本机 2026-09-24）。若直接拿本机 today 去比，`curr_date < today`
+    恒真 ⇒ 当日缓存永不刷新 ⇒ "当日 bar 尚未发布"那一刻的半成品被永久固化。
+
+    ⚠️ 必须经 `pd.Timestamp.today()` 取本机时间（会被测试桩掉以注入固定时钟），
+    再换算时区；直接调 `pd.Timestamp.now(tz=...)` 会绕过注入，端到端测试失效。
+    """
+    import datetime as _dt
+
+    now_local = pd.Timestamp.today()
+    try:
+        if now_local.tzinfo is None:
+            now_local = now_local.tz_localize(_dt.datetime.now().astimezone().tzinfo)
+        return now_local.tz_convert("America/New_York").normalize().tz_localize(None)
+    except Exception:                                            # noqa: BLE001
+        return now_local.normalize()
+
+
+def _purge_sibling_cache_variants(cache_dir: str, safe_symbol: str, keep: str) -> int:
+    """删掉同标的的**其它日期变体**缓存，只保留本次要用的那一份。
+
+    缓存文件名里嵌了 ``start``/``end``（每天都变），于是每次运行都产生一个新文件，
+    而旧文件此后再也不会被命中 —— 磁盘占用随运行次数线性增长。
+    （本项目自己的准则：凡是「按日期累积」的缓存都要改成单文件 + TTL。）
+    文件名约定被上游测试钉死 ⇒ 不能改格式，只能在写入前清理同标的的旧变体。
+    这些是可随时重新下载的**再生数据**，删除不丢信息。
+    """
+    prefix = f"{safe_symbol}-YFin-data-"
+    keep_name = os.path.basename(keep)
+    removed = 0
+    try:
+        for name in os.listdir(cache_dir):
+            if not name.startswith(prefix) or name == keep_name:
+                continue
+            path = os.path.join(cache_dir, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:                                      # noqa: PERF203
+                continue
+    except OSError:                                              # noqa: BLE001
+        return removed
+    if removed:
+        logger.info("purged %d stale OHLCV cache variant(s) for %s", removed, safe_symbol)
+    return removed
+
+
 def _needs_same_day_refresh(data_file, curr_date_dt, today_date) -> bool:
     """Whether a cached frame must be refetched to reflect the requested day.
 
@@ -175,6 +227,12 @@ def _needs_same_day_refresh(data_file, curr_date_dt, today_date) -> bool:
     price. Row inspection cannot tell a partial bar from a final one, so the TTL
     governs every current-day cache. Historical requests always reuse the cache,
     since those rows are immutable.
+
+    ⚠️ **``today_date`` 必须是市场所在时区的"今天"（US/Eastern），不是本机时区。**
+    2026-09-23 实测：本机在 UTC+8，分析美股基准日 2026-09-23 时，本机的"今天"已是
+    2026-09-24 ⇒ ``curr_date < today`` 恒真 ⇒ **本判据恒返回 False ⇒ 当日缓存永不刷新**，
+    于是"当日 bar 尚未发布"那一刻下载的半成品（只有 Volume、OHLC 全 NaN）被永久固化，
+    后续每一次重采都拿到缺一天的数据。与 ``get_current_date()`` 用本机时区是同一类 bug。
     """
     if curr_date_dt.date() < today_date.date():
         return False
@@ -211,6 +269,17 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
         config["data_cache_dir"],
         f"{safe_symbol}-YFin-data-{start_str}-{end_str}.csv",
     )
+    # ⚠️ 文件名含 start/end，而这两个值每天都变 ⇒ 每天一个新文件、旧文件永不再用。
+    # 实测 ~/.tradingagents/cache/ 因此涨到 **2016 个文件 / 218 MB**（其中 510 个是纯废物，
+    # 且全池筛选每跑一次就再涨一批）—— 这正是本项目自己明令禁止的「按日期累积的缓存」。
+    # 文件名约定由上游测试钉死，不便改 ⇒ 改为**写入前清掉同标的的其它日期变体**，
+    # 使每个标的在磁盘上最多留 1 份。
+    _purge_sibling_cache_variants(config["data_cache_dir"], safe_symbol, data_file)
+    # 「是否当日」必须按**市场时区（US/Eastern）**判断，否则跨时区分析时当日缓存永不刷新
+    # （见 _needs_same_day_refresh 文档）。
+    # ⚠️ 必须**经由 pd.Timestamp.today() 再换算时区**：该入口会被测试桩掉以注入固定时钟，
+    # 若直接调 pd.Timestamp.now(tz=...) 就不受注入控制，端到端测试会失效。
+    market_today = _market_today_eastern()
 
     # A cached file may be empty if a prior fetch failed (unknown symbol,
     # transient rate limit). Treat an empty/columnless cache as a miss and
@@ -223,7 +292,7 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
         if (
             not cached.empty
             and "Close" in cached.columns
-            and not _needs_same_day_refresh(data_file, curr_date_dt, today_date)
+            and not _needs_same_day_refresh(data_file, curr_date_dt, market_today)
         ):
             data = cached
 
