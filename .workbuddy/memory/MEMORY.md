@@ -1,9 +1,9 @@
 # TradingAgents 项目长期记忆
 
-> 本文件只存**每次都要遵守的**：架构 / 命令 / 12 角色契约 / **33 条铁律的单行索引** / 校验器硬约束 / 用户偏好。
-> ★★ **开工第一件事：完整读 `.workbuddy/memory/IRONLAWS.md`（铁律 1–33 全文，约 37KB）** ——
+> 本文件只存**每次都要遵守的**：架构 / 命令 / 12 角色契约 / **铁律单行索引** / 校验器硬约束 / 用户偏好。
+> ★★ **开工第一件事：完整读 `.workbuddy/memory/IRONLAWS.md`（铁律 1–37 全文，约 44KB）** ——
 > 本文件只放**索引**，索引会丢细节；**只照索引办事而没读全文 = 没读**。
-> 备份：`_backup/MEMORY_20260922_pre-slim.md`（第四次精简前的原文）。
+> 备份：`_backup/MEMORY_20260922_pre-slim.md`、`backup/MEMORY_PRE_slim_20260926.md`（各次精简前原文）。
 
 ## 记忆与文档体例（改任何文件前先读）
 
@@ -12,12 +12,12 @@
 | 文件 | 放什么 | 何时读 |
 |---|---|---|
 | `MEMORY.md`（本文件） | 索引 + 每次都要遵守的硬约束 | 自动注入 |
-| **`IRONLAWS.md`** | **铁律 1–33 全文**（判据 / 阈值 / 陷阱） | **开工先读** |
+| **`IRONLAWS.md`** | **全部铁律全文**（判据 / 阈值 / 陷阱） | **开工先读** |
 | `DOMAINS.md` | 按标的·子系统（指数聚合 / ERP / 黄金 / 非美股 / 量化选股 / A股 等） | 碰到该领域时读 |
 | `SKILL.md` | 只放**怎么做**（步骤/命令/顺序/检查点），陷阱**指向**上两个 | 执行时读 |
 | `docs/WORKFLOW.md` / `docs/SCREENER.md` | 运行手册（不收设计论证） | 操作前读 |
 | `FRAMEWORK.md` | 12 角色输出契约（子智能体读它） | 下发角色时 |
-| `docs/PROJECT_MAP.md` | **项目地图：每个目录是干什么的（第一入口）** | 看不懂结构时 |
+| `docs/PROJECT_MAP.md` | **项目地图：每个目录干什么（第一入口）** | 看不懂结构时 |
 | `README.md` / `CHANGELOG.md` | 上游归属+架构一句话 / 版本索引（一行一版） | — |
 | `YYYY-MM-DD.md` | 当日流水。**归档到 `_backup/` 即止，不强行提炼** | — |
 
@@ -38,10 +38,10 @@ TauricResearch 多智能体框架中文定制版 + 自建量化选股层（`scre
 - ★ 报告树 `reports/<TICKER>/<TICKER>_<YYYYmmdd_HHMMSS>/`（**按标的分子目录**；旧布局加 `assemble.py --flat`）
   · 每棵树含 `RUN.json`（数据基准日/来源草稿/证据/评级）⇒ 四个命名空间由此精确关联
   · `_datasets/` 数据产品｜`_other/` 非 12 角色专题｜`_archive/` 归档+删除清单｜`_audit/` 审计｜`QUALITY.csv` 质量记分卡
-  · `reports/INDEX.md` 自动索引（`wb_analysis/_reports_index.py` 生成，`--check` 可作为卫生门禁）
+  · `reports/INDEX.md` 自动索引（`wb_analysis/_reports_index.py`，`--check` 可作卫生门禁）
 - ★ **自建代码在 `quant/` 包**（根目录无 `.py`）：库 4 个 ⇒ `from quant.xxx import yyy`；入口 5 个 ⇒ `python quant/xxx.py`；入口自带 sys.path 引导
   · 改后必跑回归基线 + **凭证断言** `from quant import edgar_fundamentals as ef; ef.SEC_USER_AGENT`（防 `.env` 静默失效）
-- ★ **项目地图**：`docs/PROJECT_MAP.md`（**看不懂目录名时的第一入口**，README 指向它）；`docs/` 放全部手册；各关键目录自带 `README.md`
+- ★ **项目地图**：`docs/PROJECT_MAP.md`（**看不懂目录名时的第一入口**）；`docs/` 放全部手册；各关键目录自带 `README.md`
 - ★ **产物封存** `wb_analysis/_seal_run.py`（`--plan`/`--all --apply`/`--unseal`/`--orphans`）⇒ 一轮产物 = 树内 `_source.zip`+`SOURCE_MANIFEST.json`
   ⇒ `{evidence,drafts,analysis}` 与 `_oneoff/` **空是正常态**；删前必校验，不通过即中止
 - ★ **共享缓存** `wb_analysis/_cache/`（ERP 序列、黄金面板等，**不属于任何一轮**，勿放 evidence/）
@@ -49,30 +49,26 @@ TauricResearch 多智能体框架中文定制版 + 自建量化选股层（`scre
 - ★ **数据缺口台账**：`wb_analysis/_gap_ledger.py <T> <date> [--check <草稿目录>]`
   · 每轮产出 `evidence/<T>_<date>.gaps.json`（登记 `cls` A/B/C/S · `decisive` · `blocks` · `remedy` · `fallback`）
   · **决定性缺口未写进 `0_brief.md` ⇒ 门禁 FAIL**（`_precheck.py` 第 2 项）；新通道须登记进 `RULES` 表，否则标 `?` 要求人工归类
-- ★ **脚本生命周期（`quant/`·`wb_analysis/`·`scripts/` 共 60 个）**：每个 `.py` 头部必须声明 `# lifecycle: reusable|maintenance|oneoff`
+- ★ **脚本生命周期**：每个 `.py` 头部必须声明 `# lifecycle: reusable|maintenance|oneoff`
   （`__init__.py`/`conftest.py` 豁免）；`oneoff` 归同级 `_oneoff/`（**审计线索，不删**）；新探针 `_tidy_scripts.py --new <名字> --serves <标的> <日期>`
 - ★ **新文件放哪儿**（顺序问）：跑分析会用到→`wb_analysis/`；只在改代码排障用→`scripts/`；被调用的引擎→`quant/`；产出→`reports/`。**验收＝同一职责只在一处**
 - ★ **回归基线**：`pytest tests/ -q -k "not DeepSeekLive"` ⇒ **724 passed/1 skipped**（**须排除真实 API 测试**，否则没余额时 402 假红）；已进门禁
-- ★ **质量记分卡** `wb_analysis/_scorecard.py [--trend]` ⇒ `reports/QUALITY.csv`（9 指标 × 每轮）＝**「越用越好」的唯一度量**
+- ★ **质量记分卡** `wb_analysis/_scorecard.py [--trend]` ⇒ `reports/QUALITY.csv`＝**「越用越好」的唯一度量**
 - ★ **一条命令看项目状态**：`scripts/_health.py`（检查项以脚本输出为准 —— **此处不抄清单，抄了必漂移**）
-- ★ 根 `conftest.py` 显式把项目根放进 `sys.path` ⇒ **测试与调用目录无关**（此前只在 `python -m pytest` 下能过）
-- ★ `pyproject.toml` 的 `packages.find` 含 `"quant*"`；`.gitignore` 覆盖瞬态目录（evidence/drafts/analysis/_cache/_datasets）与 `.workbuddy/backup/`
-- 运行卫生工具（`scripts/`）：**全部工具与用法见 `docs/TOOLS.md`**（自动生成）；共性铁律＝**删前先打包、逐项校验不过即中止**
+- ★ `pyproject.toml` 的 `packages.find` 含 `"quant*"`；`.gitignore` 覆盖瞬态目录与 `.workbuddy/backup/`
+- ★ 运行卫生工具（`scripts/`）：**全部工具与用法见 `docs/TOOLS.md`**（自动生成）；共性铁律＝**删前先打包、逐项校验不过即中止**
 
 ```bash
 VENV=./.venv/Scripts/python.exe
 $VENV wb_analysis/collect.py AMD --date 2026-09-18                     # 个股/ETF，35~37 通道
 $VENV wb_analysis/collect_index.py --date 2026-09-18 --index NDX|SPX   # 指数专用
-$VENV wb_analysis/_derive_stock.py AMD 2026-09-18                      # 二级指标，分析前必跑
-$VENV wb_analysis/_derive_ndx.py 2026-09-18
-$VENV wb_analysis/assemble.py --from-dir wb_analysis/drafts/<P>_<date>
+$VENV wb_analysis/_gen_derived_stock.py AMD 2026-09-18                 # 二级指标，分析前必跑，会落盘
+$VENV wb_analysis/assemble.py --from-dir wb_analysis/drafts/<P>_<date> # 草稿目录须为嵌套结构
 $VENV wb_analysis/_audit_gaps.py NDX <date>
 $VENV wb_analysis/erp_context.py --start 1990-01-01 --append
 ```
-- `_derive_stock.py` **只打印到 stdout、不落盘** ⇒ 用 `wb_analysis/_gen_derived_stock.py <T> <date>` 包装落盘
+- `_derive_stock.py` **只打印到 stdout、不落盘** ⇒ 用 `_gen_derived_stock.py <T> <date>` 包装落盘
   （产物 `evidence/<T>_<date>.derived.raw.txt` + `.derived.md`，含往返自校验）。
-- 辅助核验脚本（`scripts/`，本轮新增）：`_probe_option_freshness.py`（期权链 `lastTradeDate` 分布）、
-  `_crosscheck_nasdaq.py`（Nasdaq 官方 API 逐条复核日线）、`_rv_and_adjust_probe.py`（RV + 复权诊断）、`_insider_agg.py`（内部人聚合）。
 
 ### ★ 交付前校验：只跑这一条
 ```bash
@@ -82,7 +78,6 @@ $VENV wb_analysis/_precheck.py wb_analysis/drafts/<P>_<date> \
 **7 项**：运行卫生 → 数据缺口台账 → 评级词/契约 → 口径一致性 → 数字溯源 → 时序新鲜度 → 报告树反读；输出 FAIL（阻断）/ WARN（过目）/ INFO。
 - **判读规则已写进代码**：mtime 时序告警固定为 INFO（已知假阳性，判据应是内容比对）；需要阻断加 `--strict-freshness`。
 - 单项工具可单独调用，但**别用它们的退出码做总体判断**（约定互不一致）。
-- 默认跳过归档子目录（路径含 `_stale`/`_archive`）与工作文档（`0_*.md`、`_constraints.md`）。
 
 ### ★★ 先跑门禁自检
 
@@ -149,13 +144,13 @@ market / fundamentals / news / sentiment → bull ⇄ bear → manager → trade
 | 34 | **判「是否当日」一律用市场所在时区**（不用本机时区）；缓存文件名不得含 `start`/`end` |
 | 35 | **判「某节正文是否为空」必须先剔 `Link:`/URL/围栏/分隔线**；「0 命中」是待验证不是通过 |
 | 36 | 期权信号会被**采集时点**反向改写（跨时点不可比）；配额耗尽时**换模型档位**是合法维度 |
-| 37 | **角色文件名 / 目录结构 / JSON 大小写**三处契约常量必须下发前双源核对；零前缀、嵌套目录、`trader_action='Hold'` |
+| 37 | **角色文件名 / 草稿目录结构 / JSON 大小写**三处契约常量必须下发前双源核对（零前缀、嵌套目录、`trader_action='Hold'`） |
 
 ## 契约与校验器的硬约束（**全文见 `IRONLAWS.md` 尾部**）
 
 - `trader.md` = 首行 `**Reasoning**` + 末行 `FINAL TRANSACTION PROPOSAL: **HOLD**`（串全文恰 1 次）
 - 五档英文词白名单 **6 席**：manager / portfolio_manager / trader / aggressive / conservative / neutral（**结论块外出现即阻断**）
-- 「自我合规声明」会命中自己的正则；`_lint_drafts.py` 三个已知假阳性（CSV 分词 / 缺亿万换算 / 输出截断）
+- 「自我合规声明」会命中自己的正则；`_lint_drafts.py` 已知假阳性见代码内注释
 
 ## 用户偏好
 
