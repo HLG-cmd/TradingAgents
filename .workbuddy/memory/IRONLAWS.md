@@ -450,3 +450,36 @@ manager.md / portfolio_manager.md / trader.md / aggressive.md / conservative.md 
 19,569 字节已完整落盘，直接采用、未重跑）→ ② 等配额重置 → ③ **换模型档位**（探针验证后全程统一）
 → ④ 最差才是主智能体代写（会塌掉「角色独立判断」，**必须先告知用户并获同意**）。
 ⇒ **跨轮换档必须在 `meta.json` 与简报中显式声明**（不同档位不可直接横向比较）。
+
+### 37. ★★★ 角色文件名 / 目录结构 / JSON 大小写 —— 三处「契约常量」必须在下发前核对（2026-09-26 立）
+
+**本条源于本轮一次批量假违规**：我给三个风险角色下发时指定了文件名为
+`risk_aggressive.md` / `risk_conservative.md` / `risk_neutral.md`，
+而 `_lint_drafts.py` 的白名单与 `assemble.py::load_from_dir` 用的都是
+**`aggressive.md` / `conservative.md` / `neutral.md`（无前缀）**
+⇒ **三份完全合规的文件被判「正文出现五档英文词」**（2/3/5 处），lint 退出码 2 阻断交付。
+重命名后违规归零。**根因是我的指令错误，不是子智能体的问题。**
+
+⇒ **通则一（文件名）**：下发任何角色前，**双源核对**目标文件名 ——
+`_lint_drafts.py::RATING_ALLOWED_FILES` + `assemble.py::load_from_dir` 的 `read()` 路径。
+⚠️ **`_lint_drafts.py` 的假违规会伪装成真违规**：文件名不在白名单 ⇒ 任何五档词都算违规
+（连 `**Action**: Hold` 行都算）。**遇到"批量违规"先查文件名，再查内容。**
+
+⇒ **通则二（目录结构）**：`assemble.py --from-dir` **要求草稿目录是嵌套结构**：
+```
+<draft_dir>/0_brief.md          ← 工作文档（渲染器不读）
+<draft_dir>/meta.json           ← ticker / as_of / ratings / notes
+<draft_dir>/1_analysts/{market,sentiment,news,fundamentals}.md
+<draft_dir>/2_research/{bull,bear,manager}.md
+<draft_dir>/3_trading/trader.md
+<draft_dir>/4_risk/{aggressive,conservative,neutral,portfolio_manager}.md
+```
+**平铺落盘（12 个 md 全放根目录）会被拒**，且报错信息是
+「12 个必需角色小节正文为空」—— **指向"空骨架"而非"路径不存在"**，
+属铁律 3「静默失败」的变体：`read()` 用 `p.exists()` 兜底成空串，不报错。
+⇒ **看到"正文为空"先查路径，不要先怀疑内容。**
+
+⇒ **通则三（json 大小写）**：`meta.json` 的 `ratings.trader_action` 必须写 **`Hold`**（三档原拼写
+`Buy`/`Hold`/`Sell`），写 `HOLD` 会触发 assemble 的契约 WARN；
+而 **`trader.md` 末行必须写大写 `HOLD`**（`FINAL TRANSACTION PROPOSAL: **HOLD**`）。
+**两处大小写规则相反**，是本项目最容易踩的一处不一致。
