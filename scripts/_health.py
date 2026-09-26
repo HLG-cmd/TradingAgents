@@ -127,8 +127,11 @@ def chk_quant() -> tuple[str, str]:
 # 目标：项目**长期运行不积累没用的东西**。做法不是"天天清"，而是
 #   ① 占用**可见**（PASS 消息也带各项尺寸）；② 每类堆积物有**预算**；③ 超预算时给出**明确出口**。
 # 预算依据（2026-09-23 实测基线）：reports 10.0 / _cache 0.13 / backup 4.2 / memory 0.24 MB，
-#   **外部缓存 ~/.tradingagents 591 MB**（prices 265 + cache 220 + edgar 101）——
-#   它是全项目最大的堆积物、且在仓库之外，此前对任何检查都不可见。
+#   **外部缓存 ~/.tradingagents**（prices + cache + edgar + edgar_raw + logs + memory）——
+#   它是全项目最大的堆积物、且在仓库之外（`.gitignore` 管不到），此前对任何检查都不可见。
+#   ⚠️ 此处**不写死数值**（写死必漂移）：首测 2026-09-23 为 591 MB，其中 cache 占 220 MB；
+#      2026-09-26 复测 373 MB —— cache 已降至约 2.5 MB（"按天累积"的旧变体被清掉后不再增殖）。
+#      ⇒ 要具体数字请跑 `quant/cleanup_cache.py --status`，不要抄这里的数。
 # 预算取余量 ⇒ 正常增长不报警，只在"真积累"时说话（误报过多的闸门等于没有闸门）。
 # 「磁盘占用」不是正确性问题 ⇒ 本检查永远不 FAIL。
 DISK_BUDGETS: list[tuple[str, str, float, str]] = [
