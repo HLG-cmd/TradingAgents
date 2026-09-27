@@ -1,0 +1,130 @@
+======================================================================
+1. 当前实现（yfinance_news.get_global_news_yfinance）的源码
+======================================================================
+def get_global_news_yfinance(
+    curr_date: str,
+    look_back_days: int | None = None,
+    limit: int | None = None,
+) -> str:
+    """
+    Retrieve global/macro economic news using yfinance Search.
+
+    Args:
+        curr_date: Current date in yyyy-mm-dd format
+        look_back_days: Number of days to look back. ``None`` falls back to
+            ``global_news_lookback_days`` from the active config.
+        limit: Maximum number of articles to return. ``None`` falls back to
+            ``global_news_article_limit`` from the active config.
+
+    Returns:
+        Formatted string containing global news articles
+    """
+    config = get_config()
+    if look_back_days is None:
+        look_back_days = config["global_news_lookback_days"]
+    if limit is None:
+        limit = config["global_news_article_limit"]
+    search_queries = config["global_news_queries"]
+
+    all_news = []
+    seen_titles = set()
+
+    try:
+        for query in search_queries:
+            search = yf_retry(lambda q=query: yf.Search(
+                query=q,
+                news_count=limit,
+                enable_fuzzy_query=True,
+            ))
+
+            if search.news:
+                for article in search.news:
+                    # Handle both flat and nested structures
+                    if "content" in article:
+                        data = _extract_article_data(article)
+                        title = data["title"]
+                    else:
+                        title = article.get("title", "")
+
+                    # Deduplicate by title
+                    if title and title not in seen_titles:
+                        seen_titles.add(title)
+                        all_news.append(article)
+
+            if len(all_news) >= limit:
+                break
+
+        if not all_news:
+            return f"No global news found for {curr_date}"
+
+        # Calculate date range
+        curr_dt = datetime.strptime(curr_date, "%Y-%m-%d")
+        start_dt = curr_dt - relativedelta(days=look_back_days)
+        start_date = start_dt.strftime("%Y-%m-%d")
+
+        news_str = ""
+        kept = 0
+        for article in all_news[:limit]:
+            # Extract uniformly (flat + nested) and apply the same look-ahead-safe
+            # window filter, so flat articles can't leak future news (#1007).
+            data = _extract_article_data(article)
+            if not in_window(data["pub_date"], start_dt, curr_dt):
+                continue
+            news_str += f"### {data['title']} (source: {data['publisher']})\n"
+            if data["summary"]:
+                news_str += f"{data['summary']}\n"
+            if data["link"]:
+                news_str += f"Link: {data['link']}\n"
+            news_str += "\n"
+            kept += 1
+
+        # All candidates fell outside the window -> say so rather than return an
+        # empty-bodied report (#993).
+        if kept == 0:
+            return f"No global news found between {start_date} and {curr_date}"
+
+        return f"## Global Market News, from {start_date} to {curr_date}:\n\n{news_str}"
+
+    except Exception as e:
+        return f"Error fetching global news: {str(e)}"
+
+======================================================================
+2. 直接调 yfinance 看原始返回（是否含 summary/description 字段）
+======================================================================
+yfinance 1.7.0
+
+[Ticker('^GSPC').news] 返回 10 条
+  字段: ['bypassModal', 'canonicalUrl', 'clickThroughUrl', 'contentType', 'description', 'displayTime', 'finance', 'id', 'isHosted', 'metadata', 'previewUrl', 'provider', 'pubDate', 'storyline', 'summary', 'thumbnail', 'title']
+  title : What's ahead after a wild week for markets
+  summary: Investors and consumers alike face lots of risk and volatility.
+  description: 
+  字段: ['bypassModal', 'canonicalUrl', 'clickThroughUrl', 'contentType', 'description', 'displayTime', 'finance', 'id', 'isHosted', 'metadata', 'previewUrl', 'provider', 'pubDate', 'storyline', 'summary', 'thumbnail', 'title']
+  title : I'd Put $10,000 Into These 3 Vanguard Funds and Not Touch It for 20 Years
+  summary: The market, its dividend payers, and its largest growth stocks -- for about $3 a year in combined fees.
+  description: 
+  字段: ['bypassModal', 'canonicalUrl', 'clickThroughUrl', 'contentType', 'description', 'displayTime', 'finance', 'id', 'isHosted', 'metadata', 'previewUrl', 'provider', 'pubDate', 'storyline', 'summary', 'thumbnail', 'title']
+  title : Prediction: Here's What a $10,000 Investment in Costco (COST) Stock Could Be Worth in 5 Ye
+  summary: Costco's shares have risen at an average annual rate of nearly 18% over the past 15 years. We can't assume that will continue -- but it might.
+  description: 
+
+[Ticker('^TNX').news] 返回 10 条
+  字段: ['bypassModal', 'canonicalUrl', 'clickThroughUrl', 'contentType', 'description', 'displayTime', 'finance', 'id', 'isHosted', 'metadata', 'previewUrl', 'provider', 'pubDate', 'storyline', 'summary', 'thumbnail', 'title']
+  title : 3 Financial Stocks Retail Investors Are Watching As Bond Yields Hit 5%
+  summary: Global government bond yields are jumping, the US 10 year Treasury has moved above 5%, and rate expectations are being reset in real time. That kind of shift do
+  description: 
+  字段: ['bypassModal', 'canonicalUrl', 'clickThroughUrl', 'contentType', 'description', 'displayTime', 'finance', 'id', 'isHosted', 'metadata', 'previewUrl', 'provider', 'pubDate', 'storyline', 'summary', 'thumbnail', 'title']
+  title : 3 Dividend Stocks With At Least 3% Yield
+  summary: US 10 year Treasury yields recently moved above 5%, lifting borrowing costs across mortgages, corporate debt and real estate. When money gets pricier, reliable 
+  description: 
+  字段: ['bypassModal', 'canonicalUrl', 'clickThroughUrl', 'contentType', 'description', 'displayTime', 'finance', 'id', 'isHosted', 'metadata', 'previewUrl', 'provider', 'pubDate', 'storyline', 'summary', 'thumbnail', 'title']
+  title : 3 Exchange Stocks Investors May Watch Closely If Treasury Yields Hit 5%
+  summary: When U.S. 10 year Treasury yields touch 5%, the cost of money suddenly feels very real, and that can jolt everything from tech giants to tiny biotech stocks. Sh
+  description: 
+
+[Search('stock market')] news = 5 条
+  title: Here's What 60 Years of History Tells Us About Stock Market Crashes
+  has summary: False | has description: False
+  title: A Stock Market Correction Is Coming Eventually. Here's How the Smartest Investors Are Prep
+  has summary: False | has description: False
+  title: Prediction: Sept. 30 Will Be a Big Day for the Stock Market. Here Are 2 Stocks to Buy Hand
+  has summary: False | has description: False

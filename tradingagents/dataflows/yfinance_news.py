@@ -120,13 +120,38 @@ def get_news_yfinance(
         return f"Error fetching news for {ticker}: {str(e)}"
 
 
+# 宏观新闻的主通道：宽基指数的 ``Ticker().news``。
+#
+# 为什么不用 ``Search()``：yfinance 1.7.0 的 ``Search().news`` 返回的是**平铺结构**，
+# 其顶层键只有 ``link / providerPublishTime / publisher / relatedTickers / thumbnail
+# / title / type / uuid`` —— **不含 ``summary``**，于是宏观新闻每条只剩标题 + Link。
+# 而 ``Ticker().news`` 的条目是**嵌套在 ``content`` 里**的，**含 ``summary``**。
+# ⇒ 个股新闻（走 Ticker）一直有正文、宏观新闻（走 Search）一直没有，根因在此。
+GLOBAL_NEWS_TICKERS = ("^GSPC", "^TNX", "^VIX")
+
+
+def _fetch_global_via_tickers() -> list[dict]:
+    """主通道：聚合几个宽基指数的 ``Ticker().news``（该通道提供 ``summary``）。
+
+    单个指数失败不影响其余；全部失败时返回空列表，由调用方回退到 ``Search()``。
+    """
+    out: list[dict] = []
+    for sym in GLOBAL_NEWS_TICKERS:
+        try:
+            news = yf_retry(lambda s=sym: yf.Ticker(s).news) or []
+        except Exception:  # noqa: BLE001 — 单通道失败不应中断整体采集
+            continue
+        out.extend(news)
+    return out
+
+
 def get_global_news_yfinance(
     curr_date: str,
     look_back_days: int | None = None,
     limit: int | None = None,
 ) -> str:
     """
-    Retrieve global/macro economic news using yfinance Search.
+    Retrieve global/macro economic news.
 
     Args:
         curr_date: Current date in yyyy-mm-dd format
@@ -145,11 +170,33 @@ def get_global_news_yfinance(
         limit = config["global_news_article_limit"]
     search_queries = config["global_news_queries"]
 
+    curr_dt = datetime.strptime(curr_date, "%Y-%m-%d")
+    start_dt = curr_dt - relativedelta(days=look_back_days)
+    start_date = start_dt.strftime("%Y-%m-%d")
+
     all_news = []
     seen_titles = set()
 
     try:
+        # ① 主通道：宽基指数的 Ticker().news —— 该通道的条目**含 summary**，
+        #    这是宏观新闻能带正文的关键（Search() 不提供该字段）。
+        for article in _fetch_global_via_tickers():
+            data = _extract_article_data(article)
+            # 主通道同样必须过窗口：Ticker().news 只回最新快讯，在回溯场景下
+            # 它们往往整体落在窗口之外 —— 不过滤会把配额占满、挤掉兜底通道。
+            if not in_window(data["pub_date"], start_dt, curr_dt):
+                continue
+            title = data["title"]
+            if title and title != "No title" and title not in seen_titles:
+                seen_titles.add(title)
+                all_news.append(article)
+                if len(all_news) >= limit:
+                    break
+
+        # ② 兜底：Search() —— 结构为平铺、无 summary，仅保证主通道全失效时仍有内容。
         for query in search_queries:
+            if len(all_news) >= limit:
+                break
             search = yf_retry(lambda q=query: yf.Search(
                 query=q,
                 news_count=limit,
@@ -175,11 +222,6 @@ def get_global_news_yfinance(
 
         if not all_news:
             return f"No global news found for {curr_date}"
-
-        # Calculate date range
-        curr_dt = datetime.strptime(curr_date, "%Y-%m-%d")
-        start_dt = curr_dt - relativedelta(days=look_back_days)
-        start_date = start_dt.strftime("%Y-%m-%d")
 
         news_str = ""
         kept = 0
