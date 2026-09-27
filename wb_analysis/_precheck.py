@@ -155,6 +155,45 @@ def main() -> int:
             else:
                 add("数据缺口台账", "WARN", f"非预期退出码 {rc}")
 
+    # ---- 0c. 小节正文审计（「通道全绿但正文为空」= 静默失败特征）----
+    # 2026-09-27 立：此前三次「全绿但正文为空」（GOOG ×2、AVGO）全靠人眼发现，
+    # 判据其实完全可自动化。「全绿 + 空小节」必须逐条归因后才能交付。
+    _ev = next((p for p in evidence if p.name.endswith(".md") and "supplement" not in p.name), None)
+    if _ev is not None:
+        try:
+            import importlib.util as _ilu
+
+            _spec = _ilu.spec_from_file_location(
+                "_audit_empty_sections", HERE / "_audit_empty_sections.py")
+            _mod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            _text = _ev.read_text(encoding="utf-8")
+            _secs = _mod.split_sections(_text)
+            _empt: list[str] = []
+            for _i, (_t, _b) in enumerate(_secs):
+                if _mod.body_len(_b) != 0:
+                    continue
+                _nxt = _secs[_i + 1] if _i + 1 < len(_secs) else None
+                if _nxt and not _nxt[0][:1].isdigit() and _mod.body_len(_nxt[1]) > 0:
+                    continue  # 父标题：内容挂在同级通道标题下
+                _empt.append(_t)
+            _health = _mod.channels_health(_text)
+            if not _empt:
+                add("小节正文审计", "PASS", f"{len(_secs)} 个小节均有正文")
+            else:
+                _tail = "；".join(_empt[:3]) + ("…" if len(_empt) > 3 else "")
+                if _health and _health[0] == _health[1]:
+                    add("小节正文审计", "WARN",
+                        f"通道 {_health[0]}/{_health[1]} **全绿**，但 {len(_empt)} 个小节正文为空"
+                        f"（{_tail}）⇒ 须逐条归因（上游确缺 / **取错通道** / 判据误判），"
+                        f"不得直接当作「上游缺口」交付")
+                else:
+                    add("小节正文审计", "WARN", f"{len(_empt)} 个小节正文为空：{_tail}")
+        except Exception as e:  # noqa: BLE001
+            add("小节正文审计", "WARN", f"审计器不可用：{type(e).__name__}")
+    else:
+        add("小节正文审计", "WARN", "未提供 --evidence，跳过")
+
     # ---- 1. 评级词与契约字段 ----
     rc, out = run([PY, str(HERE / "_verify_ratings.py"), str(draft)])
     if crashed(out):
