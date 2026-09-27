@@ -61,6 +61,52 @@ FIELDS = [
 ]
 
 
+def _selfcalc_section(ticker: str, date: str, info: dict, fi: dict) -> str:
+    """自算 point-in-time 估值章节 —— 独立于 vendor 实时快照的**第二条通道**。
+
+    为什么必须并列这一节：vendor 快照是「当下值」，严格说带时点偏差；
+    而本节的输入（价格序列 + EDGAR 股数）**各自都有明确的披露/交易日时点**，
+    因此是真正的 point-in-time。两源并列可互校，**差异处即口径差异**。
+    （2026-09-27 立：此前 §3 扣留只靠 vendor 快照兜底，未做独立自算。）
+    """
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from wb_analysis import _selfcalc_valuation as sv
+
+        vendor = {
+            "Market Cap": info.get("marketCap") or fi.get("marketCap"),
+            "PE Ratio (TTM)": info.get("trailingPE"),
+            "Price to Book": info.get("priceToBook"),
+            "Price to Sales (TTM)": info.get("priceToSalesTrailing12Months"),
+            "52 Week High": info.get("fiftyTwoWeekHigh"),
+            "52 Week Low": info.get("fiftyTwoWeekLow"),
+            "50 Day Average": info.get("fiftyDayAverage"),
+            "200 Day Average": info.get("twoHundredDayAverage"),
+        }
+        vendor = {k: v for k, v in vendor.items() if v}
+        sc = sv.selfcalc(
+            ticker, date,
+            ttm_net_income=info.get("netIncomeToCommon"),
+            ttm_revenue=info.get("totalRevenue"),
+        )
+        body = sv.render_markdown(sc, vendor)
+        body += (
+            "\n**报表类比率（PE/PB/PS）的补法**：若上表的 PE/PS 为空，是因为分母需要**报表项**。"
+            "请用证据包 §4 的报表值调用 "
+            "`_selfcalc_valuation.selfcalc(t, d, fy_net_income=…, fy_revenue=…, fy_equity=…, "
+            "ttm_net_income=…, ttm_revenue=…)`，即可得到与报表自洽的 PE/PB/PS。\n"
+        )
+        return body
+    except Exception as e:  # noqa: BLE001
+        return (
+            "## 自算 point-in-time 估值（独立于 vendor 实时快照）\n\n"
+            f"> ⚠️ 自算通道不可用：{type(e).__name__}: {e}\n"
+            "> 请检查 `wb_analysis/_selfcalc_valuation.py` 是否存在、"
+            "以及 `~/.tradingagents/cache/` 下是否有该标的的价格序列。\n"
+        )
+
+
 def main() -> int:
     ticker = sys.argv[1]
     date = sys.argv[2]
@@ -129,6 +175,9 @@ def main() -> int:
         lines.append(f"PE × EPS =                     {pe * eps:,.4f}（应≈最新价：市值/股数口径需一致）")
     lines.append("```")
     lines.append("")
+
+    # --- 自算 point-in-time 估值：独立于 vendor 快照的第二条通道 ---
+    lines.append(_selfcalc_section(ticker, date, info, fi))
 
     out = ROOT / "wb_analysis" / "evidence" / f"{ticker}_{date}.supplement.md"
     out.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
