@@ -231,7 +231,7 @@ def chk_memory_size() -> tuple[str, str]:
 #   ⇒ **能让"改文件找 bug"失效的，不是测试少，而是基线不确定**。
 #   基线数 = `python -m pytest tests/ -q -k "not DeepSeekLive"` 的 passed 数。
 BASELINE_K = "not DeepSeekLive"
-BASELINE_PASSED = 724
+BASELINE_PASSED = 730
 
 
 def chk_tests() -> tuple[str, str]:
