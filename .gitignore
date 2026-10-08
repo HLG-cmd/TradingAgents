@@ -229,6 +229,12 @@ wb_analysis/analysis/
 wb_analysis/_cache/
 reports/_datasets/
 
+# ── 本地工作 residue（不入库）──
+wb_analysis/scratch/
+wb_analysis/_archive/
+# pytest 定向 basetemp（safe-delete 钩子下绕开 %TEMP% 清理失败的产物）
+.pytest_tmp_bt*/
+
 # ── 删除前的回滚包（体积大、且是一次性保险，不进版本库）──
 .workbuddy/backup/
 

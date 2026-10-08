@@ -100,9 +100,16 @@ def build_fixture(root: Path, broken: bool) -> Path:
     return d
 
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
 def rc(cmd: list[str], cwd: Path) -> tuple[int, str]:
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace", env=env)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
@@ -240,6 +247,51 @@ def main() -> int:
                   f"{lvl_ok} / {msg_ok[:60]}")
         except Exception as e:                                   # noqa: BLE001
             check("health: chk_disk_budget 双边", False, f"加载失败 {e}")
+
+        # ---- 7. 契约常量的「唯一来源」没有被绕过（2026-10-08 新增）----
+        # 背景：同一个契约曾被 8 个文件各自定义，大小写容忍度还不一致 ——
+        # 于是同一个 trader.md 在两道门禁里被判成**不同事实**，只能靠人来回试到收敛。
+        # `_contract.py` 建好后，**唯一的失败模式就是有人又手写一遍正则**。
+        # 这条断言把那条路堵死：逐个扫描消费方，若发现它们**没有 import `_contract`**，
+        # 就直接判失败（比"记得改同步"可靠得多 —— 纪律会忘，断言不会）。
+        CONSUMERS = [
+            "_lint_drafts.py", "_verify_ratings.py", "_gen_meta.py",
+            "_check_role_files.py", "_strip_stray_ratings.py",
+        ]
+        not_importing = []
+        for fn in CONSUMERS:
+            src = (HERE / fn).read_text(encoding="utf-8")
+            if "_contract import" not in src and "from wb_analysis._contract" not in src:
+                not_importing.append(fn)
+        check("契约常量：消费方均 import _contract（防手写正则复发）", not not_importing,
+              f"未 import 的={not_importing}" if not_importing else "5/5")
+
+        # ---- 8. `_contract` 内部自洽（词表 ↔ 正则 ↔ 白名单）----
+        try:
+            c = load_module("_contract_c", "_contract.py")
+            problems = []
+            # 8a. `FIVE_RE`（大小写不敏感）必须命中词表里每个词的大小写两种写法
+            for w in c.FIVE_LEVELS:
+                if not c.FIVE_RE.search(f" {w} ") or not c.FIVE_RE.search(f" {w.upper()} "):
+                    problems.append(f"FIVE_RE 漏 {w}")
+            # 8b. `FIVE_TITLE_RE` 必须**只**命中 Title Case（这是它与 FIVE_RE 的分工）
+            if c.FIVE_TITLE_RE.search(" SELL ") or c.FIVE_TITLE_RE.search(" BUY "):
+                problems.append("FIVE_TITLE_RE 误命中全大写")
+            # 8c. 契约行正则必须能解析出末行档位
+            if not c.PROPOSAL_RE.search("FINAL TRANSACTION PROPOSAL: **HOLD**"):
+                problems.append("PROPOSAL_RE 解析失败")
+            # 8d. `Action` 标签必须**同时**容忍 Title Case 与大写（这正是历史事故的修复点）
+            for variant in ("**Action**: Sell", "**Action**: SELL"):
+                if not c.LABEL_PATTERNS["Action"].search(variant):
+                    problems.append(f"Action 标签漏掉 {variant}")
+            # 8e. 五档标签用**长词优先**，`Overweight` 不能被 `Sell` 一类短词抢先截断
+            m = c.LABEL_PATTERNS["Recommendation"].search("**Recommendation**: Underweight")
+            if not m or m.group(1) != "Underweight":
+                problems.append(f"长词优先失效：{m.group(1) if m else None}")
+            check("契约常量：词表↔正则↔标签自洽", not problems,
+                  "；".join(problems) if problems else "5 项检查通过")
+        except Exception as e:                                   # noqa: BLE001
+            check("契约常量：词表↔正则↔标签自洽", False, f"加载失败 {e}")
 
         if args.verbose:
             print("\n----- lint 好夹具输出 -----\n" + g_out[-800:])

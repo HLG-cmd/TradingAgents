@@ -6,15 +6,21 @@
 
 ## 0. 先读这一段（决定了你怎么用这套东西）
 
-**量化打分未被证明有选股能力。** 实测（纳指100，2022-07~2026-07，49 期）：
+**量化打分未被证明有选股能力。** 实测（纳指100）：
 
 | 档 | 权重 | 1 个月前瞻 IC |
 |---|---|---|
-| 质量（ROE+净利率） | 30% | −0.012 |
-| 估值（低 PE） | 25% | −0.015 |
-| 成长（营收增速） | 25% | +0.001 |
-| 趋势（动量+均线+RSI） | 20% | −0.004 |
-| **综合分** | 100% | **−0.008** |
+| 质量（ROE+净利率） | 35% | −0.012 |
+| 估值（低 PE） | 30% | −0.015 |
+| 成长（营收增速） | 30% | +0.001 |
+| 趋势（动量+均线+RSI） | 5% | −0.001 |
+| **综合分** | 100% | **−0.008** ⚠️ 旧权重下测得 |
+
+> 权重为 **2026-10-02** 起的默认值：趋势档由 20% 降为残差 5%（311 期月频回测
+> IC −0.0009 / t −0.08，95% CI≈±0.01 ⇒ 区间已足以排除有意义的效果）。
+> IC 列是各档**各自最近一次**回测读数，样本期与观测数不同 ⇒ **不要跨档比绝对值**。
+> ⚠️ **综合分一行是改权重之前的读数**（它依赖 `FACTOR_WEIGHTS`）；要更新须重跑
+> `fundamental_backtest.py`，否则别再引用它。权威数值见 `screener_engine.FACTOR_VALIDATION`。
 
 加了行业中性化也一样。**所以这套流程的正确用法是：**
 
@@ -28,9 +34,9 @@
 
 | 层 | 做什么 | 命令 |
 |---|---|---|
-| **1. 量化漏斗**（零成本、分钟级） | 102 只 → 10~20 只候选。**只做减法，不做判断**，只看范围不看名次 | `python wb_deep_dive.py --pool nasdaq --top 10` |
-| **2. 深度尽调**（零 LLM 成本，WorkBuddy 顶层模型推理） | 逐只采证 → 12 角色分析 → 渲染报告树。**这才是产生结论的地方** | `python wb_deep_dive.py --tickers NVDA,MU,SNDK` |
-| **3. 定期验证**（季度，10 分钟） | 检查因子是否失效 / 翻转。已设为自动化，也可手动跑 | `python factor_backtest.py --watch`<br>`python fundamental_backtest.py --watch --neutral` |
+| **1. 量化漏斗**（零成本、分钟级） | 102 只 → 10~20 只候选。**只做减法，不做判断**，只看范围不看名次 | `python quant/wb_deep_dive.py --pool nasdaq --top 10` |
+| **2. 深度尽调**（零 LLM 成本，WorkBuddy 顶层模型推理） | 逐只采证 → 12 角色分析 → 渲染报告树。**这才是产生结论的地方** | `python quant/wb_deep_dive.py --tickers NVDA,MU,SNDK` |
+| **3. 定期验证**（季度，10 分钟） | 检查因子是否失效 / 翻转。已设为自动化，也可手动跑 | `python quant/factor_backtest.py --watch`<br>`python quant/fundamental_backtest.py --watch --neutral` |
 
 第 1 层输出候选 → 第 2 层输出 `reports/<TICKER>_<时间戳>/`。
 
@@ -44,13 +50,13 @@
 cd D:\Antigravity\TradingAgents
 
 # 预热 EDGAR 基本面（仅首次 / 每季度重跑；102 家约 146 秒、缓存 342 MB）
-python -c "from stock_pools import get_latest_nasdaq_100 as g; from edgar_fundamentals import preload; preload(g())"
+python -c "from quant.stock_pools import get_latest_nasdaq_100 as g; from quant.edgar_fundamentals import preload; preload(g())"
 
 # 预热长周期价格（仅首次；102 家约 42 秒、缓存 47 MB）
-python -c "from stock_pools import get_latest_nasdaq_100 as g; from price_history import preload_prices; preload_prices(g())"
+python -c "from quant.stock_pools import get_latest_nasdaq_100 as g; from quant.price_history import preload_prices; preload_prices(g())"
 
 # 量化筛选并导出 CSV
-python wb_deep_dive.py --pool nasdaq --top 10
+python quant/wb_deep_dive.py --pool nasdaq --top 10
 ```
 
 > 若只做日常筛选、不做回测，**长周期价格可以不预热**（它只服务回测）。
@@ -58,7 +64,7 @@ python wb_deep_dive.py --pool nasdaq --top 10
 ### 2.2 日常运行（约 20 秒）
 
 ```bash
-python wb_deep_dive.py --pool nasdaq --top 10
+python quant/wb_deep_dive.py --pool nasdaq --top 10
 ```
 
 **产物**：`reports/radar_nasdaq_<日期>.csv`（全量量化明细，UTF-8 BOM，Excel 可直接开）
@@ -75,19 +81,22 @@ python wb_deep_dive.py --pool nasdaq --top 10
 ### 2.3 权重档案（可选）
 
 ```bash
-python smart_screener.py --pool nasdaq --skip-agent          # 默认 garp
+python quant/smart_screener.py --pool nasdaq --skip-agent          # 默认 quality
 ```
 ```python
-from screener_engine import run_quant_screening, WEIGHT_PROFILES
-run_quant_screening(tickers, weights=WEIGHT_PROFILES["quality"])
+from quant.screener_engine import run_quant_screening, WEIGHT_PROFILES
+run_quant_screening(tickers, weights=WEIGHT_PROFILES["no_trend"])
 ```
 | 档案 | 趋势权重 | 用途 |
 |---|---|---|
-| `garp`（默认） | 0.20 | 四维均衡 |
-| `quality` | 0.05 | 让基本面主导 |
+| `quality`（默认） | 0.05 | 趋势档压到残差（2026-10-02 起） |
+| `garp`（旧默认） | 0.20 | 四维均衡；保留作对照/回退 |
 | `no_trend` | 0.00 | 完全不要动量暴露 |
 
-三者实测差异：PLTR 随趋势档降权从 #4 → #7 → 掉出前八。
+实测差异（纳指100，2026-09-30 快照按两套权重重算）：旧→新默认 秩相关 **0.93**、
+**前 10 名换 2 个**、最大名次移动 **26 位**（NXPI 46→20）；趋势分高的被降
+（WDAY 趋势 97 → 掉 20 位）、趋势分低的被升（NFLX 趋势 24 → 升 21 位）。
+⇒ **改权重确实改榜单，不是空操作。**（早前记录：PLTR 随趋势档降权 #4 → #7 → 掉出前八。）
 
 ---
 
@@ -96,8 +105,8 @@ run_quant_screening(tickers, weights=WEIGHT_PROFILES["quality"])
 ### 3.1 采证
 
 ```bash
-python wb_deep_dive.py --tickers NVDA,MU,SNDK            # 从第 1 层候选里挑 1~3 只
-python wb_deep_dive.py --tickers NVDA --no-news --no-social   # 想更快：跳过新闻与社媒（约 30 秒/只）
+python quant/wb_deep_dive.py --tickers NVDA,MU,SNDK      # 从第 1 层候选里挑 1~3 只
+python quant/wb_deep_dive.py --tickers NVDA --no-news --no-social   # 想更快：跳过新闻与社媒（约 30 秒/只）
 ```
 
 **产物**：`wb_analysis/evidence/<TICKER>_<日期>.md`（+ `.json`）
@@ -136,8 +145,8 @@ assemble 的「契约校验通过」只覆盖格式，**不保证评级没被误
 ## 4. 第 3 层：定期验证（季度）
 
 ```bash
-python factor_backtest.py --watch                    # 价格类因子（权重 20%）
-python fundamental_backtest.py --watch --neutral      # 基本面类（权重 80%，EDGAR）
+python quant/factor_backtest.py --watch              # 价格类因子（权重 20%）
+python quant/fundamental_backtest.py --watch --neutral  # 基本面类（权重 80%，EDGAR）
 ```
 **退出码 2 = 有告警。** 已配置季度自动化（下次 2026-10-01），到点会汇报。
 
@@ -149,7 +158,7 @@ python fundamental_backtest.py --watch --neutral      # 基本面类（权重 80
 
 ```bash
 # 17 个不重叠年度观测，2009-2025，行业中性化 —— 目前口径最干净的一组
-python fundamental_backtest.py --forward 252 --rebalance 12 --neutral --start 2009-01
+python quant/fundamental_backtest.py --forward 252 --rebalance 12 --neutral --start 2009-01
 ```
 
 实测（详见 `SCREENER.md` 3.1）：四个因子的 IC **点估计全部为负**，综合分胜率仅 18.8%，
@@ -158,8 +167,8 @@ python fundamental_backtest.py --forward 252 --rebalance 12 --neutral --start 20
 ### 5.2 其它口径
 
 ```bash
-python fundamental_backtest.py --neutral              # 月度调仓 + 1 个月前瞻
-python factor_backtest.py --watch                      # 价格类因子
+python quant/fundamental_backtest.py --neutral        # 月度调仓 + 1 个月前瞻
+python quant/factor_backtest.py --watch                # 价格类因子
 ```
 
 ### 5.3 ⚠️ 两个必须知道的陷阱
@@ -173,7 +182,7 @@ python factor_backtest.py --watch                      # 价格类因子
 已由 `price_history.py` 提供**自 2000 年（约 26 年）**的价格：
 
 ```bash
-python -c "from stock_pools import get_latest_nasdaq_100 as g; from price_history import preload_prices; preload_prices(g())"   # 一次性预热，42 秒
+python -c "from quant.stock_pools import get_latest_nasdaq_100 as g; from quant.price_history import preload_prices; preload_prices(g())"   # 一次性预热，42 秒
 ```
 
 ⚠️ **但基本面受 EDGAR XBRL 覆盖限制，实际可用起点约 2009 年**（XBRL 强制披露自 2009 起）
@@ -216,7 +225,7 @@ python -c "from stock_pools import get_latest_nasdaq_100 as g; from price_histor
 按天缓存毫无意义。**凡是「按日期累积」的缓存都要改成单文件 + TTL / 按季度命名。**
 
 ```python
-from edgar_fundamentals import cache_size_mb, prune_cache
+from quant.edgar_fundamentals import cache_size_mb, prune_cache
 print(cache_size_mb())      # 当前占用（MB），可用于监控
 prune_cache()               # 手动清理非当前季度
 ```
@@ -247,10 +256,15 @@ prune_cache()               # 手动清理非当前季度
 | 数据层 | ✅ 行情 26 年、基本面时点化（EDGAR）、成分股 + 行业动态同步 |
 | 打分层 | ✅ 可用，但**未被证明有预测力**（见第 0 节） |
 | 验证层 | ✅ 两套回测 + 衰减监测 + 季度自动化 |
-| 保护层 | ✅ **508 个单元测试**（含 38 个专门锁定本轮修复的契约测试） |
+| 保护层 | ✅ 两套「门禁自检」+ 契约常量单一来源（`_contract.py`）；测试数请跑 `pytest --collect-only` 或 `scripts/_health.py` 读，**本文不写死数字** |
 | 运维层 | ✅ 缓存稳态 400 MB、季度轮换、失败可知 |
 | 文档 | ✅ 本手册 + `SCREENER.md`（设计原理与能力边界） |
 | **待办** | 标普500 全量池接入、季度监测纳入基本面回测、`SP_500_CORE` 接动态同步 |
+
+> ⚠️ **本文档不写死「测试数 / 脚本数 / 通道数」这类会漂移的数字**（2026-10-08 起）。
+> 历史教训：本表曾写「508 个单元测试」，而实际早已 737 —— 差 229 却无人察觉，
+> 因为**没人会记得回来改**。凡是想引用这类数字，一律现场跑命令取当前值：
+> `pytest tests/ -q --collect-only | tail -1`、`scripts/_health.py`、`docs/TOOLS.md`（自动生成）。
 
 **前三层里，第 1 层只做减法，第 2 层才做判断，第 3 层负责告诉你前两层还值不值得信。**
 

@@ -29,6 +29,11 @@ import datetime as dt
 import pathlib
 import sys
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # ★ 必须用**绝对路径**解析（2026-09-19 修正）。
 #   此前写的是相对路径 `pathlib.Path("wb_analysis") / "evidence"`，
 #   于是本脚本的行为**取决于从哪里调用**：在项目根跑正常，

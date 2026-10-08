@@ -1,0 +1,27 @@
+{
+  "ticker": "AVGO",
+  "as_of": "2026-09-25",
+  "evidence": "wb_analysis/evidence/AVGO_2026-09-25.md",
+  "channels_ok": 35,
+  "channels_total": 35,
+  "gaps": [
+    {
+      "channel": "profile (§3 快照)",
+      "status": "withheld",
+      "cls": "A",
+      "decisive": true,
+      "blocks": "缺估值快照 ⇒ 市盈率/PB/市值/52 周区间全部不可用（除非另建替代源）",
+      "remedy": "生成 `<T>_<date>.supplement.md`（直取当日快照 + 报表自算）",
+      "fallback": "supplement（**与年报口径不同，须分别声明**）",
+      "label": "profile",
+      "kw": [
+        "§3",
+        "基本面快照",
+        "快照被上游扣留",
+        "vendor 拒答"
+      ]
+    }
+  ],
+  "decisive_count": 1,
+  "unclassified": []
+}

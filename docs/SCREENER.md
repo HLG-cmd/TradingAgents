@@ -24,12 +24,12 @@
 
 ```bash
 # 只看量化榜单 + 导出 CSV（不花钱、不调 LLM）
-python smart_screener.py --pool nasdaq --skip-agent
-python wb_deep_dive.py  --pool nasdaq --top 3 --no-social   # 采证 + 导出 CSV
+python quant/smart_screener.py --pool nasdaq --skip-agent
+python quant/wb_deep_dive.py  --pool nasdaq --top 3 --no-social   # 采证 + 导出 CSV
 
 # 因子有效性回测 / 衰减监测
-python factor_backtest.py
-python factor_backtest.py --watch            # 有告警时退出码=2，可接 CI
+python quant/factor_backtest.py
+python quant/factor_backtest.py --watch      # 有告警时退出码=2，可接 CI
 ```
 
 **首次运行预热**：`load_ohlcv` 逐票缓存约 43s 建立，之后 `force_refresh` 约 18s、命中日内缓存 0s。
@@ -38,7 +38,8 @@ python factor_backtest.py --watch            # 有告警时退出码=2，可接 
 
 ## 2. 打分模型
 
-综合分 = 质量 30% + 估值 25% + 成长 25% + 趋势 20%（权重见 `FACTOR_WEIGHTS`）
+综合分 = 质量 35% + 估值 30% + 成长 30% + 趋势 5%（权重见 `FACTOR_WEIGHTS`；
+趋势档于 2026-10-02 由 20% 降为残差，依据见下「权重档案」）
 
 | 档 | 子因子 | 说明 |
 |---|---|---|
@@ -52,19 +53,28 @@ python factor_backtest.py --watch            # 有告警时退出码=2，可接 
 ### 权重档案
 
 ```python
-from screener_engine import run_quant_screening, WEIGHT_PROFILES
+from quant.screener_engine import run_quant_screening, WEIGHT_PROFILES
 
-run_quant_screening(tickers)                                  # 默认 = garp
-run_quant_screening(tickers, weights=WEIGHT_PROFILES["quality"])
+run_quant_screening(tickers)                                  # 默认 = quality（趋势 5%）
+run_quant_screening(tickers, weights=WEIGHT_PROFILES["no_trend"])
 ```
 
 | 档案 | 质量 | 估值 | 成长 | 趋势 | 适用 |
 |---|---|---|---|---|---|
-| `garp`（默认） | 0.30 | 0.25 | 0.25 | **0.20** | 四维均衡 |
-| `quality` | 0.35 | 0.30 | 0.30 | **0.05** | 想让基本面主导 |
+| `quality`（默认） | 0.35 | 0.30 | 0.30 | **0.05** | 趋势档压到残差 |
+| `garp`（旧默认） | 0.30 | 0.25 | 0.25 | **0.20** | 四维均衡；保留作对照/回退 |
 | `no_trend` | 0.35 | 0.35 | 0.30 | **0.00** | 完全不想要动量暴露 |
 
-**默认保持 `garp` 不变**：回测显示趋势档 IC≈0 且符号随窗口翻转，但「无法拒绝零假设」≠「已证明有害」，49 期样本统计功效不足。一次不显著的测量去改默认权重正是回测警告过的过拟合陷阱。⇒ **把选择做成 `WEIGHT_PROFILES` 显式选项，不默改 `garp`**。（见 `DOMAINS.md` → 量化选股子系统 / 打分与因子）
+**2026-10-02：默认档由 `garp` 改为 `quality`（趋势 20% → 5%）。**
+2026-09 时的立场是「**不**默改 `garp`」，理由是「49 期样本统计功效不足，拿一次不显著的
+测量去改默认权重正是过拟合陷阱」。**那个立场在当时是对的**，不必否定 —— 但它依赖
+「样本测不出」这个前提。样本扩到 **311 期 / 26 年**后，趋势档 IC 的 95% 置信区间收到
+约 ±0.01，前提由「测不出」变为「**测出了零**」，故改默认（详见
+`screener_engine.FACTOR_WEIGHTS` 上方注释，那里是权威）。
+
+⚠️ **反过拟合的纪律没有放松**：判据取自 26 年全样本，**不是**近期窗口 ——
+近期窗口的 trend IC 反而是**正的**（近 12 期 +0.0096），按近期拟合应该**加**权。
+任何后续再校准（包括你自己）都**不得**用「最近 N 期」反推权重。
 
 ---
 
@@ -87,12 +97,15 @@ run_quant_screening(tickers, weights=WEIGHT_PROFILES["quality"])
 | 估值(PE+PB双低) | −0.0472 / −1.17 | −0.0532 / −1.31 |
 | 成长(单季营收同比) | +0.0072 / 0.24 | −0.0170 / −0.51 |
 | 成长(3年营收CAGR) | +0.0164 / 0.49 | +0.0334 / 0.94 |
-| 趋势(价格类，49 期月频) | −0.0037 / −0.11 | — |
+| 趋势(价格类，**311 期**月频) | **−0.0009 / −0.08** | —（旧 49 期读数 −0.0037 / −0.11） |
 
 **怎么读**：
 
-- **四档全部不显著**（|t| 最大 1.39）⇒ 正确表述是「**尚未证明有选股能力**」，
-  **不是**「已证明无用」—— N=16 的统计功效太低，即使有真实效应也检测不出来。
+- **四档全部不显著**（|t| 最大 1.39）⇒ 对**基本面三档**，正确表述是「**尚未证明有选股
+  能力**」，**不是**「已证明无用」—— N=16 的统计功效太低，即使有真实效应也检测不出来。
+- ⚠️ **但趋势档不一样**：311 期（26 年）把它 IC 的置信区间收到约 ±0.01 ⇒ 它是**被排除**
+  而非「测不出」。这是四档中**唯一**功效足够下结论的一档，所以 2026-10-02 只降它 ——
+  这不是「顺手把所有不显著的都砍掉」，而是**只动证据最硬的那一档**。
 - **换池救不回来**：截面从 84 放大到 **436（5.2 倍）**，|t| 仍全 < 1.4。
   ⇒ 瓶颈是**独立年度观测数**，加标的、加因子都改不了。
 - **估值维度加 PB 也没用**（低 PB −0.0533、PE+PB 双低 −0.0532，都不显著）。
@@ -198,7 +211,7 @@ CIK 映射  sec.gov/files/company_tickers.json
 ### 5.3 推荐的季度 routine
 
 ```bash
-python factor_backtest.py --watch    # 退出码 2 = 有告警，需要看一眼
+python quant/factor_backtest.py --watch   # 退出码 2 = 有告警，需要看一眼
 ```
 
 `--watch` 会：
@@ -215,7 +228,7 @@ python factor_backtest.py --watch    # 退出码 2 = 有告警，需要看一眼
 **改配置，不改代码**：
 
 ```python
-from screener_engine import run_quant_screening
+from quant.screener_engine import run_quant_screening
 # 停用未经验证且不稳健的趋势档，把权重让给基本面
 df = run_quant_screening(tickers, weights={
     "quality": 0.35, "value": 0.35, "growth": 0.30, "trend": 0.0,

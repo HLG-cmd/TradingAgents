@@ -12,19 +12,48 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DRAFTS = ROOT / "wb_analysis" / "drafts"
 
-RATING = re.compile(r"\b(Buy|Overweight|Hold|Underweight|Sell)\b")
-THREE = __import__("re").compile(r"\*\*(BUY|HOLD|SELL)\*\*")  # 交易员的大写三档
-RATING_OK = {  # 只允许出现 1 次五档词的席位（结论块那处）
-    "manager.md", "portfolio_manager.md", "trader.md",
-    "aggressive.md", "conservative.md", "neutral.md",
-}
+# ★ 2026-10-08：契约常量改为**唯一来源** import（见 `_contract.py` 抬头的漂移史）。
+#   此前本文件持有**两套**正则：`RATING`（Title Case 五档）+ `THREE`（大写三档）。
+#   实测事故：trader.md 末行 `**SELL**` 被 `THREE` 计入，而结论块 `**Action**: Sell`
+#   若被写成大写 `**Action**: SELL` 又会同时命中 → 「档位词过多」的误报，
+#   逼得正文档位词全部中文化才收敛。现在按契约精确匹配，不再靠人试。
+sys.path.insert(0, str(ROOT))
+from wb_analysis._contract import (  # noqa: E402
+    FINAL_PROPOSAL,
+    FIVE_TITLE_RE as RATING,
+    LABEL_PATTERNS,
+    PROPOSAL_RE,
+    RATING_ALLOWED_FILES,
+    THREE_BOLD_UPPER_RE as THREE,
+)
+
+RATING_OK = set(RATING_ALLOWED_FILES)  # 只允许出现 1 次五档词的席位（结论块那处）
 REQUIRED_SECTION = {
-    "market.md": ["### 趋势", "### 动量", "### 波动率", "### 量能", "### 关键价位"],
-    "sentiment.md": ["**Overall Sentiment:**", "**Confidence:**"],
-    "manager.md": ["**Recommendation**", "**Rationale**", "**Strategic Actions**"],
-    "portfolio_manager.md": ["**Rating**", "**Executive Summary**", "**Investment Thesis**"],
+    # ⚠️ 2026-10-02 修正（判别力 vs 形式主义）：原为**精确字符串**
+    #    `["### 趋势", "### 动量", ...]`，等价于要求所有市场分析师都用同一个标题体例。
+    #    实测事故（NDX 2026-10-01）：该稿把五个维度写成
+    #    `## 1. 趋势：…` / `## 2. 动量：…` / `## 3. 波动率：…` / `## 4. 量能与 K 线结构` / `## 7. 关键价位（全部为绝对点位）`
+    #    —— **五个维度全部有实质专节**，但因标题前缀不同被判「缺小节」。
+    #    ⇒ 契约的**意图**是「必须覆盖这五个维度」，不是「标题必须恰好长这样」。
+    #    改为**按维度名做正则**，容忍 `#`/`##`/`###` 层级与 `1.` 这类序号前缀。
+    #    （GOOG 那份恰好含字面 `### 趋势` 等，改动后仍通过 —— 双边已验证。）
+    "market.md": [
+        ("趋势", r"^#{1,4}\s*\**\s*[\d一二三四五六七八九十]*[.、]?\s*趋势"),
+        ("动量", r"^#{1,4}\s*\**\s*[\d一二三四五六七八九十]*[.、]?\s*动量"),
+        ("波动率", r"^#{1,4}\s*\**\s*[\d一二三四五六七八九十]*[.、]?\s*波动率"),
+        ("量能", r"^#{1,4}\s*\**\s*[\d一二三四五六七八九十]*[.、]?\s*量能"),
+        ("关键价位", r"^#{1,4}\s*\**\s*[\d一二三四五六七八九十]*[.、]?\s*(关键价位|支撑与阻力|支撑/阻力)"),
+    ],
+    "sentiment.md": [("**Overall Sentiment:**", r"\*\*Overall Sentiment:\*\*"),
+                     ("**Confidence:**", r"\*\*Confidence:\*\*")],
+    "manager.md": [("**Recommendation**", r"\*\*Recommendation\*\*"),
+                   ("**Rationale**", r"\*\*Rationale\*\*"),
+                   ("**Strategic Actions**", r"\*\*Strategic Actions\*\*")],
+    "portfolio_manager.md": [("**Rating**", r"\*\*Rating\*\*"),
+                             ("**Executive Summary**", r"\*\*Executive Summary\*\*"),
+                             ("**Investment Thesis**", r"\*\*Investment Thesis\*\*")],
 }
-FTP = "FINAL TRANSACTION PROPOSAL"
+FTP = FINAL_PROPOSAL  # ← 唯一来源，别再硬编码字面量。
 
 
 def main() -> int:
@@ -39,7 +68,12 @@ def main() -> int:
             bad += 1
             continue
         files = [p for p in sorted(d.rglob("*.md"))
-                 if not p.name.startswith("0_") and not p.name.startswith("_")]
+                 if not p.name.startswith("0_") and not p.name.startswith("_")
+                 # ⚠️ 2026-10-02：与 `_lint_drafts.py` 对齐——排除 `_stale` / `_archive`。
+                 #    被作废的旧稿不参与交付，却被本检查器计入「问题项」，制造了 6 条噪声
+                 #    （manager_stale / trader_stale / 4 个风险席位 _stale）。
+                 #    两套检查器对「哪些文件算交付物」的口径必须一致，否则问题数无法横向比较。
+                 and "_stale" not in p.name and "_archive" not in p.as_posix()]
         if not files:
             print("  （尚无角色文件）")
         for f in files:
@@ -53,11 +87,25 @@ def main() -> int:
             #   会被判「缺五档词」。实测 NDX 轮：末行 `FINAL TRANSACTION PROPOSAL: **HOLD**`、
             #   全文 HOLD 只出现 1 次，却被标 `!!` —— **惩罚正确的文件比漏报更有害**（会让人开始忽略门禁）。
             if f.name == "trader.md":
-                hits3 = THREE.findall(t)
-                if not hits3 and not hits:
-                    flags.append("缺结论档位（交易员应在末行表态）")
-                elif len(hits3) > 1 or len(hits) > 1:
-                    flags.append(f"档位词过多（三档 {len(hits3)} + 五档 {len(hits)}，只允许 1 处）")
+                # ★ 2026-10-08 重写判据：交易员的档位词出现在**两个契约位置** ——
+                #   结论块首行 `**Action**: Sell`（Title Case）与末行
+                #   `FINAL TRANSACTION PROPOSAL: **SELL**`（大写）。
+                #   旧实现用 `THREE`（大写三档）找末行、`RATING`（Title Case 五档）找首行，
+                #   再断言「两者各自 ≤1」——但只要有人把首行写成大写（契约允许的变体），
+                #   同一个词就会被两套正则**各数一遍**，报出「档位词过多」的假阳性。
+                #   ⇒ 现在按**位置**判定：首行取 `**Action**:` 行，末行取 PROPOSAL 行，
+                #     其余任何位置出现档位词才算违规。
+                body_wo_contract = PROPOSAL_RE.sub("", t)
+                lines = body_wo_contract.split("\n")
+                action_lines = [i for i, l in enumerate(lines) if LABEL_PATTERNS["Action"].search(l)]
+                stray = [w for w in RATING.findall(
+                    "\n".join(l for i, l in enumerate(lines) if i not in action_lines))]
+                if not action_lines and not PROPOSAL_RE.search(t):
+                    flags.append("缺结论档位（交易员应在结论块首行或末行表态）")
+                if len(action_lines) > 1:
+                    flags.append(f"**Action** 行 {len(action_lines)} 处（只允许 1 处）")
+                if stray:
+                    flags.append(f"越界档位词 {stray}（只允许出现在 **Action** 行与末行 PROPOSAL）")
             elif f.name in RATING_OK:
                 if len(hits) == 0:
                     flags.append("缺五档词（该席位应在结论块表态）")
@@ -76,11 +124,12 @@ def main() -> int:
             #    **不要**在这里再判一次（会造成误报，而误报过多的检测器等于没有检测器）。
             if len(t) < 4000:
                 flags.append(f"篇幅偏短 {len(t)}")
-            miss = [s for s in REQUIRED_SECTION.get(f.name, []) if s not in t]
+            miss = [lbl for lbl, pat in REQUIRED_SECTION.get(f.name, [])
+                    if not re.search(pat, t, re.M)]
             if miss:
                 flags.append(f"缺小节 {miss}")
             status = "OK " if not flags else "!! "
-            print(f"  {status}{rel:44s} len={len(t):6d}  五档={len(hits)}  FTP={ftp}")
+            print(f"  {status}{rel:44s} len={len(t):6d}  档位={len(hits)}  FTP={ftp}")
             for x in flags:
                 print(f"        - {x}")
                 bad += 1

@@ -3,11 +3,11 @@
 # usage: ./.venv/Scripts/python.exe quant/screener_engine.py
 """多因子量化选股雷达引擎 (Multi-Factor GARP Screener Engine)
 
-四维 GARP 体系：
-    质量 30%  ROE + 净利率 + 低负债
-    估值 25%  PE 截面百分位（越便宜分越高）
-    成长 25%  营收同比增速截面百分位
-    趋势 20%  60日动量 + 均线形态 + RSI 区间
+四维 GARP 体系（2026-10-02 起趋势档降为残差 5%，理由见 FACTOR_WEIGHTS 上方注释）：
+    质量 35%  ROE + 净利率 + 低负债
+    估值 30%  PE 截面百分位（越便宜分越高）
+    成长 30%  营收同比增速截面百分位
+    趋势  5%  60日动量 + 均线形态 + RSI 区间（**曾占 20%，311 期实测 IC≈0**）
 
 ════════════════════════════════════════════════════════════════════════
 数据层改用上游 load_ohlcv（2026-09-16 重构）
@@ -33,6 +33,12 @@
 """
 
 from __future__ import annotations
+
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import datetime as dt
 import hashlib
@@ -67,15 +73,32 @@ MIN_BARS = 60
 # 因子权重（集中在此处，便于再校准 —— 不要散落在打分函数里）
 # ══════════════════════════════════════════════════════════════════════
 # ⚠️ 这些是**经验取值，会随市场状态衰减**，不是不变量。
-#    factor_backtest.py 的实测（49 期月频，2022-07~2026-07）显示技术面档
-#    逐年 IC 符号会翻转（2024 年 +0.059 → 2026 年 −0.046），因此**任何固定
-#    权重都必然过时**。请把这份权重当作「待监测的参数」，而非「已确定的真理」。
+#    请把这份权重当作「待监测的参数」，而非「已确定的真理」。
 #    再校准时改这里即可，无需改动打分逻辑。
+#
+# ── 2026-10-02：趋势档 0.20 → 0.05（这是**收缩**，不是删除）──
+#   依据：factor_backtest.py --watch 把样本由 49 期扩到 **311 期**
+#   （2000-10 ~ 2026-08，26 年、101 只纳指100 成分），趋势档 IC=−0.0009 / t=−0.08，
+#   IC 的标准误约 0.005 ⇒ 95% 置信区间约 [−0.011, +0.009]。
+#   这**不是**「样本太小测不出来」，而是**被足够精确地测出的零** —— 可以排除
+#   任何有经济意义的 IC。零 IC 因子在综合分里只贡献方差，故压到残差 0.05
+#   （保留一点动量暴露，不做归零这种更激进的断言）。
+#
+#   ⇒ 此前「49 期统计功效不足，故不动默认权重」的**前提已被推翻**，故改默认。
+#     原立场保留在 git 历史与本目录 WEIGHT_PROFILES 的说明里。
+#
+#   ⚠️ 本次**不是**用近期窗口反拟合：近期窗口的 trend IC 反而是**正的**
+#      （近 12 期 +0.0096），按近期拟合应该**加**权。判据取自 26 年全样本。
+#      任何后续再校准同样**不得**用「最近 N 期」反推（那是过拟合）。
+#
+#   ⚠️ 这**不**等于其余三档有效：quality / value / growth 仍只有 17 个不重叠
+#      年度观测，t ≈ −0.5 ~ −1.1，置信区间宽到无法排除任何方向。四档**全都**
+#      不显著（见 FACTOR_VALIDATION）。本次只降「唯一被足够精确测成零」的那一档。
 FACTOR_WEIGHTS = {
-    "quality": 0.30,   # ROE 40% + 净利率 40% + 低负债 20%
-    "value":   0.25,   # PE 截面百分位
-    "growth":  0.25,   # 营收同比增速百分位
-    "trend":   0.20,   # 动量 60% + 均线 25% + RSI 15%（实测 IC≈0，见回测报告）
+    "quality": 0.35,   # ROE 40% + 净利率 40% + 低负债 20%
+    "value":   0.30,   # PE 截面百分位
+    "growth":  0.30,   # 营收同比增速百分位
+    "trend":   0.05,   # 动量 60% + 均线 25% + RSI 15%（311 期实测 IC≈0 ⇒ 压到残差）
 }
 # 趋势档内部的子权重
 TREND_SUB_WEIGHTS = {"mom60": 0.60, "ma": 0.25, "rsi": 0.15}
@@ -85,21 +108,24 @@ QUALITY_SUB_WEIGHTS = {"roe": 0.40, "margin": 0.40, "low_debt": 0.20}
 # ══════════════════════════════════════════════════════════════════════
 # 权重档案（预设）
 # ══════════════════════════════════════════════════════════════════════
-# 用法：run_quant_screening(tickers, weights=WEIGHT_PROFILES["quality"])
+# 用法：run_quant_screening(tickers, weights=WEIGHT_PROFILES["no_trend"])
 #
-# 为什么**不把默认值改成 quality**：
-#   回测显示趋势档 IC≈0（t=−0.11）且符号随窗口翻转。但"无法拒绝零假设"
-#   不等于"已证明有害" —— 49 期样本本身就统计功效不足（t=1.39 的 20 日动量
-#   同样不能证明有效）。**用这份样本去改默认权重，正是我在回测里警告过的
-#   过拟合陷阱。**把一次不显著的测量当作决策依据，会把噪声固化进系统。
+# ── 2026-10-02 变更：默认档由 garp（趋势 20%）改为 quality（趋势 5%）──
+#   2026-09 的立场是「**不**默改 garp」，理由是「49 期样本统计功效不足，
+#   拿一次不显著的测量去改默认权重正是回测警告过的过拟合陷阱」。**那个立场
+#   在当时是对的**，不需要否定它 —— 但它自带失效条件：结论依赖「样本测不出」。
+#   样本扩到 311 期 / 26 年后，趋势档 IC 的 95% CI 收到约 ±0.01，
+#   前提由「测不出」变为「测出了零」，故改默认。原文见 git 历史。
 #
-#   所以默认权重保持不动；把「想让基本面主导」做成一个**显式选项**，
-#   让使用者在知道代价的前提下自己选。这比替他猜要好。
+#   ⚠️ 反过拟合的纪律**没有**放松：本次判据是 26 年全样本，不是近期窗口
+#      （近期窗口 trend IC 反而是正的 +0.0096，按近期拟合会**加**权）。
+#      无论谁再调这里，都不许用「最近 N 期」反推权重。
 WEIGHT_PROFILES = {
-    # 默认：四维均衡。趋势档占 20%，其 IC 未获证实（见 FACTOR_VALIDATION）
-    "garp": {"quality": 0.30, "value": 0.25, "growth": 0.25, "trend": 0.20},
-    # 趋势档压缩到残差：承认"未证实"，但保留一点动量信息不丢
+    # ★ 现默认（= FACTOR_WEIGHTS）：趋势档压到残差。理由见 FACTOR_WEIGHTS 上方注释。
     "quality": {"quality": 0.35, "value": 0.30, "growth": 0.30, "trend": 0.05},
+    # 旧默认（2026-09 及之前）：四维均衡、趋势 20%。
+    # **已被 311 期证据降级**，保留作对照与一键回退：weights=WEIGHT_PROFILES["garp"]
+    "garp": {"quality": 0.30, "value": 0.25, "growth": 0.25, "trend": 0.20},
     # 只依赖基本面：趋势档完全停用。适合「不想要任何动量暴露」的场景
     "no_trend": {"quality": 0.35, "value": 0.35, "growth": 0.30, "trend": 0.00},
 }
@@ -120,7 +146,8 @@ WEIGHT_PROFILES = {
 #   · 基本面三档：SEC EDGAR 时点基本面，2009-01 ~ 2025-01，
 #     **17 个不重叠年度观测**（前瞻 252 日 = 调仓 252 日）、行业中性化。
 #     两个宇宙都跑了，结论一致：纳指100（84 只截面）与标普500（436 只截面）。
-#   · 趋势档：价格类因子，2022-07 ~ 2026-07、49 期月频，由 factor_backtest.py 产出。
+#   · 趋势档：价格类因子，**2000-10 ~ 2026-08、311 期月频**（26 年，101 只纳指100 成分），
+#     由 factor_backtest.py --watch 产出。（2026-10-02 由 49 期扩样，旧读数见 ic_prev）
 #   · **口径警告**：回测用的是 EDGAR 时点值，而实时榜单用的是 yfinance 当前快照，
 #     两者数据源不同 ⇒ 回测验证的是**因子概念**，不是逐字的线上输入。
 #
@@ -154,9 +181,14 @@ FACTOR_VALIDATION = {
     },
     "trend": {
         "validated": True,
-        "ic": -0.0037, "t": -0.11, "n_periods": 49, "universe": "价格类因子 49 期月频",
-        "period": "2022-07 ~ 2026-07",
-        "verdict": "IC≈0，无预测力；且逐年翻符号（2024 +0.059 → 2026 −0.046）",
+        "ic": -0.0009, "t": -0.08, "n_periods": 311,
+        "universe": "价格类因子 311 期月频（纳指100 当前成分，101 只）",
+        "period": "2000-10 ~ 2026-08",
+        # 旧 49 期读数保留：解释「为什么 2026-10-02 改了默认权重」
+        "ic_prev": -0.0037, "t_prev": -0.11, "n_periods_prev": 49,
+        "verdict": ("IC≈0，且是**被精确测出的零**（SE≈0.005 ⇒ 95% CI≈±0.01）；"
+                    "近 6/12/18/24 期符号互不一致（近6期 −0.093 / 近12期 +0.010）⇒ 不稳健。"
+                    "旧 49 期读数 −0.0037 / t −0.11，方向一致"),
     },
 }
 
@@ -215,6 +247,32 @@ def _maybe_cache_path(pool_name: str, date_str: str, tickers: list[str]) -> Path
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     safe = "".join(c for c in pool_name if c.isalnum() or c in ("-", "_")).lower()
     return CACHE_DIR / f"screener_{safe}_{date_str}_{_pool_fingerprint(tickers)}.json"
+
+
+def _purge_stale_screener_caches(keep: Path) -> int:
+    """删掉**同一股票池**的旧日期缓存，只留本次这一份。
+
+    缓存名里嵌了日期 ``screener_<pool>_<date>_<fp>.json``，而查找只用「今天」
+    （``dt.date.today()``）⇒ 旧文件此后再也不会被命中，占用随运行天数**线性增长**。
+    这与上游 ``_purge_sibling_cache_variants`` 修掉的价格缓存泄漏是同一类问题，
+    故沿用同一套做法：写入前清掉旧变体。**这些是可随时重跑的再生数据，删除不丢信息。**
+
+    实测 2026-10-03：清理前积了 4 个历史日期文件（1.87 MB，最旧的已放 13 天、永不命中）。
+    """
+    parts = keep.name.split("_")
+    if len(parts) < 3:          # 非标准命名（测试里的桩路径）⇒ 一律不动
+        return 0
+    prefix = f"{parts[0]}_{parts[1]}_"
+    removed = 0
+    for f in keep.parent.glob(f"{prefix}*.json"):
+        if f.name == keep.name:
+            continue
+        try:
+            f.unlink()
+            removed += 1
+        except OSError:         # 被占用等 ⇒ 跳过，不阻断主流程
+            pass
+    return removed
 
 
 # ────────────────────────────── 数据获取 ──────────────────────────────
@@ -439,6 +497,8 @@ def run_quant_screening(
 
     today = dt.date.today().isoformat()
     cache_file = _maybe_cache_path(pool_name, today, tickers)
+    # 写入前清掉同池的旧日期缓存：它们永远不会再被命中（见函数文档）。
+    _purge_stale_screener_caches(cache_file)
 
     # 1) 日内缓存（schema 版本不匹配则视为未命中）
     if not force_refresh and cache_file.exists():

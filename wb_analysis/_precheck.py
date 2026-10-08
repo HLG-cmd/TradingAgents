@@ -44,10 +44,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
@@ -62,8 +68,9 @@ def run(cmd: list[str]) -> tuple[int, str]:
     就误报「证据包缺失」）。把 cwd 钉死在项目根，配合下面把入参一律 `resolve()` 成
     绝对路径，两件事合起来才能保证**从任何目录调用结果一致**。
     """
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     p = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace", env=env)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 

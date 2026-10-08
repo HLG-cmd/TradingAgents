@@ -23,6 +23,11 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS = ROOT / "reports"
 EVID = ROOT / "wb_analysis" / "evidence"
@@ -135,9 +140,15 @@ def scan() -> tuple[list[dict], list[str]]:
             issues.append(f"[缺草稿] {r['ticker']} {r['date']} 的报告树既无散落草稿目录、"
                           f"审计包里也没有 drafts ⇒ 无法重新渲染：{r['tree']}")
     # ── 异常三：孤儿（有证据/草稿，却没有报告树）
+    # 豁免：不属于 12 角色链路、且**不产出报告树**的专用通道/过程产物——
+    # 它们本就以 evidence/ 为正规归宿（如 collect_treasury.py 内建的 OUT_DIR），
+    # 「无报告树」是其设计预期而非堆积。新增此类通道时须同步登记到本表。
+    NON_TREE_PREFIXES = ("TREASURY",)          # 非 12 角色专题通道（collect_treasury.py）
     have = {(r["ticker"], r["date"]) for r in rows}
     for d in sorted(EVID.glob("*.md")) if EVID.exists() else []:
         if "derived" in d.name or "supplement" in d.name or ".pre_" in d.name:
+            continue
+        if d.name.startswith(NON_TREE_PREFIXES):
             continue
         m = re.match(r"(.+?)_(\d{4}-\d{2}-\d{2})", d.name)
         if m and (m.group(1), m.group(2)) not in have:

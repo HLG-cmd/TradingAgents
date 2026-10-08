@@ -19,6 +19,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# ★ 2026-10-08：契约常量改为**唯一来源** import（见 `_contract.py` 抬头的漂移史）。
+sys.path.insert(0, str(ROOT))
+from wb_analysis._contract import FIVE_TITLE_RE  # noqa: E402
+
 # 顺序重要：先长后短，避免 "Overweight/Buy" 被拆坏
 RULES = [
     ("Overweight/Buy", "上调档（增持/建仓）"),
@@ -85,7 +89,7 @@ def main() -> int:
     for ln, line in enumerate(back.split("\n"), 1):
         if any(p.search(line) for p in KEEP_LINE_PATTERNS):
             continue
-        for m in re.finditer(r"\b(Buy|Overweight|Hold|Underweight|Sell)\b", line):
+        for m in FIVE_TITLE_RE.finditer(line):
             hits.append((ln, m.group(0), line[:90]))
     print(f"[strip] 回读：结论块之外的裸五档词 = {len(hits)} 处")
     for h in hits:

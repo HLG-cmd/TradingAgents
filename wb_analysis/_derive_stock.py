@@ -171,8 +171,31 @@ def report(ticker: str, date: str) -> None:
     for i in range(len(m_) - 1, -1, -1):
         print(f"  {m_[i][0]}  MACD {m_[i][1]:>8.3f}  Signal {s_[i][1]:>8.3f}  Hist {h_[i][1]:>8.3f}")
     if m_:
-        print(f"  → MACD {'已跌破零轴' if m_[0][1] < 0 else '在零轴上方'}"
-              f"（{m_[-1][1]:+.3f} → {m_[0][1]:+.3f}）")
+        # ⚠️ 2026-10-02 修正：原实现是
+        #     `'已跌破零轴' if m_[0][1] < 0 else '在零轴上方'`
+        #   即用「当期值 < 0」直接判定为「已跌破零轴」，把
+        #   「当前位于零轴下方」与「当日发生向下穿越」混为一谈。
+        #
+        #   实测事故（GOOG 2026-10-01）：macd 窗口序列
+        #     −0.104 → −0.235 → −0.482 → −0.397 → −0.789
+        #   **全程为负**（自 09-25 起就在零轴下方），但该标签输出「已跌破零轴」，
+        #   被情绪分析师原样引用进 `1_analysts/sentiment.md`，与市场分析师按原始序列
+        #   作出的订正（当日是 macd **下穿 macds**、非穿越零轴）直接冲突。
+        #   ⇒ 属于「数据没错、标签说错」的静默误导，且会**跨角色传播**。
+        #
+        #   正确口径：先比较**前一根**的符号判断当日是否真的发生穿越，再给状态描述。
+        #   `series()` 返回的序列以 index 0 为**最新**（见上方打印用的 `s[-1] → s[0]`）。
+        cur = m_[0][1]
+        prev = m_[1][1] if len(m_) >= 2 else None
+        if prev is not None and prev >= 0 > cur:
+            state = "今日跌破零轴（由正转负）"
+        elif prev is not None and prev <= 0 < cur:
+            state = "今日上穿零轴（由负转正）"
+        elif cur < 0:
+            state = "位于零轴下方（本窗口内未发生穿越）"
+        else:
+            state = "位于零轴上方（本窗口内未发生穿越）"
+        print(f"  → MACD {state}（{m_[-1][1]:+.3f} → {m_[0][1]:+.3f}）")
     rs = series("rsi")
     if rs:
         print("  RSI: " + " | ".join(f"{d[5:]} {v:.2f}" for d, v in reversed(rs)))
@@ -260,7 +283,18 @@ def report(ticker: str, date: str) -> None:
     ins = re.search(r"## 8\. 内部人交易\n(.*?)(?=\n## |\Z)", md, re.S)
     if ins:
         body = ins.group(1).strip()
-        print("\n".join("  " + l.strip() for l in body.splitlines()[:22] if l.strip()))
+        # ★★ 2026-10-08：这里**必须**声明自己截断过。
+        #    血泪：本函数为省版面只打印前 22 行，却**没有任何"已截断"字样**，
+        #    于是被当成了完整事实 —— 简报据此写「内部人只有 2 笔带价卖出」，
+        #    而证据包 §8 实际有 **150 行 / 44 笔 / $77,494,297**（差 22 倍）。
+        #    两位分析师各自独立复核后才发现 ⇒ 已作为铁律 6 的实例记档。
+        #    ⇒ 凡是"截断输出"，都必须在**输出内**标明，不能靠读者猜到。
+        lines = [l for l in body.splitlines() if l.strip()]
+        LIMIT = 22
+        print("\n".join("  " + l.strip() for l in lines[:LIMIT]))
+        if len(lines) > LIMIT:
+            print(f"  ... [TRUNCATED: 仅显示前 {LIMIT} 行，本节共 {len(lines)} 行]")
+            print(f"  ... [完整内容见 {p.name} §8 —— **不要据本截断视图下结论**（本行的存在就是为了防这一点）]")
     else:
         print("  (无该章节)")
 

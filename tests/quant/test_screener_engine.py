@@ -118,8 +118,9 @@ def test_weights_override_changes_composite_and_default_is_untouched():
     assert trend_only["综合量化分"].idxmax() == "HI_T"
     assert default["综合量化分"].idxmax() != "HI_T"
     # the module-level default must not be mutated by a per-call override
-    assert se.FACTOR_WEIGHTS == {"quality": 0.30, "value": 0.25,
-                                 "growth": 0.25, "trend": 0.20}
+    # 2026-10-02：默认档趋势权重已由 0.20 降为 0.05（见 screener_engine 注释）
+    assert se.FACTOR_WEIGHTS == {"quality": 0.35, "value": 0.30,
+                                 "growth": 0.30, "trend": 0.05}
 
 
 @pytest.mark.unit
@@ -226,12 +227,18 @@ def test_weights_apply_on_the_cached_path(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
-def test_weight_profiles_are_normalised_and_default_is_garp():
+def test_weight_profiles_are_normalised_and_default_is_quality():
+    """**契约**：经 311 期证据（2026-10-02）后，默认档 = ``quality``（趋势 5%）。
+
+    历史上默认是 ``garp``（趋势 20%），改名与本断言同步更新是**刻意**的 ——
+    它把「默认权重是多少」变成一条会被测试拦住的契约，避免文档与代码漂移。
+    """
     for name, w in se.WEIGHT_PROFILES.items():
         assert set(w) == {"quality", "value", "growth", "trend"}, name
         assert sum(w.values()) == pytest.approx(1.0, abs=1e-9), f"{name} does not sum to 1"
-    assert se.FACTOR_WEIGHTS == se.WEIGHT_PROFILES["garp"]
-    # the documented alternatives must actually differ from the default
+    assert se.FACTOR_WEIGHTS == se.WEIGHT_PROFILES["quality"]
+    # 旧默认档必须仍然可调用、且确实不同于现默认（否则 garp 就成了无用别名）
+    assert se.WEIGHT_PROFILES["garp"]["trend"] == 0.20
     assert se.WEIGHT_PROFILES["quality"] != se.WEIGHT_PROFILES["garp"]
     assert se.WEIGHT_PROFILES["no_trend"]["trend"] == 0.0
 
@@ -278,6 +285,46 @@ def test_matching_cache_schema_is_served_without_refetch(tmp_path, monkeypatch):
     # replayed from the cached payload, so a stale caveat string must not survive.
     assert res["metadata"]["validation"]["caveat"] != "cached caveat"
     assert res["metadata"]["validation"]["caveat"] == se.validation_summary()["caveat"]
+
+
+# ── 缓存卫生：按日期累积的文件必须在写入路径上自动清理 ──
+
+@pytest.mark.unit
+def test_stale_screener_caches_are_purged_but_current_one_kept(tmp_path):
+    """**回归护栏**：缓存名含日期而查找只用今天 ⇒ 旧日期的文件永不再被命中。
+
+    不变量是**双边**的（只测「删了」会掩盖误删）：
+      ① 同池的旧日期文件被删；② 本次要写的那份**必须留**；
+      ③ 别的股票池的文件**不得**被误删（前缀必须带池名）。
+    """
+    keep = tmp_path / "screener_nasdaq_2026-10-03_ab12cd34.json"
+    old1 = tmp_path / "screener_nasdaq_2026-10-02_ab12cd34.json"
+    old2 = tmp_path / "screener_nasdaq_2026-09-20_deadbeef.json"
+    other_pool = tmp_path / "screener_sp500_2026-10-02_99999999.json"
+    for f in (keep, old1, old2, other_pool):
+        f.write_text("{}", encoding="utf-8")
+
+    removed = se._purge_stale_screener_caches(keep)
+
+    assert removed == 2
+    assert keep.exists(), "本次要写的那份不得被删"
+    assert not old1.exists() and not old2.exists()
+    assert other_pool.exists(), "别的股票池的文件不得被误删"
+
+
+@pytest.mark.unit
+def test_cache_purge_is_noop_on_non_standard_names(tmp_path):
+    """桩路径（无池名/日期）不得触发删除 —— 测试自己就会传这种路径进来。
+
+    若这条失效，`_purge_stale_screener_caches` 会把 tmp 目录里的无关文件删掉，
+    让「缓存命中」类测试变成假绿。
+    """
+    keep = tmp_path / "c.json"
+    other = tmp_path / "c_other.json"
+    for f in (keep, other):
+        f.write_text("{}", encoding="utf-8")
+    assert se._purge_stale_screener_caches(keep) == 0
+    assert other.exists()
 
 
 # ── CSV export: BOM + fixed decimals ──
@@ -346,8 +393,8 @@ def test_significance_requires_abs_t_at_least_two(monkeypatch):
     monkeypatch.setattr(se, "FACTOR_VALIDATION", bumped)
     s = se.validation_summary()
     assert s["factors"]["quality"]["significant"] is True
-    # garp 里 quality 权重 0.30 ⇒ 不显著占比应从 1.0 降到 0.70
-    assert s["insignificant_weight_share"] == pytest.approx(0.70, abs=1e-6)
+    # 现默认档里 quality 权重 0.35 ⇒ 不显著占比应从 1.0 降到 0.65
+    assert s["insignificant_weight_share"] == pytest.approx(0.65, abs=1e-6)
 
 
 @pytest.mark.unit

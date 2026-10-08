@@ -17,6 +17,11 @@ import sys
 import time
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +29,29 @@ sys.path.insert(0, str(ROOT))
 from quant import edgar_fundamentals as ef
 
 CACHE = Path.home() / ".tradingagents" / "edgar_raw"
+
+# 复用判据：文件 mtime 距今 < TTL 才复用，否则重下并覆盖。**导出为常量**，
+# 让「判据」与「清理」共用同一个数 —— 两处各写一遍必然漂移。
+TTL_SECONDS = 86400
+
+
+def _purge_expired(cache_dir: Path) -> int:
+    """删掉**已过 TTL** 的 companyfacts —— 它们永远不会再被复用。
+
+    为什么需要它：`get_facts` 过期即重下，但**只有被再次访问的那一只**才会被覆盖；
+    其余过期文件会永久留在盘上（每个约 4 MB，实测 5 只占 20.3 MB）。
+    这是「按日期累积」之外的另一种只增不减 —— 清理必须在写入路径上自动发生，
+    否则又会退化成「攒多了再手工清」。
+    """
+    removed = 0
+    for f in cache_dir.glob("*_companyfacts.json"):
+        try:
+            if time.time() - f.stat().st_mtime >= TTL_SECONDS:
+                f.unlink()
+                removed += 1
+        except OSError:      # 被占用等 ⇒ 跳过，不阻断
+            pass
+    return removed
 
 # (证据包 §4 标签, us-gaap tag 候选链, 目标期末日)
 ITEMS = [
@@ -53,8 +81,9 @@ ITEMS = [
 
 def get_facts(ticker: str) -> dict:
     CACHE.mkdir(parents=True, exist_ok=True)
+    _purge_expired(CACHE)          # 先清已过 TTL 的，避免它们随访问次数只增不减
     p = CACHE / f"{ticker}_companyfacts.json"
-    if p.exists() and (time.time() - p.stat().st_mtime) < 86400:
+    if p.exists() and (time.time() - p.stat().st_mtime) < TTL_SECONDS:
         return json.loads(p.read_text(encoding="utf-8"))
     cik = ef.cik_for(ticker)
     if not cik:
@@ -112,28 +141,30 @@ def parse_evidence(ticker: str, as_of: str) -> dict:
 def main() -> int:
     ticker = sys.argv[1] if len(sys.argv) > 1 else "NFLX"
     target = sys.argv[2] if len(sys.argv) > 2 else "2025-12-31"
+    as_of = sys.argv[3] if len(sys.argv) > 3 else "2026-09-28"
     data = get_facts(ticker)
-    ev = parse_evidence(ticker, "2026-09-21")
+    ev = parse_evidence(ticker, as_of)
 
     print("=" * 104)
     print(f"SEC data.sec.gov 全量 companyfacts 复核（{ticker}，目标期末 {target}，仅 10-K / FY）")
     print("=" * 104)
     ok = diff = na = 0
     for ev_label, tags, end in ITEMS:
+        end_date = target if target else end
         a = ev.get(ev_label)
         b = unit = filed = None
         used = None
         for t in tags:
             if t == "__DERIVED_LTD_PLUS_CURRENT__":
                 # 「总债务」在 XBRL 里没有单一标签 ⇒ 用「长期债务（非流动）」+「长期债务（流动部分）」自算
-                ltd, _, f1 = annual_value(data, "LongTermDebtNoncurrent", end)
-                cur, _, f2 = annual_value(data, "LongTermDebtCurrent", end)
+                ltd, _, f1 = annual_value(data, "LongTermDebtNoncurrent", end_date)
+                cur, _, f2 = annual_value(data, "LongTermDebtCurrent", end_date)
                 if ltd is None:
-                    ltd, _, f1 = annual_value(data, "LongTermDebt", end)
+                    ltd, _, f1 = annual_value(data, "LongTermDebt", end_date)
                 if ltd is not None and cur is not None:
                     b, used, filed = ltd + cur, "LongTermDebtNoncurrent + LongTermDebtCurrent", f1 or f2
                 continue
-            b, unit, filed = annual_value(data, t, end)
+            b, unit, filed = annual_value(data, t, end_date)
             if b is not None:
                 used = t
                 break

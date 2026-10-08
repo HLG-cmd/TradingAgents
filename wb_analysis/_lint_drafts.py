@@ -32,21 +32,18 @@ from pathlib import Path
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-NUM_RE = re.compile(r"\d[\d,]*\.?\d*")
-RATING_RE = re.compile(
-    r"(?<![A-Za-z])(Buy|Overweight|Underweight|Sell|Hold|BUY|OVERWEIGHT|UNDERWEIGHT|SELL|HOLD)(?![A-Za-z])"
+# ★ 2026-10-08：契约常量改为**唯一来源** import —— 别再在本文件里写正则。
+#   历史：本文件曾自持一份「五档 + 大写变体」的正则，而 `_gen_meta.py` 自持一份
+#   大小写敏感的 → 同一个 trader.md 在两道门禁里被判定成不同事实（详见 `_contract.py` 抬头）。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from wb_analysis._contract import (  # noqa: E402
+    DOC_FILES as _DOC_ALL,
+    FINAL_ALLOWED_FILES,
+    RATING_ALLOWED_FILES,
+    FIVE_RE as RATING_RE,
 )
-# 合同允许出现五档英文词的位置
-# ⚠️ 2026-09-17 修正：原先只列 manager/PM/trader，但**三个风险席位
-# （aggressive / conservative / neutral）按 FRAMEWORK.md 契约也必须在
-# 结论块中用一个五档词表态**，否则下游无法读取风险倾向。
-# 首版白名单漏了它们，导致三份合规文件被误判为「正文出现五档英文词」。
-RATING_ALLOWED_FILES = {
-    "manager.md", "portfolio_manager.md", "trader.md",
-    "aggressive.md", "conservative.md", "neutral.md",
-}
-# 交易员契约行只允许出现在 trader.md
-FINAL_ALLOWED_FILES = {"trader.md"}
+
+NUM_RE = re.compile(r"\d[\d,]*\.?\d*")
 
 # 工作文档（不是角色产出、不被渲染进报告、也不被 extract_rating 解析）。
 # ⚠️ 2026-09-19 修正：`_constraints.md` 必须**逐字写出五个英文词**才能"定义"评级词汇表
@@ -54,7 +51,7 @@ FINAL_ALLOWED_FILES = {"trader.md"}
 # 这是**定义性引用**，不是违规。若不排除，它会把「契约违规」计数顶起来，
 # 从而**淹没真正的违规**（正是本脚本要防的那类失败）。
 # （`0_brief.md` / `0_derived.md` 已由下面的 `startswith("0_")` 跳过。）
-DOC_FILES = {"_constraints.md"}
+DOC_FILES = {f for f in _DOC_ALL if f.startswith("_")}
 
 # 这些是通用/结构性数字，不参与溯源
 STOP = {
@@ -187,17 +184,41 @@ def main() -> int:
             issues.append(f"  · 提示：L{mentions} 仅『提到』该短语（多为合规声明），非违规")
 
         # --- 3. 裸英文评级词 ---
+        # ⚠️ 必须排除 trader.md 的**契约末行** `FINAL TRANSACTION PROPOSAL: **HOLD**`：
+        #    该行是**要求在场**的，内容本身就是大写三档词，而 RATING_RE 含大写变体，
+        #    若不排除则每一份合规的 trader.md 都会被判违规（实测：NDX 交易员稿被判 1 处）。
+        #    第 2 项检查已对「该行是否越界/是否恰一次」单独负责，此处不再重复计。
+        fin_lines = set(real_fin) | set(mentions)
         hits = [(i, l.strip()[:70]) for i, l in enumerate(text.splitlines(), 1)
-                if RATING_RE.search(l)]
+                if RATING_RE.search(l) and i not in fin_lines]
         if f.name == "sentiment.md":
             hits = [(i, l) for i, l in hits if "Overall Sentiment" not in l]
+        # ⚠️ 2026-10-01 修正（门禁盲区）：三个风险席位原先**同时**满足
+        #    「在 RATING_ALLOWED_FILES 里」与「不在 {manager, portfolio_manager} 里」，
+        #    于是两个分支都进不去 ⇒ 这条检查对 aggressive/conservative/neutral **从未运行过**。
+        #    症状是「自报零违规」，实为真空为真（同 `if v < 13: continue` 那一类）。
+        #    实测：NDX 保守方 `**Sell**（五档中最保守一档）…` 写在 §7.1 正文里，
+        #    而 lint 报 0 违规。现按 manager/PM 同一口径（结论块首行 + 3 行）对风险席位一并检查。
+        #    注：检查的是「块**外**出现」；块内缺失（head is None 且 hits 非空）同样落入 bad。
         if f.name not in RATING_ALLOWED_FILES and hits:
             issues.append(f"  ✗ 正文出现五档英文词 {len(hits)} 处：{hits[:3]}")
-        elif f.name in {"manager.md", "portfolio_manager.md"}:
+        elif f.name in {"manager.md", "portfolio_manager.md",
+                        "aggressive.md", "conservative.md", "neutral.md",
+                        "trader.md"}:
+            # ⚠️ 2026-10-02 二次补漏：2026-10-02 早些时候把三个风险席位加进了本分支，
+            #    但**漏了 trader.md** —— 它同样同时满足「在白名单里」与「不在原 {manager, PM} 集合里」，
+            #    于是它的正文五档词也从未被本检查覆盖。
+            #    实测：GOOG 交易员稿正文出现 12 处 `Hold`、NFLX 出现 10 处，
+            #    本检查全程静默，只有另一套 `_check_role_files.py`（RATING_OK 期望恰 1 个）抓到了。
+            #    trader.md 的结论块以 `**Action**` 打头（不是 Recommendation/Rating），故一并纳入前缀识别。
             body = text.splitlines()
             head = next((i for i, l in enumerate(body, 1)
-                         if l.strip().startswith(("**Recommendation**", "**Rating**"))), None)
-            bad = [(i, l) for i, l in hits if head is None or i > head + 3]
+                         if l.strip().startswith(("**Recommendation**", "**Rating**",
+                                                  "**Action**"))), None)
+            # 交易员的结论块有 5 个字段（Action/Reasoning/Entry/Stop/Position Sizing），
+            # 比 manager/PM 的 3 行宽，故容差放宽到 +5。
+            slack = 5 if f.name == "trader.md" else 3
+            bad = [(i, l) for i, l in hits if head is None or i > head + slack]
             if bad:
                 issues.append(f"  ✗ 结论块之外出现五档英文词 {len(bad)} 处：{bad[:3]}")
 

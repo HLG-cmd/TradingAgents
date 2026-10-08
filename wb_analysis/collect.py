@@ -24,6 +24,7 @@ import argparse
 import datetime as dt
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -133,7 +134,18 @@ _PLACEHOLDER_MARKERS = (
     "<reddit unavailable",
     "<unavailable",
     "this is not an absence of posts",
+    # ⚠️ 2026-10-08 新增（GOOG 轮实测）：**「内容为空」也是失败**。
+    #    新闻通道按设计不抛异常，拿不到内容时返回人类可读的空态串。
+    #    原实现只认占位串前缀 ⇒ `No news found for GOOG` 被记为 **ok**，
+    #    健康度照报「32 / 35 成功」，但 §5 实际整节为空。
+    #    这与 2026-09-17 修 StockTwits 假绿是**同一类漏洞的不同面**：
+    #    那次是「失败返回占位串」，这次是「失败返回自然语言空态」。
+    #    ⚠️ 匹配串必须**足够长**以避免误伤真数据（例如真有标题含 "no global news"）。
+    "no news found for",
+    "no global news found",
 )
+# 注意：正文回填后宏观新闻可能个别条目仍只有标题，这不影响该通道判 ok ——
+# 只要**至少有一条**内容，就该算成功。故这里只匹配「整段为空」的空态串。
 
 # 只认「YYYY-MM-DD: 数值」形式的真数据行。排除两类噪声：
 # 休市日的 ``N/A: Not a trading day``，以及尾部的指标说明提示词。
@@ -250,12 +262,23 @@ def _compact_statement(raw: object, key: str, max_rows: int = 34) -> str:
 
     by_name = {ln.split(",", 1)[0].strip(): ln for ln in body}
     picked = [by_name[n] for n in want if n in by_name]
+    truncated = 0
     if len(picked) < 8:  # 优先级表未命中（数据源改名）→ 退回原顺序
+        if len(body) > max_rows:
+            truncated = len(body) - max_rows
         picked = body[:max_rows]
     else:
+        if len(picked) > max_rows:
+            truncated = len(picked) - max_rows
         picked = picked[:max_rows]
 
-    return "\n".join(preamble + picked)
+    out = "\n".join(preamble + picked)
+    # ★ 2026-10-08：截断**必须在输出内声明**（同类事故见 `_derive_stock.py` 内部人一节 ——
+    #   那里静默只打印前 22 行，被当成完整事实，导致内部人笔数写错 22 倍）。
+    #   不加这行 ⇒ 下游无法区分「报表就这么短」与「被我们切短了」。
+    if truncated:
+        out += f"\n# ... [TRUNCATED: 本节另有 {truncated} 行未显示；完整报表见证据包原始返回]"
+    return out
 
 
 def _fundamentals_sanity(text: object) -> str:
@@ -451,7 +474,24 @@ def _price_summary(csv_text: object) -> tuple[str, dict]:
     if df.empty:
         return "(行情无有效收盘价)", {}
 
-    # --- ★ 未收盘 bar 检测 ---
+    # --- ★ 未收盘 bar 检测（时点优先）---
+    #
+    # ★★ 2026-09-30 事故修复：旧判据是 `ratio < 0.60 AND _session_in_progress(...)`，
+    # 把**量比（数值）当成了主判据**、时点只作附加条件 —— 违反铁律 2
+    # 「时点 → 时间戳 → 数值，顺序不可颠倒」。
+    #
+    # 实测同一交易日内的两次采集：
+    #   11:16 ET 量比 40.3%  → 剔除 ✓（碰巧对）
+    #   13:32 ET 量比 60.3%  → **不剔除 ✗**（距 16:00 收盘还有 2.5 小时）
+    # 后果：9-30 的半截 K 线被当成收盘 bar 写进证据包，证据包明写
+    # 「日线序列最后一根有效 bar：2026-09-30 收盘 346.96」，而 9-30 根本没收盘
+    # ⇒ 最新收盘价、全部技术指标、以及所有以收盘价为分母的比率**同时被污染**，
+    # 且**外观完全正常**（命令成功、字段存在、数值合规）—— 典型静默失败（铁律 3）。
+    # 更隐蔽的是该 bug **只在盘中晚段触发**：早盘量比必 <60% 反而"正常"。
+    #
+    # ⇒ 正确判据：**时点是定义性问题，不是概率问题**。只要该 bar 所属交易日
+    # 尚未走完美东 16:00，它在定义上就不是一个完整交易日的观测，
+    # **无论量比多高都必须剔除**；量比只在"交易日已结束"时用于提示字段不完整。
     unclosed_note = ""
     unclosed_info: dict = {}
     if "Volume" in df.columns and len(df) >= 21:
@@ -459,34 +499,42 @@ def _price_summary(csv_text: object) -> tuple[str, dict]:
             vol = pd.to_numeric(df["Volume"], errors="coerce")
             last_vol = float(vol.iloc[-1])
             avg20 = float(vol.iloc[-21:-1].mean())   # 前 20 日（不含末根）
-            if avg20 > 0:
-                ratio = last_vol / avg20
-                _last_date = (
-                    df["Date"].iloc[-1] if "Date" in df.columns else df.index[-1]
+            ratio = (last_vol / avg20) if avg20 > 0 else float("nan")
+            _last_date = (
+                df["Date"].iloc[-1] if "Date" in df.columns else df.index[-1]
+            )
+            if _session_in_progress(_last_date):
+                # 时点优先：交易日未走完 ⇒ 无条件剔除，不看量比
+                dropped = df.tail(1)
+                d0 = dropped.iloc[0]
+                unclosed_info = {
+                    "unclosed_bar_date": str(d0.get("Date", "?")),
+                    "unclosed_bar_close": round(float(d0["Close"]), 2),
+                    "unclosed_bar_dropped": True,
+                    "unclosed_drop_reason": "session_in_progress",
+                }
+                if not math.isnan(ratio):
+                    unclosed_info["unclosed_volume_ratio"] = round(ratio * 100, 1)
+                _ratio_txt = (
+                    f"，量为 20 日均量的 {ratio * 100:.1f}%"
+                    if not math.isnan(ratio) else "（该通道无有效成交量字段）"
                 )
-                if ratio < 0.60 and _session_in_progress(_last_date):
-                    dropped = df.tail(1)
-                    d0 = dropped.iloc[0]
-                    unclosed_info = {
-                        "unclosed_bar_date": str(d0.get("Date", "?")),
-                        "unclosed_bar_close": round(float(d0["Close"]), 2),
-                        "unclosed_volume_ratio": round(ratio * 100, 1),
-                        "unclosed_bar_dropped": True,
-                    }
-                    unclosed_note = (
-                        f"⚠ 已剔除未收盘 bar：{d0.get('Date','?')} "
-                        f"(收盘 {float(d0['Close']):.2f}，量仅为 20 日均量的 {ratio*100:.1f}%)。\n"
-                        f"   末根 K 线量 ÷ 20 日均量 < 60% ⇒ 该 bar 未收盘，价格与指标不可用。\n"
-                        f"   本证据包的价格与技术指标均基于**已收盘** bar。\n"
-                    )
-                    df = df.iloc[:-1]
-                elif ratio < 0.60:
-                    unclosed_note = (
-                        f"ℹ️ 末根 bar {_last_date} 的量为 20 日均量的 {ratio*100:.1f}%，"
-                        f"但其交易日已过完美东 16:00 ⇒ 判为**已收盘**，不剔除。\n"
-                        f"   量比偏低属该通道当日 volume 字段不完整（指数尤甚），"
-                        f"OHLC 需另用 1 分钟 bar / ETF 代理比值核验。\n"
-                    )
+                unclosed_note = (
+                    f"⚠ 已剔除未收盘 bar：{d0.get('Date','?')} "
+                    f"(瞬时价 {float(d0['Close']):.2f}{_ratio_txt})。\n"
+                    f"   判据：**时点优先** —— 该 bar 所属交易日尚未走完美东 16:00，\n"
+                    f"   它在定义上就不是一个完整交易日的观测，故**无论量比多高**都剔除。\n"
+                    f"   （2026-09-30 事故：盘中 13:32 量比已达 60.3%，旧判据因而漏剔。）\n"
+                    f"   本证据包的价格与技术指标均基于**已收盘** bar。\n"
+                )
+                df = df.iloc[:-1]
+            elif not math.isnan(ratio) and ratio < 0.60:
+                unclosed_note = (
+                    f"ℹ️ 末根 bar {_last_date} 的量为 20 日均量的 {ratio*100:.1f}%，"
+                    f"但其交易日已过完美东 16:00 ⇒ 判为**已收盘**，不剔除。\n"
+                    f"   量比偏低属该通道当日 volume 字段不完整（指数尤甚），"
+                    f"OHLC 需另用 1 分钟 bar / ETF 代理比值核验。\n"
+                )
         except Exception:  # noqa: BLE001
             pass
 
@@ -519,7 +567,10 @@ def _price_summary(csv_text: object) -> tuple[str, dict]:
     lines.append(recent)
     if unclosed_note:
         lines.append("")
-        lines.append("注：上表为已收盘 bar。当日未收盘 bar 已按「量 < 20 日均量的 60%」规则剔除。")
+        lines.append("注：上表为已收盘 bar。当日未收盘 bar 已按**时点优先**判据剔除"
+                     "（所属交易日未走完美东 16:00 ⇒ 无论量比多少都剔除；"
+                     "2026-09-30 起取代旧的「量 < 20 日均量 60%」判据，"
+                     "后者在盘中晚段量比升破 60% 时会漏剔）。")
     return "\n".join(lines), stats
 
 
@@ -578,6 +629,12 @@ def _realtime_close_block(ticker: str, as_of: str) -> tuple[str, dict]:
     try:
         h = t.history(period="15d", interval="1d")
         h = h.dropna(subset=["Close"])
+        # ★ 时点优先（与 _price_summary 同一判据，铁律 2）：末根 bar 若属于「尚未走完
+        # 美东 16:00」的交易日，它在定义上不是完整交易日的观测 ⇒ 无论量比多少都剔除。
+        # 不剔除的后果（2026-09-30 事故）：本节会把盘中价写成「9-30 收盘 346.72」，
+        # 而 §1/§2 已正确回退到 9-29 的 337.32 —— 同一份证据包前后自相矛盾。
+        if len(h) and _session_in_progress(h.index[-1].strftime("%Y-%m-%d")):
+            h = h.iloc[:-1]
         if len(h):
             daily_last = h.index[-1].strftime("%Y-%m-%d")
             daily_close = round(float(h["Close"].iloc[-1]), 2)
@@ -654,13 +711,20 @@ def _realtime_close_block(ticker: str, as_of: str) -> tuple[str, dict]:
     lines.append(f"- 实时字段所属常规交易时段：**{sess_date}**　"
                  f"`regularMarketPrice` = **{rt_price}**　"
                  f"`regularMarketPreviousClose` = {prev_close}")
+    # ★ 时点优先（铁律 2）：盘中 ⇒ 实时价是「盘中价」，**不是**收盘价。
+    # 旧文案无条件写「{sess_date} 收盘」，在盘中采集时等于把一个未收盘的瞬时价
+    # 冒充收盘价（2026-09-30 事故：13:42 ET 写「9-30 收盘 346.72」）。
+    sess_in_progress = _session_in_progress(sess_date) if sess_date else False
+    rt_kind = "盘中价（**非收盘**）" if sess_in_progress else "收盘"
     if newer:
         lines.append(f"- ⇒ **实时时段比日线末日新 {stats['realtime_lag_days']} 个交易日**："
-                     f"最新价按 **{rt_price}**（{sess_date} 收盘）计，"
+                     f"最新价按 **{rt_price}**（{sess_date} {rt_kind}）计，"
                      f"相对日线末日 {daily_close} 变化 "
                      f"{(rt_price / daily_close - 1) * 100:+.2f}%。"
                      "**两者口径不同，不可混用**：技术指标必须用日线末日，"
-                     "「最新价」用实时字段。")
+                     "「最新价」用实时字段")
+        lines[-1] += ("；且该最新价**不是收盘价，不得用作止损/目标/估值锚点**（铁律 4）。"
+                      if sess_in_progress else "。")
     if intraday:
         lines.append(f"- 1 分钟 bar 复核（{intraday['session']}，"
                      f"{intraday['n_bars']} 根，{intraday['first_ts']}–{intraday['last_ts']} ET）："
@@ -672,9 +736,18 @@ def _realtime_close_block(ticker: str, as_of: str) -> tuple[str, dict]:
             lines.append(f"  - 与 `regularMarketPrice` 的差 = {d:.2f} 美元"
                          "（收盘集合竞价成交价与最后一根分钟 bar 的正常差异）")
     if vol_ratio is not None:
-        verdict = ("该 bar **已收盘**（量能达 20 日均量的 "
-                   f"{vol_ratio}% ≥ 60%）") if vol_ratio >= 60 else (
-                   f"该 bar **未收盘**（量能仅为 20 日均量的 {vol_ratio}% < 60%）")
+        # ★ 时点优先（铁律 2：时点 → 时间戳 → 数值）：
+        # 盘中 ⇒ 无条件判未收盘，量比再高也不改判；量比只在交易日已结束时作辅助信息。
+        if sess_in_progress:
+            verdict = (f"该 bar **未收盘** —— 其所属交易日 {sess_date} 尚未走完美东 16:00"
+                       f"（采集时点 {now_ny:%H:%M} ET）。**时点判据优先于量比**，"
+                       f"故量比 {vol_ratio}% 即使已过 60% 也不改判。")
+        elif vol_ratio >= 60:
+            verdict = f"该 bar **已收盘**（交易日 {sess_date} 已过美东 16:00；量比 {vol_ratio}% ≥ 60%）"
+        else:
+            verdict = (f"该 bar **已收盘**（交易日 {sess_date} 已过美东 16:00）；"
+                       f"量比仅 {vol_ratio}% < 60%，属该通道当日 volume 字段不完整"
+                       f"（指数尤甚），**不是**未收盘。")
         lines.append(f"- 量能判据（§1 铁律）：最新那根日线 bar 量 ÷ 20 日均量 = "
                      f"**{vol_ratio}%** ⇒ {verdict}")
     lines.append("")

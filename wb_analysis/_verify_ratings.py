@@ -21,13 +21,25 @@ import re
 import sys
 from pathlib import Path
 
-FIVE = re.compile(r"\b(Buy|Overweight|Hold|Underweight|Sell)\b")
-THREE = re.compile(r"\b(BUY|HOLD|SELL)\b")
-TRADER_LINE = re.compile(r"FINAL TRANSACTION PROPOSAL:\s*\*\*(\w+)\*\*")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+# ★ 2026-10-08：契约常量改为**唯一来源** import（见 `_contract.py` 抬头的漂移史）。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from wb_analysis._contract import (  # noqa: E402
+    DOC_FILES as _DOC_ALL,
+    FINAL_PROPOSAL,
+    FIVE_TITLE_RE as FIVE,
+    PROPOSAL_RE as TRADER_LINE,
+    RATING_ALLOWED_FILES,
+)
+
 REQUIRED_FIELDS = {
     "2_research/manager.md": ["Recommendation"],
     "4_risk/portfolio_manager.md": ["Rating"],
-    "3_trading/trader.md": ["Action", "FINAL TRANSACTION PROPOSAL"],
+    "3_trading/trader.md": ["Action", FINAL_PROPOSAL],
 }
 ROLE_FILES = [
     "0_brief.md", "0_derived.md", "_constraints.md",
@@ -38,20 +50,15 @@ ROLE_FILES = [
     "4_risk/aggressive.md", "4_risk/conservative.md",
     "4_risk/neutral.md", "4_risk/portfolio_manager.md",
 ]
-# 五档词允许出现的文件。
+# 五档词允许出现的文件 —— **直接由 `_contract.py` 派生**。
 # ★ 2026-09-19 对齐：此前这里只列 3 个（manager/trader/PM），而 `_lint_drafts.py` 的
 #   `RATING_ALLOWED_FILES` 列了 **6 个**（多出三个风控席位）。两个工具对
 #   「风控席位能否在结论块用五档词表态」**判断相反** —— 同一份草稿会得到两种结论。
-#   现与 `_lint_drafts.py` 对齐（FRAMEWORK 亦允许风控席位表态）。
-#   ⚠️ 改这里时务必同步改 `_lint_drafts.py::RATING_ALLOWED_FILES`，`_selftest.py` 会兜底。
-FIVE_ALLOWED = {
-    "2_research/manager.md",
-    "3_trading/trader.md",
-    "4_risk/portfolio_manager.md",
-    "4_risk/aggressive.md",
-    "4_risk/conservative.md",
-    "4_risk/neutral.md",
-}
+#   ⇒ 2026-10-08 起不再"手动对齐"，而是**同一份常量**，漂移在物理上不可能。
+FIVE_ALLOWED = {f"2_research/{n}" for n in RATING_ALLOWED_FILES if n == "manager.md"}
+FIVE_ALLOWED |= {f"3_trading/{n}" for n in RATING_ALLOWED_FILES if n == "trader.md"}
+FIVE_ALLOWED |= {f"4_risk/{n}" for n in RATING_ALLOWED_FILES
+                 if n in {"portfolio_manager.md", "aggressive.md", "conservative.md", "neutral.md"}}
 # 这两份是**工作文档**（不是角色产出、不被渲染进报告、也不被 extract_rating 解析）：
 # 它们必须逐字写出五个英文词才能"定义"评级词汇表，属合法的定义性引用。
 DOC_FILES = {"0_brief.md", "0_derived.md", "_constraints.md"}

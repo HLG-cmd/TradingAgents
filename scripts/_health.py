@@ -27,6 +27,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
 PY = sys.executable
 SKIP = {".venv", ".git", "__pycache__", ".pytest_cache", "node_modules"}
@@ -34,8 +39,9 @@ SKIP = {".venv", ".git", "__pycache__", ".pytest_cache", "node_modules"}
 
 def run(args: list[str], timeout: int = 300) -> tuple[int, str]:
     try:
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
         p = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=timeout, cwd=str(ROOT))
+                           errors="replace", timeout=timeout, cwd=str(ROOT), env=env)
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired:
         return 999, "超时"
@@ -231,7 +237,16 @@ def chk_memory_size() -> tuple[str, str]:
 #   ⇒ **能让"改文件找 bug"失效的，不是测试少，而是基线不确定**。
 #   基线数 = `python -m pytest tests/ -q -k "not DeepSeekLive"` 的 passed 数。
 BASELINE_K = "not DeepSeekLive"
-BASELINE_PASSED = 730
+# 2026-10-02：730 → 735。新增 `tests/test_unclosed_bar_time_first.py`（5 项），
+#   锁定 `collect.py` 未收盘 bar 检测的「时点优先」修复（原实现以量比为主判据，违反铁律 2，
+#   只在交易日盘中后段触发：同一半根 bar 在 11:16 ET 量比 40.3% 被剔除、13:32 ET 量比 60.3% 被写进证据包）。
+#   该 WARN「735 > 基线 730」由另一会话发现但未改（不确定文件归属）⇒ 本次确认归属后更新。
+# 2026-10-08：737 → 747。新增 `tests/test_earnings_quality_gate.py`（10 项），
+#   锁定 `_verify_earnings_quality.py` 的 **Q5 非经营收益闸门**（GOOG 轮实测发现：
+#   报表 PE(TTM) 17.3x 看着便宜，实际 55.7% 的 TTM 净利来自未实现权益证券浮盈，
+#   剥离后经营性 PE 44.1x）。单测覆盖**双向**：坏夹具（浮盈 61%）必 FAIL、
+#   好夹具（4%）必不误报、中间带（15%）只 WARN、负 gain 与缺失值保持沉默。
+BASELINE_PASSED = 747
 
 
 def chk_tests() -> tuple[str, str]:
@@ -246,6 +261,90 @@ def chk_tests() -> tuple[str, str]:
     if n > BASELINE_PASSED:
         return "WARN", f"{n} passed > 基线 {BASELINE_PASSED} ⇒ 有新测试，请更新 BASELINE_PASSED"
     return "PASS", f"{n} passed，与确定性基线一致（已排除真实 API 测试）"
+
+
+def chk_doc_drift() -> tuple[str, str]:
+    """文档里是否又写死了会漂移的数字 / 用了迁移前的旧命令路径。
+
+    ★ 2026-10-08 新增。为什么值得单列一项：
+
+    实测 `docs/WORKFLOW.md` 曾写「**508 个单元测试**」，而实际已 737 —— 差 229，
+    却**无人察觉**，因为没人会记得回来改。更糟的是该文档有 **19 处命令用旧路径**
+    （`python wb_deep_dive.py`、`from screener_engine import ...`），
+    而自 2026-09-23 起这些代码已全部移入 `quant/` 包 ⇒ **照文档抄命令直接报错**。
+
+    项目已有两条明确原则，本检查是把它们从"纪律"变成"代码"：
+      · 「能靠代码根除的写进代码，不靠『记得注意』」
+      · 「同一口径只在一个地方写一遍 —— 写两遍必然漂移」
+
+    ⇒ 检测三类信号（命中即 WARN，不阻断交付，但必须处理）：
+      ① 文档里出现 `N 个单元测试 / N 个脚本 / N 个 .py` 这类硬编码计数；
+      ② 文档示例命令用了**根目录裸模块名**（`python xxx.py` 但该文件实际在 `quant/`）；
+      ③ `from <模块> import` 而该模块实际在 `quant/` 包内。
+
+    ⚠️ **判别力要求（铁律 20）**：必须能区分「真的写死了数字」与「正在警告别人别写死数字」。
+    实测首次运行就把 `WORKFLOW.md` / `PROJECT_MAP.md` 里**两处反例说明**误报为漂移 ——
+    那两行恰恰是「本表刻意不写数量」的告诫本身。⇒ 加 `_is_warning_context()` 排除
+    引用块（`>` 开头）、以及同段含「不写 / 刻意 / 历史教训 / 实测」等告诫词的场合。
+    """
+    docs = [p for p in (ROOT / "docs").glob("*.md")]
+    # `TOOLS.md` 由 `_tidy_scripts.py --apply` 自动重建，数字本就每次刷新 ⇒ 豁免。
+    EXEMPT = {"TOOLS.md"}
+    hits: list[str] = []
+
+    # quant/ 包内真实存在的模块名（用于判「裸名其实在包里」）
+    pkg_mods = {p.stem for p in (ROOT / "quant").glob("*.py") if p.stem != "__init__"}
+    # ⚠️ **不要加 `\b`** —— 首版写成 `\b\d{2,}\s*个\s*(...)\b`，
+    #   而 `\b` 在「中文 ↔ 数字」边界上不可靠：`有 999 个单元测试` 实测**不匹配**，
+    #   于是注入的真漂移被漏掉（双边测试才发现）。CJK 场景下用 `\d{2,}` 直接起头即可。
+    count_re = re.compile(r"\d{2,}\s*个\s*(单元测试|测试|脚本|\.py|通道)")
+    bare_cmd_re = re.compile(r"\bpython\s+([A-Za-z_][A-Za-z0-9_]*)\.py")
+    bare_imp_re = re.compile(r"^\s*from\s+([A-Za-z_][A-Za-z0-9_]*)\s+import", re.M)
+    WARN_WORDS = ("不写", "刻意", "历史教训", "实测", "已全部与现状不符", "别再")
+
+    def _is_warning_context(t: str, pos: int) -> bool:
+        """该位置是否处于「告诫别人别这么写」的语境。
+
+        ⚠️ 判据必须**行内为主**：首版用「前后各 400 字符」的段落窗口，
+        结果把注入在文档**末尾**的真漂移给漏掉了（远处恰好有告诫词）——
+        窗口过宽 ⇒ 判别力退化。现改为：只看**本行**（± 上一行），
+        加一个引用块判定。这正是铁律 20「豁免表改后双边必测」要防的退化。
+        """
+        line_start = t.rfind("\n", 0, pos) + 1
+        line_end = t.find("\n", pos)
+        line = t[line_start: line_end if line_end != -1 else len(t)]
+        if line.lstrip().startswith(">"):          # Markdown 引用块
+            return True
+        # 再看紧邻的上一行（告诫常写在数字行的正上方，如 `> 历史教训：…`）
+        prev_start = t.rfind("\n", 0, max(0, line_start - 1)) + 1
+        prev_line = t[prev_start: max(0, line_start - 1)]
+        return any(w in line or w in prev_line for w in WARN_WORDS)
+
+    for d in sorted(docs):
+        if d.name in EXEMPT:
+            continue
+        t = d.read_text(encoding="utf-8")
+        for m in count_re.finditer(t):
+            if _is_warning_context(t, m.start()):
+                continue
+            ln = t[: m.start()].count("\n") + 1
+            hits.append(f"{d.name}:L{ln} 硬编码计数「{m.group(0).strip()}」")
+        for m in bare_cmd_re.finditer(t):
+            mod = m.group(1)
+            if mod in pkg_mods and not _is_warning_context(t, m.start()):
+                ln = t[: m.start()].count("\n") + 1
+                hits.append(f"{d.name}:L{ln} 旧路径 `python {mod}.py`（实际在 quant/）")
+        for m in bare_imp_re.finditer(t):
+            mod = m.group(1)
+            if mod in pkg_mods and not _is_warning_context(t, m.start()):
+                ln = t[: m.start()].count("\n") + 1
+                hits.append(f"{d.name}:L{ln} 旧 import `from {mod} import`（实际在 quant/）")
+
+    if hits:
+        head = "；".join(hits[:3])
+        more = f"（共 {len(hits)} 处）" if len(hits) > 3 else ""
+        return "WARN", f"{len(hits)} 处文档漂移{more}：{head}"
+    return "PASS", f"{len(docs)} 份文档无硬编码计数、无迁移前旧路径"
 
 
 def chk_scorecard() -> tuple[str, str]:
@@ -278,6 +377,7 @@ CHECKS = [
     ("堆积预算", chk_disk_budget),
     ("记忆体积", chk_memory_size),
     ("回归基线", chk_tests),
+    ("文档漂移", chk_doc_drift),
     ("质量记分卡", chk_scorecard),
 ]
 

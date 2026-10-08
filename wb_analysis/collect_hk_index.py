@@ -47,6 +47,11 @@ import re
 import subprocess
 import sys
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "wb_analysis" / "evidence"
 WESTOCK = pathlib.Path(r"C:\Users\HLJ\.local\bin\westock.exe")

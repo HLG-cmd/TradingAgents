@@ -546,6 +546,77 @@ def _plausible_revenue_tag(facts: dict, as_of: str, unit: str = "USD") -> str | 
 
 # ── 公开接口 ─────────────────────────────────────────────────────────────
 
+def _ttm_is_suspect(facts: dict, concept: str, as_of: str, ttm_val: float | None,
+                    unit: str = "USD") -> tuple[bool, str]:
+    """检测**伪 TTM**：滚动窗口把「上一财年 Q4」与「本财年前三季度」拼在一起（铁律 38）。
+
+    ## 为什么需要这个断言（2026-10-08 血泪）
+
+    ``_ttm`` 的实现是「取最近 4 个季度」求和。这在多数公司没问题，
+    但当季度序列**恰好停在某财年边界**时会拼出一个**伪 TTM**：
+
+        实测 WDC（as_of=2026-10-06）：返回 net_income_ttm = 6,511.0M
+        实为  6,229（FY2026 前 9 个月）+ 282（FY2025 Q4）
+        —— 而 FY2026 全年 9,424M（filed 2026-08-14）当时**已经申报**了。
+
+    看起来完全合法（就是个四位数的金额），只有反推才能发现它无视了更新的年报。
+
+    ## 判据（★ 试过三版才对 —— 全过程记录在案，别再退回去）
+
+    **已采用**：TTM 窗口里**最老的那个季度期末，恰好等于「上一个财年的期末」**。
+
+    为什么这是正确的判别式 —— 它刻画的是**拼接的机械特征**：
+    正常的 TTM 是「最近 4 个自然季度」，其最老一个的期末落在**财年中间**（随机）；
+    而拼接产生的 TTM 其最老一个恰是**上一财年的 Q4**，期末**精确等于**财年末
+    —— 因为它就是被人为拿来补齐 4 个季度的。
+
+        实测 WDC：窗口 = [2025-06-27, 2025-10-03, 2026-01-02, 2026-04-03]
+                  最老 = 2025-06-27 = FY2025 期末 ✅ 命中 ⇒ 判可疑
+        对比 MSFT/GOOG/NVDA/AAPL 共 12 个 as-of 快照：最老季度均落在财年中间
+                  ⇒ 全部 12/12 正确判为正常（假阳性为零）
+
+    ⚠️ **前三版失败尝试（每一版都实测证伪，不要重蹈）**：
+    - ①「窗口里同时存在财年前与财年后的季度」⇒ WDC 窗口中除起点外**全是财年后**的季度，
+      该条件恒为假 ⇒ **永远不触发**（假阴性 100%）。
+    - ②「窗口起点早于财年起点」⇒ WDC 只早 **6 天**（52/53 周财年的正常漂移量级），
+      而 MSFT/GOOG/NVDA 也会同样抖动 ⇒ **假阳性满天飞**。
+    - ③「最新季度末早于最新财年末」⇒ 实测**所有**公司都满足（EDGAR 年报 filed 天然晚于
+      最后一个 10-Q）⇒ 同样假阳性（MSFT/GOOG/NVDA/AAPL 共 4 例误报）。
+    - ⇒ 教训：**「日期先后」类判据在财年边界上噪声极大**；要抓的是**精确相等**
+      这个机械特征，不是「早/晚」这种软关系。
+
+    ## 返回
+    ``(suspect, reason)`` —— 可疑时 reason 说明是哪两个财年被拼在一起。
+    """
+    if ttm_val is None:
+        return False, ""
+    tag, rows = _pick_series(facts, concept, unit, DUR_QUARTER, as_of)
+    by_end = _dedupe_by_end(rows)
+    if len(by_end) < 4:
+        return False, ""
+    picked = sorted(by_end.values(), key=lambda r: r["end"], reverse=True)[:4]
+    oldest_q_end = picked[-1]["end"]
+
+    # 年度序列：最新财年 + 上一财年
+    a_tag, a_rows = _pick_series(facts, concept, unit, DUR_ANNUAL, as_of)
+    ann = _dedupe_by_end(a_rows)
+    if len(ann) < 2:
+        return False, ""
+    ann_ends = sorted(ann, reverse=True)
+    latest_annual_end, prev_annual_end = ann_ends[0], ann_ends[1]
+
+    # ★ 判据：窗口最老季度期末 **精确等于** 上一财年期末 ⇒ 人为拼接的机械特征。
+    if oldest_q_end == prev_annual_end:
+        return True, (
+            f"TTM 拼接：窗口最老季度期末 {oldest_q_end} 恰为上一财年（FY 止于 "
+            f"{prev_annual_end}）的 Q4，与最新财年（FY 止于 {latest_annual_end}，"
+            f"值 {ann[latest_annual_end]['val']:,.0f}）的前三季度凑成 4 季 ⇒ "
+            f"疑似伪 TTM，且最新财年数据已被晾在一边"
+        )
+
+    return False, ""
+
+
 def get_point_in_time(ticker: str, as_of: str, facts: dict | None = None) -> dict:
     """在 ``as_of``（YYYY-MM-DD）当天，用**当时已申报**的数据计算基本面。
 
@@ -567,9 +638,27 @@ def get_point_in_time(ticker: str, as_of: str, facts: dict | None = None) -> dic
 
     out["net_income_ttm"], out["net_income_tag"] = ni_ttm, ni_tag or ni_a_tag
     out["revenue_ttm"], out["revenue_tag"] = rev_ttm, rev_tag or rev_a_tag
+
+    # ★★ 2026-10-08：伪 TTM 断言（铁律 38）—— 不许把「跨财年拼凑」的数当 TTM 交付。
+    #   实测 WDC：net_income_ttm 返回 6,511.0M，实为 6,229（FY2026 前 9 月）+ 282（FY2025 Q4），
+    #   无视了 2026-08-14 已申报的 FY2026 年报。下游拿它算 PE 会把估值算错一倍。
+    #   处理原则：**宁可降级到年度口径，也不给一个看着正常的错数**（与 `_annual_chain`
+    #   的「宁可返回空，也不要返回一个错的增长率」同一立场）。
+    ni_suspect, ni_why = _ttm_is_suspect(f, "net_income", as_of, ni_ttm)
+    rev_suspect, rev_why = _ttm_is_suspect(f_rev, "revenue", as_of, rev_ttm)
+    out["ttm_suspect"] = bool(ni_suspect or rev_suspect)
+    out["ttm_suspect_reason"] = "; ".join(x for x in (ni_why, rev_why) if x) or None
+    if out["ttm_suspect"]:
+        # 降级：弃用可疑 TTM，改用年度值（并把 basis 标成 annual + suspect）
+        out["net_income_ttm"], out["revenue_ttm"] = None, None
+        ni_ttm, rev_ttm = None, None
+
     out["net_income"] = ni_ttm if ni_ttm is not None else (ni_a["val"] if ni_a else None)
     out["revenue"] = rev_ttm if rev_ttm is not None else (rev_a["val"] if rev_a else None)
-    out["basis"] = "ttm" if (ni_ttm is not None and rev_ttm is not None) else "annual"
+    if out["ttm_suspect"]:
+        out["basis"] = "annual(ttm_suspect)"
+    else:
+        out["basis"] = "ttm" if (ni_ttm is not None and rev_ttm is not None) else "annual"
     out["net_income_filed"] = (ni_a or {}).get("filed")
     out["revenue_filed"] = (rev_a or {}).get("filed")
 

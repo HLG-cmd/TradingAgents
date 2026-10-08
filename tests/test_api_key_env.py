@@ -100,6 +100,13 @@ def test_ensure_api_key_prompts_and_writes_to_env(monkeypatch, tmp_path, cli_uti
     """When key is missing, user-pasted value must be written to .env AND os.environ."""
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
+    # 把 find_dotenv 钉死在 tmp_path 上。否则它会沿父目录**向上递归**，
+    # 一旦 basetemp 落在项目目录内（如 --basetemp ./.pytest_tmp_bt），就会找到
+    # 项目根的真实 .env 并把测试假值写进去 —— 实测把 DEEPSEEK_API_KEY 覆盖成了
+    # 'sk-deepseek-test'。该 .env 被 .gitignore 排除，git 无法还原，属真实数据损坏。
+    monkeypatch.setattr(
+        cli_utils, "find_dotenv", lambda *a, **k: str(tmp_path / ".env")
+    )
 
     fake_prompt = type("P", (), {"ask": staticmethod(lambda: "sk-deepseek-test")})()
     with patch.object(cli_utils.questionary, "password", return_value=fake_prompt):

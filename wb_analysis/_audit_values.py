@@ -28,6 +28,11 @@ import re
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # 合法子串白名单：这些值本身不是数据，但会包含黑名单里的数字
 FALSE_POSITIVE_PATTERNS = [
     r"MACD", r"Signal", r"Hist",                  # MACD 三线数值（含表格行）
