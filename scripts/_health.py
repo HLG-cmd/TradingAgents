@@ -291,23 +291,35 @@ def chk_disk_budget() -> tuple[str, str]:
 
 
 def chk_memory_size() -> tuple[str, str]:
-    """记忆体积门禁。
+    """记忆体积 + 索引新鲜度门禁。
 
-    宿主的注入是按**字节**截断的（实测 ≈15,000 字节），**超了就静默丢尾部**——
+    体积部分：宿主的注入是按**字节**截断的（实测 ≈15,000 字节），**超了就静默丢尾部**——
     而尾部恰好是「用户偏好」这类最不该丢的内容。靠"记得精简"必然失效 ⇒ 设成门禁。
+
+    索引部分（2026-10-16 加）：`_INDEX.md` 是「按天日志的主题入口」，
+    由 `scripts/_memory_index.py` 生成。**索引过期比没有索引更危险**——
+    它会让人以为「就这些主题」，而实际新的判例没进去（与铁律 3 同型：静默失效）。
     """
     p = ROOT / ".workbuddy-ai" / "memory" / "MEMORY.md"
     if not p.exists():
         return "WARN", "未找到 MEMORY.md"
     n = len(p.read_bytes())
     tail_ok = "用户偏好" in p.read_text(encoding="utf-8")
+
+    # 索引新鲜度（与体积合并成一项：同一职责「记忆可维护性」）
+    idx_rc, idx_out = run([PY, str(ROOT / "scripts" / "_memory_index.py"), "--check"])
+    idx_bad = idx_rc != 0
+    idx_note = "；`_INDEX.md` 已过期 ⇒ 跑 `scripts/_memory_index.py`" if idx_bad else ""
+
     if n > 14800:
-        return "FAIL", f"MEMORY.md 已达 {n} 字节（宿主 ≈15000 处截断）⇒ **必须精简**"
-    if n > 14200:
-        return "WARN", f"MEMORY.md {n} 字节，余量不足（建议压到 14200 以下）"
+        return "FAIL", f"MEMORY.md 已达 {n} 字节（宿主 ≈15000 处截断）⇒ **必须精简**{idx_note}"
     if not tail_ok:
-        return "FAIL", f"MEMORY.md 尾部内容缺失（可能已被截断）—— 当前 {n} 字节"
-    return "PASS", f"MEMORY.md {n} 字节，尾部完好"
+        return "FAIL", f"MEMORY.md 尾部内容缺失（可能已被截断）—— 当前 {n} 字节{idx_note}"
+    if idx_bad:
+        return "WARN", f"MEMORY.md {n} 字节；记忆索引已过期 ⇒ 跑 `scripts/_memory_index.py`"
+    if n > 14200:
+        return "WARN", f"MEMORY.md {n} 字节，余量不足（建议压到 14200 以下）{idx_note}"
+    return "PASS", f"MEMORY.md {n} 字节，尾部完好；记忆索引最新"
 
 
 # ★ 确定性回归基线（2026-09-23 立）
@@ -356,7 +368,15 @@ BASELINE_K = "not DeepSeekLive"
 #     「检出问题」、崩溃返零会被当成「通过」（**坏掉的检测器伪装成干净的检测器**，
 #     与本日修复的三个 bug 同型）。另锁 `run()` 的 cwd 固定与 UTF-8 强制。
 #   三者的「坏夹具必检出」均已实测：注入坏实现后对应用例 FAIL，还原后全绿。
-BASELINE_PASSED = 829
+# 2026-10-16（第三批）：829 → 852。新增 `tests/test_reports_index.py`（23 项），
+#   覆盖 `_reports_index`（生成 INDEX.md + 报告卫生检查，也是 _health「报告卫生」的实现）。
+#   锁定三处真实踩过坑的判据：① `_zip_text`/`_manifest_has` 的**封存后回退**
+#   （散落目录被清空本就是正常终态；坏包/坏 JSON 必须返回 None 而非抛异常，
+#    否则一处损坏会中断整个索引生成）；② `read_ratings` 的三个字段解析，
+#    含 TRAder 列走 PROPOSAL_RE 兜底的**已知边界**（已文档化：pick() 不认 Action 标签，
+#    但 scan() 对 47/51 棵有 RUN.json 的树走清单，故真实显示仍是 Title Case）；
+#   ③ 报告树命名契约 TREE_RE 与功能目录 SKIP_DIRS。
+BASELINE_PASSED = 852
 
 # safe-delete 钩子的批量确认标记：出现它说明「删除被拦」而非「测试没收集」。
 SAFE_DELETE_MARK = "SAFE_DELETE_BULK_CONFIRM_REQUIRED"
