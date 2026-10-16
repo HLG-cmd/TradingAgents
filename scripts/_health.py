@@ -36,6 +36,14 @@ ROOT = Path(__file__).resolve().parents[1]
 PY = sys.executable
 SKIP = {".venv", ".git", "__pycache__", ".pytest_cache", "node_modules"}
 
+# ★ 2026-10-10：非 12 角色专用通道的豁免表与 `_reports_index.py` / `_seal_run.py` **同源**
+#   （唯一定义源＝`wb_analysis/_contract.py`）。此前本检查只数文件数、不认豁免，
+#   于是对同一份 TREASURY 文件，`_reports_index` 报「0 问题」而这里报 WARN —— 判据打架。
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from wb_analysis._contract import is_non_tree_artifact  # noqa: E402
+from wb_analysis._paths import FUNC_DIRS, TREE_RE  # noqa: E402
+
 
 def run(args: list[str], timeout: int = 300) -> tuple[int, str]:
     try:
@@ -63,17 +71,37 @@ def chk_lifecycle() -> tuple[str, str]:
     if rc == 0:
         m = re.search(r"全部\s*(\d+)\s*个脚本", out)
         return "PASS", f"{m.group(1) if m else '?'} 个脚本均已声明生命周期"
-    bad = [l.strip() for l in out.splitlines() if l.strip().startswith("    ")]
-    return "FAIL", f"{len(bad)} 个脚本缺 lifecycle 声明"
+    # ★ 2026-10-16 修：原判据 `l.strip().startswith("    ")` 恒为 False
+    #   —— `str.strip()` 已去掉前导空格，结果**永不可能**以 4 个空格开头。
+    #   实测后果：健康检查显示「✗ FAIL 0 个脚本缺 lifecycle 或 serves 标记」，
+    #   状态与计数自相矛盾，且真实文件名被掩盖（实际是 2 个 _oneoff 脚本）。
+    #   改为「缩进 4 空格且非空」的原始行，与 `_tidy_scripts.py` 的输出格式对齐。
+    bad = [l.strip() for l in out.splitlines()
+           if l.startswith("    ") and l.strip()]
+    detail = ("：" + "、".join(bad[:3]) + ("…" if len(bad) > 3 else "")) if bad else ""
+    return "FAIL", f"{len(bad)} 个脚本缺 lifecycle 或 serves 标记{detail}"
 
 
 def chk_reports() -> tuple[str, str]:
     rc, out = run([PY, str(ROOT / "wb_analysis" / "_reports_index.py"), "--check"])
-    n = sum(1 for l in out.splitlines() if l.strip().startswith("- ["))
+    lines = [l.strip() for l in out.splitlines() if l.strip().startswith("- [")]
+    n = len(lines)
     if n == 0:
         m = re.search(r"报告树\s*(\d+)\s*棵", out)
         return "PASS", f"报告树 {m.group(1) if m else '?'} 棵，无堆积问题"
-    return "WARN", f"{n} 项待整理（孤儿/重复/散落）"
+    # ★ 2026-10-11（O6）：告警必须**带可执行入口**。
+    #   此前只报「N 项待整理（孤儿/重复/散落）」，操作者得自己猜到该跑
+    #   `_seal_run.py --orphans` —— 而该入口**早就存在**且已是「先打包回滚、校验不过即中止」
+    #   的完整链路。检测与处置之间缺的只是一句指路，于是 TSM 那类残留能挂十多个小时没人动。
+    orphans = [l for l in lines if "孤儿" in l]
+    parts = []
+    if orphans:
+        parts.append(f"孤儿 {len(orphans)} 项 → `_seal_run.py --orphans --apply`"
+                     f"（先打包回滚、逐项校验不过即中止）")
+    other = n - len(orphans)
+    if other:
+        parts.append(f"其它 {other} 项（重复/散落/缺草稿）→ `_reports_index.py --check` 看明细")
+    return "WARN", f"{n} 项待整理（孤儿/重复/散落）：" + "；".join(parts)
 
 
 def chk_seal() -> tuple[str, str]:
@@ -85,16 +113,32 @@ def chk_seal() -> tuple[str, str]:
 
 
 def chk_transient_empty() -> tuple[str, str]:
-    """瞬态目录应为空 —— 这是「只留最终报告」政策的体检点。"""
+    """瞬态目录应为空 —— 这是「只留最终报告」政策的体检点。
+
+    ★ 2026-10-10：`evidence/` 里的**非 12 角色专用通道**产物（如 `collect_treasury.py`
+    写的 `TREASURY_<date>.*`）**以 `evidence/` 为正规归宿**，不算「非空」。
+    豁免表与 `_reports_index.py` / `_seal_run.py` 同源（`wb_analysis/_contract.py`）——
+    此前本检查只数文件数、不认豁免，与另两处对同一份文件给出相反结论。
+    """
     left = []
+    exempt = 0
     for sub in ("evidence", "drafts", "analysis"):
         d = ROOT / "wb_analysis" / sub
-        if d.exists():
-            n = len([p for p in d.rglob("*") if p.is_file()])
-            if n:
-                left.append(f"{sub}={n}")
-    return ("PASS", "evidence/drafts/analysis 均为空") if not left else \
-           ("WARN", "瞬态目录非空：" + ", ".join(left))
+        if not d.exists():
+            continue
+        n = 0
+        for p in d.rglob("*"):
+            if not p.is_file():
+                continue
+            if sub == "evidence" and is_non_tree_artifact(p.name):
+                exempt += 1
+                continue
+            n += 1
+        if n:
+            left.append(f"{sub}={n}")
+    tail = f"（豁免非 12 角色通道 {exempt} 个）" if exempt else ""
+    return ("PASS", f"evidence/drafts/analysis 无待清产物{tail}") if not left else \
+           ("WARN", "瞬态目录非空：" + ", ".join(left) + tail)
 
 
 def chk_gitignore() -> tuple[str, str]:
@@ -103,7 +147,7 @@ def chk_gitignore() -> tuple[str, str]:
         return "WARN", "无 .gitignore"
     t = f.read_text(encoding="utf-8", errors="replace")
     need = ["wb_analysis/evidence/", "wb_analysis/drafts/", "wb_analysis/analysis/",
-            ".workbuddy/backup/"]
+            ".workbuddy-ai/backup/"]
     miss = [n for n in need if n not in t]
     return ("PASS", "瞬态目录与回滚包均已忽略") if not miss else \
            ("WARN", f"未忽略：{', '.join(miss)}")
@@ -111,22 +155,57 @@ def chk_gitignore() -> tuple[str, str]:
 
 # 根目录允许的 .py：只有 pytest 配置（它必须放在根，否则不被识别）
 ROOT_PY_ALLOWED = {"conftest.py"}
+ROOT_FILE_ALLOWED = {
+    "conftest.py", "pyproject.toml", "README.md", "LICENSE",
+    "screen.bat", "start.bat", ".env", ".env.example", ".gitignore",
+    "requirements.lock.txt",          # 依赖锁定快照（2026-10-16 新增）
+}
 
 
 def chk_root_clean() -> tuple[str, str]:
-    stray = sorted(p.name for p in ROOT.glob("*.py") if p.name not in ROOT_PY_ALLOWED)
-    return ("PASS", "根目录无散落 .py") if not stray else \
-           ("WARN", f"根目录有 {len(stray)} 个 .py：{', '.join(stray[:4])}")
+    """根目录整洁：**除白名单外的任何文件**都算散件。
+
+    ★ 2026-10-16 修（第三个「检查器静默失效」）。原判据是**双重白名单**：
+        p.name not in ROOT_FILE_ALLOWED
+        and (p.suffix.lower() in (".log",".tmp",".txt",".csv") or p.name.startswith("_"))
+      即「不在文件名白名单」**且**「后缀在白名单内」。后果：`.png`、`nul` 这类
+      **不在后缀白名单里**的文件**永远不会被检出**。
+
+      实测：根目录躺着 4 张粘贴截图（`image*.png`）与 1 个名为 `nul` 的残留文件
+      （内容是 `ERROR: Invalid pattern is specified in "path:pattern"`，
+      某次命令把错误输出重定向到 Windows 保留设备名 `nul` 时误建的真实文件），
+      而检查器照样报「✓ PASS 根目录无散落 .py 与临时日志」。
+
+      ⇒ 这与同日修复的另两个属**同一类型**：
+        · `_audit_values.SUM_RE`    正则恒不命中（402 行算式 0 命中）
+        · `chk_lifecycle`           `strip().startswith("    ")` 恒为假
+        · 本函数                     后缀白名单把新类型文件挡在视野外
+      共同点：**检查器看着在跑、返回 PASS，实际根本没看到问题。**
+
+      ⇒ 改为**单层判据**：除白名单外，根目录出现任何文件即 WARN。
+        新增文件类型无需再打补丁（不必每来一种后缀就改一次代码）。
+    """
+    stray = sorted(p.name for p in ROOT.iterdir()
+                   if p.is_file() and p.name not in ROOT_FILE_ALLOWED)
+    if not stray:
+        return "PASS", "根目录无散件（仅白名单文件）"
+    head = ", ".join(stray[:5]) + (f" 等 {len(stray)} 个" if len(stray) > 5 else "")
+    return "WARN", f"根目录有 {len(stray)} 个散件：{head}"
 
 
 def chk_quant() -> tuple[str, str]:
     code = ("import sys; sys.path.insert(0, r'%s');"
             "from quant import screener_engine, stock_pools, edgar_fundamentals, price_history;"
-            "assert '1038421735@qq.com' in edgar_fundamentals.SEC_USER_AGENT, 'SEC 凭证失效';"
+            "ua = edgar_fundamentals.SEC_USER_AGENT;"
+            "assert '@' in ua and 'admin@example.com' not in ua, f'SEC 凭证未配置或为默认占位符: {ua}';"
             "print('OK')" % str(ROOT))
     rc, out = run([PY, "-c", code])
-    return ("PASS", "自建包可导入，且 .env 凭证读取正常") if "OK" in out else \
-           ("FAIL", f"自建包或凭证异常：{out.strip().splitlines()[-1][:70] if out.strip() else rc}")
+    if "OK" in out:
+        return "PASS", "自建包可导入，且 .env 凭证读取正常"
+    if "No module named" in out or "ModuleNotFoundError" in out:
+        mod = out.strip().splitlines()[-1]
+        return "WARN", f"当前解释器缺运行依赖（{mod}）⇒ 请用项目 .venv 运行"
+    return "FAIL", f"自建包或凭证异常：{out.strip().splitlines()[-1][:70] if out.strip() else rc}"
 
 
 # ── 长期堆积预算 ──────────────────────────────────────────────────────────────
@@ -142,10 +221,10 @@ def chk_quant() -> tuple[str, str]:
 # 「磁盘占用」不是正确性问题 ⇒ 本检查永远不 FAIL。
 DISK_BUDGETS: list[tuple[str, str, float, str]] = [
     # (显示名, 路径【绝对=项目外，相对=ROOT 下】, 预算 MB, 超预算时的处置)
-    ("reports", "reports", 200.0, "旧版报告可清：scripts/_cleanup_reports.py（删前先打包回滚包）"),
+    ("reports", "reports", 200.0, "旧版报告可清：先跑 wb_analysis/_reports_index.py --check 定位孤儿/重复，删前先打包回滚包"),
     ("_cache", "wb_analysis/_cache", 50.0, "共享参考数据，可删后由 erp_context.py 等重采"),
-    ("backup", ".workbuddy/backup", 30.0, "scripts/_prune_backup.py"),
-    ("memory", ".workbuddy/memory", 10.0, "旧日志归档进 _backup/ 并精简"),
+    ("backup", ".workbuddy-ai/backup", 40.0, "scripts/_prune_backup.py"),
+    ("memory", ".workbuddy-ai/memory", 10.0, "旧日志归档进 _backup/ 并精简"),
     ("外部缓存", str(Path.home() / ".tradingagents"), 1024.0,
      "quant/cleanup_cache.py --status 先看占用，再选 --keep-edgar / --yes"),
 ]
@@ -217,7 +296,7 @@ def chk_memory_size() -> tuple[str, str]:
     宿主的注入是按**字节**截断的（实测 ≈15,000 字节），**超了就静默丢尾部**——
     而尾部恰好是「用户偏好」这类最不该丢的内容。靠"记得精简"必然失效 ⇒ 设成门禁。
     """
-    p = ROOT / ".workbuddy" / "memory" / "MEMORY.md"
+    p = ROOT / ".workbuddy-ai" / "memory" / "MEMORY.md"
     if not p.exists():
         return "WARN", "未找到 MEMORY.md"
     n = len(p.read_bytes())
@@ -246,14 +325,57 @@ BASELINE_K = "not DeepSeekLive"
 #   报表 PE(TTM) 17.3x 看着便宜，实际 55.7% 的 TTM 净利来自未实现权益证券浮盈，
 #   剥离后经营性 PE 44.1x）。单测覆盖**双向**：坏夹具（浮盈 61%）必 FAIL、
 #   好夹具（4%）必不误报、中间带（15%）只 WARN、负 gain 与缺失值保持沉默。
-BASELINE_PASSED = 747
+# 2026-10-15：747 → 752。`tests/test_earnings_quality_gate.py` 新增 5 项
+#   `TestQuarterlyReconciliation`，锁定 `_verify_earnings_quality.py::_quarterly_unreliable`
+#   —— SKHY（SK 海力士美股 ADR，外国私人发行人）事件：`quarterly_income_stmt` 返回
+#   累计/错标期间数据（单季营收 79.319T = FY2025 全年 97.147T 的 81.6%），
+#   据此合计 4 季会算出「非经营/净利 +30.0%」的**假 FAIL**（年报口径实为 −19.8%，
+#   方向相反，按「只挡抬高方向」本不该触发）。修法：对账失败即强制降级到 FY 口径。
+#   单测覆盖双向：坏夹具（单季 81.6% / 合计 1.84×）必命中、好夹具（正常季度 / 强季节性 42%）必不误报。
+# 2026-10-16：752 → 766。新增 `tests/test_audit_values_sumregex.py`（14 项），
+#   锁定 `_audit_values.py::check_sums` 的正则修复（原 `SUM_RE` 要求 `X% + Y% = Z%`，
+#   而真实写法是「（算式：8.79+7.16+…+2.54 = 45.54%）」不带 %、10 项 ⇒ 402 行算式命中 0 行，
+#   自洽校验完全失效，本次审计的 4 处「持仓合计」错误全部漏检）。
+#   测试三边锁定：真实写法必命中（含加减混合/千分位/10 项）、日期区间不得误报
+#   （`1982-1984=100`、`09-16=7.0bp`）、真错误必判不符。
+BASELINE_PASSED = 766
+
+# safe-delete 钩子的批量确认标记：出现它说明「删除被拦」而非「测试没收集」。
+SAFE_DELETE_MARK = "SAFE_DELETE_BULK_CONFIRM_REQUIRED"
 
 
 def chk_tests() -> tuple[str, str]:
-    """回归门禁：与确定性基线比。少了 ⇒ 真回归（FAIL）；多了 ⇒ 有新测试没更新基线（WARN）。"""
-    rc, out = run([PY, "-m", "pytest", "tests/", "-q", "--no-header", "-k", BASELINE_K], timeout=600)
+    """回归门禁：与确定性基线比。少了 ⇒ 真回归（FAIL）；多了 ⇒ 有新测试没更新基线（WARN）。
+
+    ★ 2026-10-10 修正：加 `--basetemp`（**每轮唯一**）。为什么值得写进代码：
+
+    此前 pytest 用默认临时目录，会在会话结束时按保留策略**批量删除**旧的
+    `pytest-of-<user>/garbage-*`。本机 safe-delete 钩子的 bulk 阈值是 **50 条/轮**，
+    实测一次运行要删 **92** 项 ⇒ 钩子抛 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`
+    并**直接中止 pytest 进程**。后果极其隐蔽：
+
+      · 全部用例**其实已经跑完**（进度点打到 100%，实测 747 passed）；
+      · 但汇总行 `N passed` 因进程被中止而**从未打印**；
+      · ⇒ 本检查把**满绿的套件**报成 `✗ FAIL 测试未能收集（语法/导入错误？）`，
+        把一个**根本没有的语法错误**写进健康表，并把退出码推成 1。
+
+    「把绿报成红」和「把红报成绿」一样危险（铁律 3 的镜像）：
+    前者会让人**不再相信门禁**，后者会让人**相信错的结论**。
+    传一个**尚不存在**的 basetemp 会让 pytest 走 `given_basetemp` 分支、
+    跳过那套垃圾回收，从而不再触发钩子。basetemp 带 pid 后缀以保证每轮都是新的。
+    """
+    import tempfile
+
+    bt = Path(tempfile.gettempdir()) / f"ta-pytest-bt-{os.getpid()}"
+    rc, out = run([PY, "-m", "pytest", "tests/", "-q", "--no-header", "-k", BASELINE_K,
+                   "--basetemp", str(bt)], timeout=600)
     m = re.search(r"(\d+) passed", out)
     if not m:
+        if SAFE_DELETE_MARK in out:
+            return "FAIL", ("pytest 疑似已跑完但收尾被 safe-delete 钩子中止（未打印汇总行）—— "
+                            "本检查已加 --basetemp，若仍出现请核查钩子阈值")
+        if "No module named" in out or "ModuleNotFoundError" in out:
+            return "WARN", "当前解释器未安装 pytest 或测试依赖 ⇒ 请用项目 .venv 运行"
         return "FAIL", "测试未能收集（语法/导入错误？）"
     n = int(m.group(1))
     if n < BASELINE_PASSED:
@@ -261,6 +383,94 @@ def chk_tests() -> tuple[str, str]:
     if n > BASELINE_PASSED:
         return "WARN", f"{n} passed > 基线 {BASELINE_PASSED} ⇒ 有新测试，请更新 BASELINE_PASSED"
     return "PASS", f"{n} passed，与确定性基线一致（已排除真实 API 测试）"
+
+
+# ⚠️ **不要加 `\b`** —— 首版写成 `\b\d{2,}\s*个\s*(...)\b`，
+#   而 `\b` 在「中文 ↔ 数字」边界上不可靠：`有 999 个单元测试` 实测**不匹配**，
+#   于是注入的真漂移被漏掉（双边测试才发现）。CJK 场景下用 `\d{2,}` 直接起头即可。
+_DOC_COUNT_RE = re.compile(r"\d{2,}\s*个\s*(单元测试|测试|脚本|\.py|通道)")
+_DOC_BARE_CMD_RE = re.compile(r"\bpython\s+([A-Za-z_][A-Za-z0-9_]*)\.py")
+_DOC_BARE_IMP_RE = re.compile(r"^\s*from\s+([A-Za-z_][A-Za-z0-9_]*)\s+import", re.M)
+# ④ 行号引用 —— ★ 2026-10-10 新增。行号是**必然漂移**的引用方式：本轮实测 4 处
+#   （`collect.py:686` / `wb_deep_dive.py:38` / `smart_screener.py:71` / `screener_engine.py` 的 L459）
+#   全部在源码改动后失真，且**读到的人无从分辨真假**。项目原则：要引用就写**符号名**，
+#   让读者自己 grep —— 判别力的代价是零，收益是整类失效被根除。
+_DOC_LINE_REF_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\.py:\d+"
+                              r"|(?<![A-Za-z0-9_])L\d{2,}(?![0-9])")
+_DOC_WARN_WORDS = ("不写", "禁止", "必漂移", "刻意", "历史教训", "实测", "已全部与现状不符", "别再")
+
+
+def _doc_is_warning_context(t: str, pos: int) -> bool:
+    """该位置是否处于「告诫别人别这么写」的语境。
+
+    ⚠️ 判据必须**行内为主**：首版用「前后各 400 字符」的段落窗口，
+    结果把注入在文档**末尾**的真漂移给漏掉了（远处恰好有告诫词）——
+    窗口过宽 ⇒ 判别力退化。现改为：只看**本行**（± 上一行），
+    加一个引用块判定。这正是铁律 20「豁免表改后双边必测」要防的退化。
+    """
+    line_start = t.rfind("\n", 0, pos) + 1
+    line_end = t.find("\n", pos)
+    line = t[line_start: line_end if line_end != -1 else len(t)]
+    if line.lstrip().startswith(">"):          # Markdown 引用块
+        return True
+    # 再看紧邻的上一行（告诫常写在数字行的正上方，如 `> 历史教训：…`）
+    prev_start = t.rfind("\n", 0, max(0, line_start - 1)) + 1
+    prev_line = t[prev_start: max(0, line_start - 1)]
+    return any(w in line or w in prev_line for w in _DOC_WARN_WORDS)
+
+
+def scan_doc_text(name: str, text: str, pkg_mods: set[str]) -> list[str]:
+    """扫一份文档文本，返回漂移命中列表（**纯函数** ⇒ 可被 `_selftest` 双边夹具直接调用）。
+
+    ★ 2026-10-10 从 `chk_doc_drift` 内联逻辑抽出。抽出的理由就是本项目的自检原则：
+    「没有自检的门禁只是更隐蔽的静默失败源」—— 检测器必须能脱离真实文件系统被双向验证。
+    """
+    hits: list[str] = []
+
+    def _add(pos: int, msg: str) -> None:
+        ln = text[:pos].count("\n") + 1
+        hits.append(f"{name}:L{ln} {msg}")
+
+    for m in _DOC_COUNT_RE.finditer(text):
+        if not _doc_is_warning_context(text, m.start()):
+            _add(m.start(), f"硬编码计数「{m.group(0).strip()}」")
+    for m in _DOC_BARE_CMD_RE.finditer(text):
+        if m.group(1) in pkg_mods and not _doc_is_warning_context(text, m.start()):
+            _add(m.start(), f"旧路径 `python {m.group(1)}.py`（实际在 quant/）")
+    for m in _DOC_BARE_IMP_RE.finditer(text):
+        if m.group(1) in pkg_mods and not _doc_is_warning_context(text, m.start()):
+            _add(m.start(), f"旧 import `from {m.group(1)} import`（实际在 quant/）")
+    for m in _DOC_LINE_REF_RE.finditer(text):
+        if not _doc_is_warning_context(text, m.start()):
+            _add(m.start(), f"行号引用「{m.group(0)}」（行号必漂移 ⇒ 改写符号名，让读者自己 grep）")
+    return hits
+
+
+def _doc_drift_scope() -> list[Path]:
+    """文档漂移检查的**扫描面**。
+
+    ★ 2026-10-10 扩面：原先只扫 `docs/*.md` ⇒ **`.workbuddy-ai/memory/**` 完全不在门禁内**，
+    这正是实测 13 处陈旧数字/漂移行号长期零告警的根因（`IRONLAWS.md` 的「8 个标签」、
+    `DOMAINS.md` 的「21.5x」「collect.py:686」全在此列）。
+    ⇒ 凡「会被当成权威口径引用」的 md 都纳入，**唯独当日流水除外** ——
+    它是 append-only 的**历史记录**（写"当时实测是 L686"是如实留痕，改了反而失真）。
+    """
+    out: list[Path] = list((ROOT / "docs").glob("*.md"))
+    mem = ROOT / ".workbuddy-ai" / "memory"
+    if mem.exists():
+        out += [p for p in mem.glob("*.md")
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}\.md", p.name)]
+    sk = ROOT / ".workbuddy-ai" / "skills"
+    if sk.exists():
+        out += list(sk.glob("*/SKILL.md"))
+    for nm in ("README.md", "CHANGELOG.md"):
+        p = ROOT / nm
+        if p.exists():
+            out.append(p)
+    fw = ROOT / "wb_analysis" / "FRAMEWORK.md"
+    if fw.exists():
+        out.append(fw)
+    return sorted({p.resolve() for p in out})
 
 
 def chk_doc_drift() -> tuple[str, str]:
@@ -277,91 +487,63 @@ def chk_doc_drift() -> tuple[str, str]:
       · 「能靠代码根除的写进代码，不靠『记得注意』」
       · 「同一口径只在一个地方写一遍 —— 写两遍必然漂移」
 
-    ⇒ 检测三类信号（命中即 WARN，不阻断交付，但必须处理）：
+    ⇒ 检测**四类**信号（命中即 WARN，不阻断交付，但必须处理）：
       ① 文档里出现 `N 个单元测试 / N 个脚本 / N 个 .py` 这类硬编码计数；
       ② 文档示例命令用了**根目录裸模块名**（`python xxx.py` 但该文件实际在 `quant/`）；
-      ③ `from <模块> import` 而该模块实际在 `quant/` 包内。
+      ③ `from <模块> import` 而该模块实际在 `quant/` 包内；
+      ④ **行号引用**（`xxx.py:123` 或裸 `L123`）—— 行号必漂移，要引用就写符号名。
+
+    ★ **2026-10-10 扩面**：原先只扫 `docs/*.md`（5 份）⇒ `.workbuddy-ai/memory/**` 与 skill 文档
+    **完全不在门禁内**，这正是实测 13 处陈旧断言长期零告警的根因 ⇒ 扫描面扩到 12 份
+    （见 `_doc_drift_scope()`）；**唯独当日流水 `YYYY-MM-DD.md` 豁免**（它是 append-only 的历史记录）。
 
     ⚠️ **判别力要求（铁律 20）**：必须能区分「真的写死了数字」与「正在警告别人别写死数字」。
     实测首次运行就把 `WORKFLOW.md` / `PROJECT_MAP.md` 里**两处反例说明**误报为漂移 ——
     那两行恰恰是「本表刻意不写数量」的告诫本身。⇒ 加 `_is_warning_context()` 排除
     引用块（`>` 开头）、以及同段含「不写 / 刻意 / 历史教训 / 实测」等告诫词的场合。
     """
-    docs = [p for p in (ROOT / "docs").glob("*.md")]
+    docs = _doc_drift_scope()
     # `TOOLS.md` 由 `_tidy_scripts.py --apply` 自动重建，数字本就每次刷新 ⇒ 豁免。
     EXEMPT = {"TOOLS.md"}
     hits: list[str] = []
 
     # quant/ 包内真实存在的模块名（用于判「裸名其实在包里」）
     pkg_mods = {p.stem for p in (ROOT / "quant").glob("*.py") if p.stem != "__init__"}
-    # ⚠️ **不要加 `\b`** —— 首版写成 `\b\d{2,}\s*个\s*(...)\b`，
-    #   而 `\b` 在「中文 ↔ 数字」边界上不可靠：`有 999 个单元测试` 实测**不匹配**，
-    #   于是注入的真漂移被漏掉（双边测试才发现）。CJK 场景下用 `\d{2,}` 直接起头即可。
-    count_re = re.compile(r"\d{2,}\s*个\s*(单元测试|测试|脚本|\.py|通道)")
-    bare_cmd_re = re.compile(r"\bpython\s+([A-Za-z_][A-Za-z0-9_]*)\.py")
-    bare_imp_re = re.compile(r"^\s*from\s+([A-Za-z_][A-Za-z0-9_]*)\s+import", re.M)
-    WARN_WORDS = ("不写", "刻意", "历史教训", "实测", "已全部与现状不符", "别再")
-
-    def _is_warning_context(t: str, pos: int) -> bool:
-        """该位置是否处于「告诫别人别这么写」的语境。
-
-        ⚠️ 判据必须**行内为主**：首版用「前后各 400 字符」的段落窗口，
-        结果把注入在文档**末尾**的真漂移给漏掉了（远处恰好有告诫词）——
-        窗口过宽 ⇒ 判别力退化。现改为：只看**本行**（± 上一行），
-        加一个引用块判定。这正是铁律 20「豁免表改后双边必测」要防的退化。
-        """
-        line_start = t.rfind("\n", 0, pos) + 1
-        line_end = t.find("\n", pos)
-        line = t[line_start: line_end if line_end != -1 else len(t)]
-        if line.lstrip().startswith(">"):          # Markdown 引用块
-            return True
-        # 再看紧邻的上一行（告诫常写在数字行的正上方，如 `> 历史教训：…`）
-        prev_start = t.rfind("\n", 0, max(0, line_start - 1)) + 1
-        prev_line = t[prev_start: max(0, line_start - 1)]
-        return any(w in line or w in prev_line for w in WARN_WORDS)
 
     for d in sorted(docs):
         if d.name in EXEMPT:
             continue
-        t = d.read_text(encoding="utf-8")
-        for m in count_re.finditer(t):
-            if _is_warning_context(t, m.start()):
-                continue
-            ln = t[: m.start()].count("\n") + 1
-            hits.append(f"{d.name}:L{ln} 硬编码计数「{m.group(0).strip()}」")
-        for m in bare_cmd_re.finditer(t):
-            mod = m.group(1)
-            if mod in pkg_mods and not _is_warning_context(t, m.start()):
-                ln = t[: m.start()].count("\n") + 1
-                hits.append(f"{d.name}:L{ln} 旧路径 `python {mod}.py`（实际在 quant/）")
-        for m in bare_imp_re.finditer(t):
-            mod = m.group(1)
-            if mod in pkg_mods and not _is_warning_context(t, m.start()):
-                ln = t[: m.start()].count("\n") + 1
-                hits.append(f"{d.name}:L{ln} 旧 import `from {mod} import`（实际在 quant/）")
+        hits += scan_doc_text(d.name, d.read_text(encoding="utf-8"), pkg_mods)
 
     if hits:
         head = "；".join(hits[:3])
         more = f"（共 {len(hits)} 处）" if len(hits) > 3 else ""
         return "WARN", f"{len(hits)} 处文档漂移{more}：{head}"
-    return "PASS", f"{len(docs)} 份文档无硬编码计数、无迁移前旧路径"
+    return "PASS", f"{len(docs)} 份文档无硬编码计数、无旧路径、无行号引用"
 
 
 def chk_scorecard() -> tuple[str, str]:
-    """记分卡覆盖度：「越用越好」要有度量，未打分的交付就是没度量。"""
+    """记分卡覆盖度：「越用越好」要有度量，未打分的交付就是没度量。
+
+    ★ 2026-10-15 修：使用 `TREE_RE` 与 `FUNC_DIRS` 过滤有效报告树，并校验 `QUALITY.csv`
+      是否存在空 ticker 的脏行（此前 `reports/SKHY/_archive` 被两边同时计入，造成 50/50 假绿）。
+    """
     csv = ROOT / "reports" / "QUALITY.csv"
     n_trees = 0
     reports = ROOT / "reports"
     if reports.exists():
         for d in reports.iterdir():
-            if d.is_dir() and not d.name.startswith("_"):
-                n_trees += len([x for x in d.iterdir() if x.is_dir()])
+            if d.is_dir() and d.name not in FUNC_DIRS:
+                n_trees += len([x for x in d.iterdir() if x.is_dir() and TREE_RE.match(x.name)])
     if not csv.exists():
         return ("WARN", f"{n_trees} 轮交付但无记分卡 ⇒ 跑 wb_analysis/_scorecard.py") if n_trees else \
                ("PASS", "尚无交付轮次")
     rows = [l for l in csv.read_text(encoding="utf-8").splitlines()[1:] if l.strip()]
-    if len(rows) < n_trees:
-        return "WARN", f"记分卡 {len(rows)} 轮 / 交付 {n_trees} 轮 ⇒ 有新交付未打分，跑 _scorecard.py"
+    bad_rows = [l for l in rows if l.startswith(",")]
+    if bad_rows:
+        return "WARN", f"记分卡含 {len(bad_rows)} 条非报告树脏记录 ⇒ 重跑 wb_analysis/_scorecard.py"
+    if len(rows) != n_trees:
+        return "WARN", f"记分卡 {len(rows)} 轮 ≠ 交付 {n_trees} 轮 ⇒ 跑 wb_analysis/_scorecard.py 同步"
     return "PASS", f"记分卡覆盖 {len(rows)}/{n_trees} 轮（趋势看 _scorecard.py --trend）"
 
 
