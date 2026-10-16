@@ -28,11 +28,19 @@ if hasattr(sys.stderr, "reconfigure"):
 ROOT = Path(__file__).resolve().parent.parent
 EV = ROOT / "wb_analysis" / "evidence"
 
-# 各指数「官方发布的前十集中度」快照（用于与「纯市值前十」做对比）。
-#   · NDX：纳斯达克官方方法论前十权重（固定快照，保持与改造前逐字节一致）。
-#   · 其它指数：从证据包的 top_holdings（ETF 代理公布的真实前十大）实时求和，
-#     避免再写死一个会随行情漂移的魔法数（SPX 约 38%，每日不同）。
-OFFICIAL_TOP10 = {
+# 各指数「官方发布的前十集中度」。
+#   ★ 2026-10-16 修：**取消 NDX 的硬编码**。原代码为
+#       OFFICIAL_TOP10 = {"NDX": 46.28}
+#     把「官方口径前十」写成一个固定快照。实测 NDX_20261013 那轮的证据包里该值已是
+#     **46.68%**（`top_holdings` 前 10 权重合计，逐日随行情/调样漂移），
+#     但派生层仍写出 46.28% ⇒ 与真实值差 0.40pp，并被下游 11 个角色文件照抄引用
+#     （`market.md` 的「官方 QQQ 口径前十大 46.28%」、差 21.63pp 等）。
+#
+#   现在统一改为：**一律从证据包的 `top_holdings` 实时求和**（与 SPX 分支同源、
+#   与 `collect_index.py` 的 hold_sum 一致），并在取不到时才回退到常量。
+#   这样「官方口径」不再是会漂移的魔法数，也消除了 NDX 与 SPX 两条代码路径的分歧。
+OFFICIAL_TOP10_FALLBACK = {
+    # 仅当证据包缺 `top_holdings` 时兜底；正常路径不读这里。
     "NDX": 46.28,
 }
 
@@ -61,12 +69,18 @@ DATE = args.date
 md = (EV / f"{INDEX}_{DATE}.md").read_text(encoding="utf-8")
 d = json.loads((EV / f"{INDEX}_{DATE}.json").read_text(encoding="utf-8"))
 
-if INDEX in OFFICIAL_TOP10:
-    OFFICIAL_TOP10_PCT = OFFICIAL_TOP10[INDEX]
+# 官方口径前十：一律从证据包 `top_holdings` 实时求和（NDX / SPX 同一路径）。
+# ★ 2026-10-16 修：原为 `OFFICIAL_TOP10 = {"NDX": 46.28}` 硬编码快照，
+#   实测 NDX_20261013 那轮证据包已是 46.68%，派生层仍写 46.28%（差 0.40pp），
+#   并被下游 11 个角色文件照抄。⇒ 改为读证据包，常量只作取不到时的兜底。
+_th = d.get("top_holdings") or []
+if len(_th) >= 2:
+    # 与 collect_index.py 的 hold_sum 同源：ETF 代理公布的真实前十大权重合计。
+    OFFICIAL_TOP10_PCT = round(sum(h.get("weight_pct", 0.0) for h in _th[:10]), 2)
 else:
-    # SPX 等：用 ETF 代理公布的真实前十大权重合计（与 collect_index.py 的 hold_sum 同源）。
-    th = d.get("top_holdings") or []
-    OFFICIAL_TOP10_PCT = round(sum(h.get("weight_pct", 0.0) for h in th[:10]), 2)
+    OFFICIAL_TOP10_PCT = OFFICIAL_TOP10_FALLBACK.get(INDEX, 0.0)
+    print(f"  ⚠ 证据包缺 top_holdings ⇒ 官方前十回退到兜底常量 {OFFICIAL_TOP10_PCT}%"
+          f"（该值可能已漂移，引用需声明）")
 
 N_UNIVERSE = N_UNIVERSE_DEFAULT[INDEX]
 

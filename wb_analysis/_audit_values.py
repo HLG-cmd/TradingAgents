@@ -33,6 +33,11 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+# ★ 2026-10-10：归档跳过表由 `wb_analysis/_paths.py` 提供单一来源
+#   （此前本文件的 argparse 默认值与另三处各写一份 "_stale"/"_archive"）。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from wb_analysis._paths import SKIP_ARCHIVE_DIRS  # noqa: E402
+
 # 合法子串白名单：这些值本身不是数据，但会包含黑名单里的数字
 FALSE_POSITIVE_PATTERNS = [
     r"MACD", r"Signal", r"Hist",                  # MACD 三线数值（含表格行）
@@ -84,23 +89,72 @@ def scan_file(path: Path, blacklist: dict) -> list[tuple[int, str, str]]:
     return hits
 
 
-SUM_RE = re.compile(
-    r"([\d.]+)\s*%\s*\+\s*([\d.]+)\s*%\s*(?:\+\s*([\d.]+)\s*%\s*)?"
-    r"(?:\+\s*([\d.]+)\s*%\s*)?"
-    r"=\s*\*{0,2}([\d.]+)\s*%"
+#: 「分项 = 合计」句的自洽校验正则。
+#:
+#: ★ 2026-10-16 重写（原正则**恒不命中**，见下）。原式为：
+#:     r"([\d.]+)\s*%\s*\+\s*([\d.]+)\s*%\s*(?:\+\s*([\d.]+)\s*%\s*)?"
+#:     r"(?:\+\s*([\d.]+)\s*%\s*)?=\s*\*{0,2}([\d.]+)\s*%"
+#:   它要求算式严格形如 `X% + Y% = Z%`：数值后必须紧跟 `%`、`+` 后只许有空白、
+#:   且最多 4 项。而项目里真实写法是：
+#:     「**十大合计 19.28%**（算式：2.71+2.55+…+1.56）」      ← 分项不带 %
+#:     「合计仅约 45.7%（算式：8.79+7.16+…+2.54 = 45.54%）」  ← 10 项、分项不带 %
+#:   实测：在 57 棵已封存报告树的全部 md 里，「含算式且含 =」的行共 **402 行**，
+#:   原正则命中 **0 行** ⇒ 本脚本宣称的第 2 项能力（自洽校验）**完全失效**，
+#:   2026-10-16 审计确认的 4 处「持仓合计」错误因此全部漏检。
+#:
+#: 设计要求（三边都验过，见 tests/test_audit_values_sumregex.py）：
+#:   ① **必须命中**真实算式：分项可带/不带 `%`、可带千分位逗号、项数 2~40 不限；
+#:   ② **必须支持加减混合**：项目里大量算式形如 `13.6496 − 5.2828 + 3.2 = 11.5668`
+#:      （只认 `+` 会把 `5.2828 + 3.2` 截成 `8.48` 而误报）；兼容全角 `＋` 与各种减号。
+#:   ③ **不得误吃日期**：`1982-1984=100`、`09-16=7.0bp` 这类日期/年份区间是常见干扰，
+#:      必须整段跳过（`DATELIKE_RE`）。首版改宽后未做此排除，一次制造 700+ 条假阳性。
+#:   项与项之间**只允许空白**（不允许夹股票名等文字），否则会把无关数字串成假算式。
+EXPR_RE = re.compile(
+    r"(?<![\d.\-−–—])"
+    r"([\d,]+(?:\.\d+)?\s*%?"
+    r"(?:\s*[+\-−–—＋]\s*[\d,]+(?:\.\d+)?\s*%?){1,39})"
+    r"\s*[=＝]\s*\*{0,2}\s*([\d,]+(?:\.\d+)?)\s*%?"
 )
+
+#: 从算式左侧逐项提取 (符号, 数值)。
+_TERM_RE = re.compile(r"([+\-−–—＋]?)\s*([\d,]+(?:\.\d+)?)")
+_MINUS = set("-\u2212\u2013\u2014")
+
+#: 日期 / 年份区间形态（`2026-10-15` 的片段、`1982-1984`、`09-16`）——
+#: 命中即整段跳过，避免把日期当算式。
+DATELIKE_RE = re.compile(r"(?:\b\d{4}|\b\d{2})-(?:\d{4}|\d{2})\b")
+
+# 兼容旧名（外部若已 import SUM_RE，仍可用；行为已指向新实现）。
+SUM_RE = EXPR_RE
+
+
 
 
 def check_sums(path: Path):
-    """校验「A + B (+ C + D) = 合计」自洽。返回 [(行号, 分项和, 所写合计, 行内容)]。"""
+    """校验「A + B − C … = 合计」自洽。
+
+    返回 [(行号, 分项数, 分项和, 所写合计, 行内容)]，**不限分项个数、支持加减混合**。
+    ★ 2026-10-16：原实现用 `m.groups()[:4]` 只取前 4 项，10 项算式会被静默截断；
+      且旧正则本就恒不命中（只认 `+`、要求每项带 `%`）。
+      现改为逐项提取并**按自带符号累加**，同时支持全角/Unicode 减号，
+      并跳过日期/年份区间形态（否则 `1982-1984=100` 会被误判成算式）。
+    """
     bad = []
     for ln, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        for m in SUM_RE.finditer(line):
-            parts = [float(g) for g in m.groups()[:4] if g is not None]
-            total = float(m.group(5))
-            s = sum(parts)
+        for m in EXPR_RE.finditer(line):
+            lhs = m.group(1)
+            if DATELIKE_RE.search(lhs):  # 日期/年份区间，不是算式
+                continue
+            terms = []
+            for sign, val in _TERM_RE.findall(lhs):
+                v = float(val.replace(",", ""))
+                terms.append(-v if sign in _MINUS else v)
+            if len(terms) < 2:
+                continue
+            total = float(m.group(2).replace(",", ""))
+            s = sum(terms)
             if abs(s - total) > 0.015:  # 容忍四舍五入
-                bad.append((ln, round(s, 2), total, line.strip()))
+                bad.append((ln, len(terms), round(s, 2), total, line.strip()))
     return bad
 
 
@@ -109,7 +163,7 @@ def main():
     ap.add_argument("dir", help="待审计目录")
     ap.add_argument("--stale", required=True, help="旧值黑名单 JSON（{值: 说明}）")
     ap.add_argument("--new", help="新值清单 JSON（[[值, 说明], ...]，可选）")
-    ap.add_argument("--exclude", nargs="*", default=["_stale", "_archive"],
+    ap.add_argument("--exclude", nargs="*", default=list(SKIP_ARCHIVE_DIRS),
                     help="跳过的子目录关键字")
     args = ap.parse_args()
 
@@ -153,8 +207,8 @@ def main():
         print(f"\n✗★ 求和自洽性失败（{len(all_bad)} 个文件）—— 「分项被反向编造」的高置信信号：")
         for f, bads in all_bad.items():
             print(f"\n  {f.relative_to(root)}")
-            for ln, s, total, line in bads:
-                print(f"      L{ln:<5} 分项和 {s} ≠ 所写合计 {total}   {line[:88]}")
+            for ln, n, s, total, line in bads:
+                print(f"      L{ln:<5} {n} 项分项和 {s} ≠ 所写合计 {total}   {line[:88]}")
 
     # ③ 新值就位
     if newvals:
