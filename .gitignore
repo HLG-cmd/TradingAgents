@@ -255,3 +255,25 @@ wb_analysis/_archive/
 # ── 一次性探针的编译缓存（探针本身要跟踪，它是审计线索）──
 scripts/_oneoff/__pycache__/
 wb_analysis/_oneoff/__pycache__/
+
+# ── ★ 开源准备：运行痕迹与本地 residue（2026-10-16 加）──
+#   背景：评估开源准备度时实测发现 `.box-agent/` 与 `.box-agent-scratch/`
+#   **未被任何规则忽略**，而它们含 **agent 会话 ID / task registry / 内部路径**
+#   ⇒ 一旦 `git add .` 就会把运行痕迹提交上去。
+#   判据：这些是**本机运行产物**，与项目源码无关，任何克隆者都不需要。
+.box-agent/
+.box-agent-scratch/
+
+# 编码代理（CodeBuddy 等）在本机留下的临时目录
+.codebuddy/
+.workbuddy/
+
+# 本机日志与临时输出（非源码）
+*.log
+_r5_logs*.txt
+
+# SWE 与编辑器
+.idea/
+.vscode/
+*.swp
+*~
