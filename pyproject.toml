@@ -57,6 +57,7 @@ cli = ["static/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+cache_dir = ".cache/pytest"
 markers = [
     "unit: fast isolated unit tests",
     "integration: tests requiring external services",
@@ -69,6 +70,7 @@ filterwarnings = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+cache-dir = ".cache/ruff"
 extend-exclude = [
     "results",
     "wb_analysis",
@@ -77,6 +79,7 @@ extend-exclude = [
     ".box-agent",
     ".box-agent-scratch",
     ".archive_local_backup",
+    ".cache",
 ]
 
 [tool.ruff.lint]

@@ -216,6 +216,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Cache
+.cache/
 **/data_cache/
 
 # Enterprise env file (secrets) and generated run reports
