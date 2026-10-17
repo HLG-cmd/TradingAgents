@@ -335,7 +335,7 @@ def _series(facts: dict, tag: str, unit: str) -> list[dict]:
     units, _ = hit
     rows = units.get(unit) or []
     if not rows:                      # 单位名有时不同（如 USD/shares vs USD）
-        for u, rr in units.items():
+        for _u, rr in units.items():
             if rr:
                 rows = rr
                 break
@@ -689,7 +689,7 @@ def get_point_in_time(ticker: str, as_of: str, facts: dict | None = None) -> dic
     return out
 
 
-_SPLIT_CACHE: dict[str, "object"] = {}
+_SPLIT_CACHE: dict[str, object] = {}
 
 
 def cumulative_split_factor(ticker: str, as_of: str) -> float:

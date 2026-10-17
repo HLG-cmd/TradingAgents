@@ -4,11 +4,12 @@
 # Smart Screener v2.0: Multi-Factor GARP Radar + TradingAgents Adversarial Debate
 from __future__ import annotations
 
+import argparse
+import datetime
 import os
 import sys
-import datetime
-import argparse
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -25,20 +26,20 @@ if str(PROJECT_ROOT) not in sys.path:
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
 import questionary
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
+from quant.screener_engine import (
+    FACTOR_WEIGHTS,
+    export_radar_csv,
+    run_quant_screening,
+)
 from quant.stock_pools import (
     SP_500_CORE,
     get_latest_nasdaq_100,
     get_latest_sp500,
-)
-from quant.screener_engine import (
-    FACTOR_WEIGHTS,
-    run_quant_screening,
-    export_radar_csv,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -244,7 +245,7 @@ def main():
 
     trade_date = datetime.date.today().strftime("%Y-%m-%d")
     console.print(f"\n[bold magenta]=== 阶段二：启动 TradingAgents 终极会诊 (基准日期: {trade_date}，辩论轮数: {debate_choice}轮) ===[/bold magenta]")
-    
+
     final_results = []
     ta = TradingAgentsGraph(debug=False, config=config)
 
@@ -253,13 +254,13 @@ def main():
         try:
             state, signal = ta.propagate(ticker, trade_date)
             decision_text = str(signal)
-            
+
             full_decision = state.get("final_trade_decision") or "无终审决策内容"
             trader_plan = state.get("trader_investment_plan") or ""
             research_plan = state.get("investment_plan") or ""
-            
+
             summary = full_decision[:150].replace("\n", " ") + "..."
-            
+
             final_results.append({
                 "Ticker": ticker,
                 "Signal": decision_text,
@@ -282,7 +283,7 @@ def main():
 
     console.print("\n" + "="*60)
     console.print(Panel("[bold green][Top Ranking] 多智能体终审决断对比总榜[/bold green]", border_style="green"))
-    
+
     final_table = Table(title="候选股终审裁决对比", border_style="cyan")
     final_table.add_column("标的代码", justify="center", style="bold cyan")
     final_table.add_column("AI 投资评级", justify="center", style="bold yellow")
@@ -303,7 +304,7 @@ def main():
     reports_dir = PROJECT_ROOT / "reports" / "_other"      # 非 12 角色的专题报告统一落 _other/
     reports_dir.mkdir(parents=True, exist_ok=True)
     report_file = reports_dir / f"screener_{pool_key}_{timestamp}.md"
-    
+
     w_str = (
         f"质量 {FACTOR_WEIGHTS['quality']*100:.0f}% + "
         f"估值 {FACTOR_WEIGHTS['value']*100:.0f}% + "
@@ -337,7 +338,7 @@ def main():
         if res.get("ResearchPlan"):
             md_content += "#### 3. 研究经理多空裁定方案 (Research Plan)\n\n"
             md_content += f"{res['ResearchPlan']}\n\n"
-        
+
     with open(report_file, "w", encoding="utf-8") as f:
         f.write(md_content)
 

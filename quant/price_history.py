@@ -31,7 +31,6 @@
 """
 from __future__ import annotations
 
-import datetime as dt
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed

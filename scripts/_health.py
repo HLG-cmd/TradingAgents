@@ -179,6 +179,46 @@ def chk_transient_empty() -> tuple[str, str]:
            ("WARN", "瞬态目录非空：" + ", ".join(left) + tail)
 
 
+def _gitignore_dir_covered(need: str, active: set[str]) -> bool:
+    """目录 `need`（形如 `wb_analysis/evidence/`）是否被某条**有效**规则覆盖。
+
+    ★★ 2026-10-17 修（本日第 6 例「检查器判据缺陷」，由 TREASURY 入版本控制触发）：
+    原判据是**精确等于** `n not in active` ⇒ 只认 `wb_analysis/evidence/` 这一种写法。
+    但为把常驻宏观数据 TREASURY 纳入版本控制，`.gitignore` 被合理改写为：
+
+        wb_analysis/evidence/*          ← 忽略目录下全部
+        !wb_analysis/evidence/TREASURY* ← 白名单放行常驻数据
+
+    这**在 git 语义下等价于（且优于）**原写法 —— 实测 `git check-ignore` 对
+    普通探针仍返回「已忽略」，4 个目录的功能行为**全部正确**。
+    然而文本层因 `wb_analysis/evidence/*` ≠ `wb_analysis/evidence/` 而误报 WARN，
+    连带 `tests/test_health_checkers.py::test_normal_gitignore_passes` 失败
+    —— 即**检查器把「写法不同」误判成「未忽略」**。
+
+    ⇒ 判据放宽为「覆盖」而非「精确相等」，同时**坚持排除 `!` 白名单行**
+      （白名单是放行，不是忽略；若把它算作忽略，注释/反转类假绿会重新出现）。
+
+    **为什么仍保留文本层**：它是快速失败的前置检查，能在 git 不可用时（如
+    CI 无 git、或 `check-ignore` 行为异常）仍给出判断；真正的判据仍是下面的行为层。
+    """
+    base = need.rstrip("/")           # wb_analysis/evidence
+    for rule in active:
+        if rule.startswith("!"):      # 白名单行 = 放行，不算「已忽略」
+            continue
+        r = rule.rstrip("/")
+        # 接受的等价写法：`dir/`、`dir`、`dir/*`、`dir/**`、`/dir/`
+        if r.lstrip("/") in (base, base + "/*", base + "/**"):
+            return True
+    return False
+
+
+def _git_check_ignored(path: str) -> bool:
+    """让 git 自己回答「该路径是否被忽略」（真正的判据：行为，不是文本形态）。"""
+    # ⚠️ `run()` 已内置 `cwd=ROOT` 且签名不含 cwd ⇒ 不要多传。（多传会 TypeError）
+    rc, _out = run(["git", "check-ignore", "-q", path])
+    return rc == 0
+
+
 def chk_gitignore() -> tuple[str, str]:
     """瞬态目录与回滚包是否真被 git 忽略。
 
@@ -193,12 +233,19 @@ def chk_gitignore() -> tuple[str, str]:
     ⇒ 判据改为：**先剥掉注释（`#` 之后）与空行，再逐条比对有效规则**。
       并额外用 `git check-ignore` 做一次**功能性断言**（真正的判据是 git 的行为，
       不是文本形态）—— 这是把「文本检查」升级为「行为检查」。
+
+    ★★ 2026-10-17 修（本日第 6 例，同族）：
+      文本层从「精确相等」改为「覆盖」（见 `_gitignore_dir_covered`），
+      行为层从**单个探针**改为**逐目录探针**。
+      原因：原实现只探 `wb_analysis/evidence/__probe__.md` 一个路径 ⇒
+      若另外 3 个目录的规则被破坏（如被 `!` 反转），行为层**看不见** ——
+      与「后缀白名单把新类型文件挡在视野外」是同一类盲区。
     """
     f = ROOT / ".gitignore"
     if not f.exists():
         return "WARN", "无 .gitignore"
 
-    # ① 文本层：剥注释后逐条比对（注释行不算数）
+    # ① 文本层：剥注释后逐条比对（注释行不算数；白名单行不算「已忽略」）
     active: set[str] = set()
     for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
         s = line.split("#", 1)[0].strip()
@@ -206,18 +253,18 @@ def chk_gitignore() -> tuple[str, str]:
             active.add(s)
     need = ["wb_analysis/evidence/", "wb_analysis/drafts/", "wb_analysis/analysis/",
             ".workbuddy-ai/backup/"]
-    miss = [n for n in need if n not in active]
+    miss = [n for n in need if not _gitignore_dir_covered(n, active)]
     if miss:
         return "WARN", f"未忽略（注释掉的不算）：{', '.join(miss)}"
 
-    # ② 行为层：让 git 自己回答（真正的判据）—— 用一个必然匹配的探针路径
-    probe = "wb_analysis/evidence/__probe__.md"
-    # ⚠️ `run()` 已内置 `cwd=ROOT` 且签名不含 cwd ⇒ 不要多传。（多传会 TypeError）
-    rc, out = run(["git", "check-ignore", "-v", probe])
-    if rc != 0:
-        return ("WARN", f"{len(need)} 条规则文本存在，但 `git check-ignore` 判定**未忽略**"
-                       f"（rc={rc}）⇒ 规则可能被后面的 ! 反转或写法有误")
-    return "PASS", "瞬态目录与回滚包均已忽略（文本规则 + git 行为双重确认）"
+    # ② 行为层：让 git 自己回答（真正的判据）——**逐目录**探针，不漏任何一个
+    probe_name = "__probe_transient__.md"
+    not_ignored = [d for d in need if not _git_check_ignored(f"{d}{probe_name}")]
+    if not_ignored:
+        return ("WARN", f"{len(need)} 条规则文本存在，但 `git check-ignore` 判定这些目录"
+                       f"**未忽略**：{', '.join(not_ignored)}"
+                       f"（rc≠0）⇒ 规则可能被后面的 ! 反转或写法有误")
+    return "PASS", f"{len(need)}/{len(need)} 个瞬态目录均已忽略（文本规则 + git 行为双重确认）"
 
 
 # 根目录允许的 .py：只有 pytest 配置（它必须放在根，否则不被识别）
@@ -454,7 +501,20 @@ BASELINE_K = "not DeepSeekLive"
 #    含 TRAder 列走 PROPOSAL_RE 兜底的**已知边界**（已文档化：pick() 不认 Action 标签，
 #    但 scan() 对 47/51 棵有 RUN.json 的树走清单，故真实显示仍是 Title Case）；
 #   ③ 报告树命名契约 TREE_RE 与功能目录 SKIP_DIRS。
-BASELINE_PASSED = 921
+BASELINE_PASSED = 929
+# ★ 2026-10-17（第二次）：921 → 929。依据＝实测 `pytest tests/ -q` 输出「929 passed」，
+#   增量 8 项全部来自 `tests/test_health_checkers.py::TestChkGitignoreCommentAware`：
+#   锁定本日第 6 例「检查器判据缺陷」—— `chk_gitignore` 的文本层原用**精确相等**
+#   （`n not in active`），只认 `wb_analysis/evidence/` 一种写法。而为把常驻宏观数据
+#   TREASURY 纳入版本控制，`.gitignore` 被合理改写为 `wb_analysis/evidence/*`
+#   + `!wb_analysis/evidence/TREASURY*` —— **git 行为完全正确**（4 个目录探针全部
+#   「已忽略」），但文本层因 `dir/*` ≠ `dir/` 误报 WARN ⇒ 体检 FAIL、CI 红。
+#   ⇒ 修复：判据放宽为「覆盖」（接受 `dir` / `dir/` / `dir/*` / `dir/**` / `/dir/`），
+#     但**坚持排除 `!` 白名单行**（白名单是放行、不是忽略，否则注释/反转类假绿会复发）；
+#     同时把行为层从**单个探针**改为**逐目录探针** —— 原实现只探 evidence 一个路径，
+#     另 3 个目录的规则若被破坏，行为层**看不见**（与「后缀白名单把新类型文件挡在
+#     视野外」是同族盲区）。
+#   8 项锁定：5 种等价写法必判「已覆盖」+ 3 条反例（仅白名单 / 仅注释 / 无关目录）。
 # ★ 2026-10-17：868 → 921。依据＝实测 `pytest tests/ -q` 输出「921 passed」，
 #   增量 53 项全部来自新增 `tests/test_option_source.py`：
 #   期权数据源随时点切换（盘中 yfinance / 非盘中 CBOE 官方延迟报价）这条分支此前**无法被测试**

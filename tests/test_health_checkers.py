@@ -151,3 +151,38 @@ class TestChkGitignoreCommentAware:
         """正常 .gitignore 仍须 PASS（文本规则 + git 行为双重确认）。"""
         status, msg = health.chk_gitignore()
         assert status == "PASS", f"正常 .gitignore 应 PASS，实得 {status}：{msg}"
+
+    # ---- 第 6 例回归锁（2026-10-17）：等价写法不得被误判为「未忽略」 ----
+
+    @pytest.mark.parametrize("rule", [
+        "wb_analysis/evidence/",          # 原写法
+        "wb_analysis/evidence",           # 无尾斜杠
+        "wb_analysis/evidence/*",         # glob（TREASURY 白名单引入的写法）
+        "wb_analysis/evidence/**",
+        "/wb_analysis/evidence/",
+    ])
+    def test_equivalent_dir_writings_are_covered(self, health, rule):
+        """★ 第 6 例回归锁：同义写法必须都算「已覆盖」。
+
+        未修时实测：为把 TREASURY 常驻数据纳入版本控制，`.gitignore` 合理改成
+        `wb_analysis/evidence/*` + `!wb_analysis/evidence/TREASURY*`，
+        **git 行为完全正确**（4 个探针全部「已忽略」），
+        但文本层因 `dir/*` ≠ `dir/` 误报 WARN ⇒ 体检 FAIL、CI 红。
+        """
+        assert health._gitignore_dir_covered("wb_analysis/evidence/", {rule}) is True
+
+    def test_negation_line_alone_is_not_coverage(self, health):
+        """★ 反例：只有 `!` 白名单行 = **未忽略**（防止把「放行」当成「忽略」）。"""
+        assert health._gitignore_dir_covered(
+            "wb_analysis/evidence/", {"!wb_analysis/evidence/*"}) is False
+
+    def test_glob_plus_negation_counts_as_covered(self, health):
+        """★ 正例：`dir/*` 与 `!dir/KEEP*` 共存 ⇒ 仍算已覆盖（这正是本仓现状）。"""
+        assert health._gitignore_dir_covered(
+            "wb_analysis/evidence/",
+            {"wb_analysis/evidence/*", "!wb_analysis/evidence/TREASURY*"}) is True
+
+    def test_commented_rule_is_not_coverage(self, health):
+        """★ 反例：注释掉的规则不得算数（第 5 例的语义，在此层也要守住）。"""
+        assert health._gitignore_dir_covered(
+            "wb_analysis/evidence/", {"#wb_analysis/evidence/"}) is False

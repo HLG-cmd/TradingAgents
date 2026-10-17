@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import hashlib
 import sys
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -32,7 +31,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from wb_analysis import _seal_run as sr  # noqa: E402
-
 
 # --------------------------------------------------------------------------
 # _arcname：审计包内的归档名是「唯一定义源」，三处曾各写一遍同样的 if/elif

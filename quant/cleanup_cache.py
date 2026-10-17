@@ -25,8 +25,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
-import sys
 from pathlib import Path
 
 HOME = Path(os.path.expanduser("~"))
@@ -133,7 +131,8 @@ def main() -> int:
                 print("已取消")
                 return 0
         except EOFError:
-            print("非交互环境，请加 --yes"); return 1
+            print("非交互环境，请加 --yes")
+            return 1
 
     total_n = total_b = 0
     for name, p in plan:

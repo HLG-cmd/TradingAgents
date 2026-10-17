@@ -35,13 +35,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]  # quant/ 的上一级才是�
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from quant.screener_engine import export_radar_csv, run_quant_screening
 from quant.stock_pools import (
     NASDAQ_100,
     SP_500_CORE,
     get_latest_nasdaq_100,
     get_latest_sp500,
 )
-from quant.screener_engine import run_quant_screening, export_radar_csv
 from wb_analysis.collect import collect_one  # noqa: E402
 
 # ★ 2026-10-15：`sp500` 接入动态全量池 `get_latest_sp500()`（约 503 只），

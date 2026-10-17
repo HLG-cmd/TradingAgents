@@ -242,6 +242,7 @@ class TestCboeErrorSemantics:
 
     def test_http_4xx_raises_without_retrying(self, monkeypatch):
         import urllib.error
+
         from wb_analysis import _option_source as osrc
 
         calls = {"n": 0}
@@ -274,6 +275,7 @@ class TestCboeErrorSemantics:
     def test_available_returns_false_not_raise(self, monkeypatch):
         """`available()` 是前置判断，必须吞掉异常返回 False。"""
         import urllib.error
+
         from wb_analysis import _option_source as osrc
 
         def fake_urlopen(req, timeout=None):

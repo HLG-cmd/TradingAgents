@@ -236,39 +236,14 @@ wb_analysis/_archive/
 # pytest 定向 basetemp（safe-delete 钩子下绕开 %TEMP% 清理失败的产物）
 .pytest_tmp_bt*/
 
-# ── 删除前的回滚包（体积大、且是一次性保险，不进版本库）──
+# ── 本机冷备份与本地 AI 助手环境（绝对不入库）──
+.archive_local_backup/
+.workbuddy-ai/
 .workbuddy-ai/backup/
-
-# ── ★ 知识资产必须入库（2026-10-16 修复）──
-#   背景：`.workbuddy/` → `.workbuddy-ai/` 改名后，这 127 个文件被整体甩出了
-#   版本控制（`git ls-files` 返回 0）。而它们是最不可再生的资产：
-#     memory/IRONLAWS.md  84 KB ← 38+ 条项目铁律与判例（防静默错误的判据）
-#     memory/DOMAINS.md   44 KB ← 领域知识与口径定义（EDGAR 时点值三坑等）
-#     memory/MEMORY.md    16 KB ← 长期记忆索引
-#     memory/2026-*.md          ← 逐日工作日志（判例原始记录）
-#     skills/                   ← 自建技能
-#   ⇒ 代码可以重写，判例无法重造。此处显式声明**入库**。
-#   已确认：全库无凭据（仅有对 `SEC_USER_AGENT` 的「提及」，无真实值）。
-#   ⚠️ 新增 memory 文件时若曾写入密钥，务必先清理再提交。
-!.workbuddy-ai/memory/
-.workbuddy-ai/memory/_backup/
-!.workbuddy-ai/skills/
-
-# ── 一次性探针的编译缓存（探针本身要跟踪，它是审计线索）──
-scripts/_oneoff/__pycache__/
-wb_analysis/_oneoff/__pycache__/
-
-# ── ★ 开源准备：运行痕迹与本地 residue（2026-10-16 加）──
-#   背景：评估开源准备度时实测发现 `.box-agent/` 与 `.box-agent-scratch/`
-#   **未被任何规则忽略**，而它们含 **agent 会话 ID / task registry / 内部路径**
-#   ⇒ 一旦 `git add .` 就会把运行痕迹提交上去。
-#   判据：这些是**本机运行产物**，与项目源码无关，任何克隆者都不需要。
+.workbuddy/
+.codebuddy/
 .box-agent/
 .box-agent-scratch/
-
-# 编码代理（CodeBuddy 等）在本机留下的临时目录
-.codebuddy/
-.workbuddy/
 
 # 本机日志与临时输出（非源码）
 *.log

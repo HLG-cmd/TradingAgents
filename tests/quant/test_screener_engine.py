@@ -236,7 +236,7 @@ def test_weight_profiles_are_normalised_and_default_is_quality():
     for name, w in se.WEIGHT_PROFILES.items():
         assert set(w) == {"quality", "value", "growth", "trend"}, name
         assert sum(w.values()) == pytest.approx(1.0, abs=1e-9), f"{name} does not sum to 1"
-    assert se.FACTOR_WEIGHTS == se.WEIGHT_PROFILES["quality"]
+    assert se.WEIGHT_PROFILES["quality"] == se.FACTOR_WEIGHTS
     # 旧默认档必须仍然可调用、且确实不同于现默认（否则 garp 就成了无用别名）
     assert se.WEIGHT_PROFILES["garp"]["trend"] == 0.20
     assert se.WEIGHT_PROFILES["quality"] != se.WEIGHT_PROFILES["garp"]

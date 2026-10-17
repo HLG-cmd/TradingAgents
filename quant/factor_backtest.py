@@ -43,9 +43,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]  # quant/ 的上一级才是�
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from quant.stock_pools import NASDAQ_100
 from quant.screener_engine import MARGINAL_T, SIGNIFICANT_T  # noqa: E402
-from tradingagents.dataflows.stockstats_utils import load_ohlcv  # noqa: E402
+from quant.stock_pools import NASDAQ_100
 
 MAX_WORKERS = 5
 
@@ -440,8 +439,8 @@ def main() -> int:
     else:
         verdict = "趋势档接近随机（IC≈0）"
     print(f"  趋势综合分: IC={ts['IC']:.4f}, t={ts['t']:.2f} -> {verdict}")
-    print(f"  ⚠ 幸存者偏差：已退市标的（WBA/ANSS/KCG/EA）不在池中，结果偏乐观")
-    print(f"  ⚠ 基本面档（权重 80%）无法回测，本结论仅覆盖权重 20% 的动量档")
+    print("  ⚠ 幸存者偏差：已退市标的（WBA/ANSS/KCG/EA）不在池中，结果偏乐观")
+    print("  ⚠ 基本面档（权重 80%）无法回测，本结论仅覆盖权重 20% 的动量档")
 
     if args.watch:
         n_alert = watch_report(R, args.recent,

@@ -39,10 +39,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]  # quant/ 的上一级才是�
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from quant.stock_pools import get_latest_nasdaq_100, get_nasdaq100_sectors
+from quant.edgar_fundamentals import cumulative_split_factor, fetch_facts, get_point_in_time
 from quant.screener_engine import FACTOR_WEIGHTS, MARGINAL_T, SIGNIFICANT_T
-from quant.edgar_fundamentals import fetch_facts, get_point_in_time, cumulative_split_factor
-from tradingagents.dataflows.stockstats_utils import load_ohlcv  # noqa: E402
+from quant.stock_pools import get_latest_nasdaq_100, get_nasdaq100_sectors
 
 MAX_WORKERS = 5
 
@@ -317,7 +316,7 @@ def main() -> int:
               f"（间隔 {args.rebalance} 个月）——")
         print(f"     相邻观测收益区间重叠约 {overlap:.1f} 倍，t 值与显著性强被高估。")
         print(f"     粗略的有效独立样本数约 {eff_n}（而非 {len(R)}），")
-        print(f"     **请以量级与符号为参考，不要把 t 值当作确切显著性。**")
+        print("     **请以量级与符号为参考，不要把 t 值当作确切显著性。**")
     else:
         print(f"  ✓ 前瞻 {args.forward} 日 vs 调仓间隔 {interval_days:.0f} 日 —— "
               f"窗口不重叠，观测可视为近似独立")
@@ -325,9 +324,9 @@ def main() -> int:
     # 不重叠但样本过少时，显著性同样无从谈起 —— 必须明说
     if len(R) < 8:
         print(f"  ⚠️ 有效观测仅 {len(R)} 个，**统计上无法得出任何结论**。")
-        print(f"     根因：价格历史只有 5 年（load_ohlcv 固定窗口），")
+        print("     根因：价格历史只有 5 年（load_ohlcv 固定窗口），")
         print(f"          扣掉 {args.forward} 日前瞻后余不出足够的不重叠窗口。")
-        print(f"     要得到可信的长周期结论，需先把价格历史拉长到 10~20 年。")
+        print("     要得到可信的长周期结论，需先把价格历史拉长到 10~20 年。")
 
     KEYS = ("quality", "value", "val_pb", "val2", "growth", "cagr", "composite")
     print()
@@ -384,7 +383,8 @@ def main() -> int:
           f"{'成长单季':>11}{'成长CAGR':>11}{'综合':>11}")
     print("  " + "-" * 80)
     for y, g in R.groupby("year"):
-        m = lambda k: g.get(f"{prefix}_IC_{k}", pd.Series(dtype=float)).mean()
+        def m(k, df_group=g):
+            return df_group.get(f"{prefix}_IC_{k}", pd.Series(dtype=float)).mean()
         print(f"  {y:<8}{len(g):>6}{m('quality'):>11.4f}{m('value'):>11.4f}{m('val_pb'):>11.4f}"
               f"{m('growth'):>11.4f}{m('cagr'):>11.4f}{m('composite'):>11.4f}")
 
