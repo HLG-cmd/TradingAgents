@@ -250,6 +250,7 @@ wb_analysis/_archive/
 #   已确认：全库无凭据（仅有对 `SEC_USER_AGENT` 的「提及」，无真实值）。
 #   ⚠️ 新增 memory 文件时若曾写入密钥，务必先清理再提交。
 !.workbuddy-ai/memory/
+.workbuddy-ai/memory/_backup/
 !.workbuddy-ai/skills/
 
 # ── 一次性探针的编译缓存（探针本身要跟踪，它是审计线索）──
@@ -277,3 +278,5 @@ _r5_logs*.txt
 .vscode/
 *.swp
 *~
+*.artifact.json
+.*.artifact.json

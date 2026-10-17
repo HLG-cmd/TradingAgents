@@ -17,7 +17,6 @@
 """
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
@@ -29,7 +28,7 @@ if hasattr(sys.stderr, "reconfigure"):
 # ★ 2026-10-08：契约常量改为**唯一来源** import（见 `_contract.py` 抬头的漂移史）。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from wb_analysis._contract import (  # noqa: E402
-    DOC_FILES as _DOC_ALL,
+    DOC_FILES,
     FINAL_PROPOSAL,
     FIVE_TITLE_RE as FIVE,
     PROPOSAL_RE as TRADER_LINE,
@@ -57,11 +56,19 @@ ROLE_FILES = [
 #   ⇒ 2026-10-08 起不再"手动对齐"，而是**同一份常量**，漂移在物理上不可能。
 FIVE_ALLOWED = {f"2_research/{n}" for n in RATING_ALLOWED_FILES if n == "manager.md"}
 FIVE_ALLOWED |= {f"3_trading/{n}" for n in RATING_ALLOWED_FILES if n == "trader.md"}
+# ★ 2026-10-10：改为「**补集**」写法。此前这里硬列了 4 个名字
+#   `{portfolio_manager.md, aggressive.md, conservative.md, neutral.md}` ——
+#   于是往 `_contract.RATING_ALLOWED_FILES` 里**新增**一个 4_risk 席位后，
+#   那个席位既不在 `2_research/`、也不在 `3_trading/`、更不在这个写死的 4 人名单里
+#   ⇒ 它会掉进「违规」判定（正是 `_lint_drafts.py` 2026-10-01 那次门禁盲区的翻版）。
+#   补集写法让它**自动**跟上白名单，漂移点消失。
 FIVE_ALLOWED |= {f"4_risk/{n}" for n in RATING_ALLOWED_FILES
-                 if n in {"portfolio_manager.md", "aggressive.md", "conservative.md", "neutral.md"}}
-# 这两份是**工作文档**（不是角色产出、不被渲染进报告、也不被 extract_rating 解析）：
-# 它们必须逐字写出五个英文词才能"定义"评级词汇表，属合法的定义性引用。
-DOC_FILES = {"0_brief.md", "0_derived.md", "_constraints.md"}
+                 if n not in {"manager.md", "trader.md"}}
+# 工作文档白名单 `DOC_FILES` 由 `_contract.py` 提供（见顶部 import）——
+# ⚠️ 2026-10-10：此处此前**又本地定义了一份同值集合**，且顶部 `import ... as _DOC_ALL`
+#    整个未使用 ⇒ 「import 了却又重写一遍」，而 `_selftest.py` 的守门断言只检查
+#    「源码里出现过 `_contract import`」⇒ **断言被 import 语句骗过、漂移照样发生**。
+#    已删除本地定义（同名 import 即可），并把守门断言升级为「不得本地重定义」。
 # ★ 必需的是**12 个角色文件**；上面 3 份工作文档属"有则扫、无则只提示"。
 #   （2026-09-19 自检发现：此前把它们与角色文件同等要求，会导致
 #    「草稿目录没放 `_constraints.md`」被判成 ✗ 文件缺失 —— 一类纯粹的误报。）
@@ -106,7 +113,7 @@ def main() -> int:
 
         if rel in REQUIRED_FIELDS:
             for fld in REQUIRED_FIELDS[rel]:
-                ok = f"**{fld}**" in t or (fld == "FINAL TRANSACTION PROPOSAL" and bool(three))
+                ok = f"**{fld}**" in t or (fld == FINAL_PROPOSAL and bool(three))
                 print(f"   必需字段 **{fld}**：{'✓' if ok else '✗ 缺失'}")
                 if not ok:
                     problems.append(f"{rel}:缺少 {fld}")

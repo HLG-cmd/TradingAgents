@@ -74,6 +74,38 @@ RULES: dict[str, dict] = {
                 "fallback": "supplement（**与年报口径不同，须分别声明**）",
                 "remedy_file": "supplement.md"},
     "verify_earnings_quality": {"cls": "?", "decisive": False, "blocks": "—", "remedy": "人工归类", "fallback": "—"},
+
+    # ⚠️ 2026-10-09 NVDA 轮补登记：**「通道报 ok 但数值不自洽」这一类缺口此前完全漏检**。
+    #    既有门禁（channel_health / _PLACEHOLDER_MARKERS / _audit_empty_sections）全部只看
+    #    「调用是否成功、内容是否非空」，而 NVDA 的 Forward EPS 15.9146 = EPS(TTM) 7.91 的 2.01 倍
+    #    （隐含未来 12M 净利 +99.2%，与其 SEC 自算 TTM 192,880M 严重冲突）—— 通道照报 ok。
+    #    ⇒ clss 判为 **C**：不是上游没发布，也不是阈值误伤，而是 vendor 的**派生字段不可信**。
+    #    ⇒ decisive=True：据此算出的 Forward PE 14.4x / PEG 0.28 是整份报告里最强的多头论据，
+    #      一旦它为假，「NVDA 很便宜」这个结论就没有立足点 —— 与 UBER 轮「假便宜 PE」同类。
+    #    ⇒ 自动检出由 `_verify_snapshot_consistency.py` 负责；本条目只提供六要素。
+    "forward_eps": {"kw": ["forward_eps", "Forward EPS", "前瞻 EPS", "前瞻每股"], "cls": "C", "decisive": True,
+                    "blocks": "无法确认「前瞻盈利」是否可信 ⇒ Forward PE / PEG 均不可用作估值锚点，"
+                              "也就无法回答「当前股价相对其成长性是否便宜」",
+                    "remedy": "用 SEC 已申报季报自算 TTM（本项目已有 `scripts/_oneoff/_verify_nvda_ttm.py` 范式）；"
+                              "在拿到独立的分析师一致预期前，不得引用 forward 系列字段",
+                    "fallback": "市值 / SEC 自算 TTM 净利、市值 / TTM 经营现金流（**口径不同，须分别声明**）"},
+    "forward_pe": {"kw": ["forward_pe", "Forward PE", "前瞻市盈率", "PEG"], "cls": "C", "decisive": True,
+                   "blocks": "同 forward_eps：前瞻市盈率与 PEG 均建立在未经验证的分母上",
+                   "remedy": "同 forward_eps",
+                   "fallback": "同为 SEC 自算 TTM 口径的倍数"},
+    # ★ 2026-10-15 新增：币种不一致（外国发行人 ADR 的**根因级**失真）。
+    #   实测 SKHY（SK 海力士美股 ADR）：`currency=USD` 而 `financialCurrency=KRW`
+    #   ⇒ 快照把美元价格/市值与韩元财报混算，产出「净利率 85.6%」「Forward EPS 34.48」。
+    #   它同时**解释了** forward_eps / forward_pe 两条可疑 ⇒ 判 C（vendor 派生字段不可信），非 A。
+    "currency_mismatch": {"kw": ["currency_mismatch", "币种", "Financial Currency", "汇率", "混算"],
+                          "cls": "C", "decisive": True,
+                          "blocks": "快照把**价格/市值口径**与**财报口径**的两套币种混算 ⇒ 一切跨币种的倍数"
+                                    "（PE / Forward PE / PEG / PB）与带币种的绝对金额"
+                                    "（市值 / 营收 / 净利 / FCF / EBITDA）**全部不可信**，"
+                                    "「贵 / 便宜」类论断在换算到同一币种之前不成立",
+                          "remedy": "改用 §4 财务报表口径（同币种、内部自洽）自行复算；或先做汇率换算再计算倍数",
+                          "fallback": "**纯比率**（毛利率 / 净利率 / 营业利润率 / ROE / ROA / 流动比率）—— "
+                                      "分子分母同币种，比值与币种无关，可继续使用"},
     "etf:option_iv": {"kw": ["option_iv", "期权维度", "IV 等级", "期权链", "SPY 期权"], "cls": "S", "decisive": True,
                       "blocks": "无法回答「期权市场如何为下行风险定价」——IV 与偏斜缺失使下行保护成本不可评估",
                       "remedy": "改在美东 09:30–16:00 重采；或接受该维度缺失并把结论降为条件式",
@@ -109,6 +141,33 @@ RULES: dict[str, dict] = {
                           "blocks": "当日单位净值疑似未更新 ⇒ 由 NAV 与收盘价反算的折溢价不可直接采信",
                           "remedy": "当日净值通常 T+1 公布；改用 `etf overview` 的 `etfDisc` 字段（IOPV 口径）",
                           "fallback": "`etfDisc`（交易所 IOPV 口径，与 NAV 口径不同，须分别声明）"},
+    # ⚠️ 2026-10-13 新增（512400.SS 有色金属轮实测）。**这条不是「取不到」，而是「取到了但不可信」**：
+    #    `sector finance pt01801050` 回传 `stockCnt=1`（申万一级有色金属实际成分股远大于 1），
+    #    且行业级 TTM 毛利率 **−9.22%**、净利率 **−56.74%**、ROE **−103.27%**、
+    #    经营现金流占收入 **−37.12%**，**而同一行 `netProfitYoY = +30.14%`** ——
+    #    「行业净利同比 +30%」与「行业毛利率为负」在逻辑上互斥，不可能同时为真。
+    #    ⇒ 判 **C 类（上游聚合退化）**：不是 A（上游真缺）、不是 B（阈值误伤）、不是 S（时点不对）。
+    #    ⇒ decisive=True：它挡掉的是「申万行业财务质量」这一整条腿。若不登记，下游会把
+    #      「行业毛利率为负、ROE −103%」当成本标的/行业的基本面证据，从而得出与事实相反的方向
+    #      —— 这正是本轮实测差点发生的事（证据包照报「成功 14/14」，通道全绿）。
+    #    ⇒ 检测器 = `collect_a_etf.py::_sector_fin_gaps()`。**键名必须是通道名** `sector_fin_degenerate`
+    #      （不是语义名），否则台账会标 `?` 并要求人工归类。
+    "sector_fin_degenerate": {"kw": ["sector_fin_degenerate", "sector_fin", "申万行业财务", "行业财务",
+                                    "毛利率为负", "成分股数", "聚合退化"],
+                              "cls": "C", "decisive": True,
+                              "blocks": "申万一级行业聚合财务退化为单一成分股口径（stockCnt=1）且盈亏互斥"
+                                        " ⇒「行业毛利率 / ROE / 现金流质量」这一整条腿不可用；"
+                                        "任何「行业盈利质量恶化」或「行业在亏损」的论断都失去依据",
+                              "remedy": "上游 sector finance 聚合退化（非本仓 bug，亦非标的经营真的差）⇒ "
+                                        "改用 ETF 聚合估值 + 板块估值横截面 + 机构一致盈利预测 + 持仓穿透"
+                                        "作为基本面锚，并**弃用该通道的绝对值**",
+                              "fallback": "ETF `etf overview` 聚合估值（PE/PB/PEG/ROE 及历史分位）"
+                                          "+ `sector valuation` 横截面 + `sector forecast` 两年复合增长"
+                                          "（**口径不同，须分别声明**）"},
+    # ⚠️ 2026-10-13：A 股 ETF 的 `option_structure` 与 `social:StockTwits` 两条**早就登记在 RULES 里**
+    #    （见下方与上方条目），但此前**从没有发射方** —— 它们只以散文形式写在证据包 §0，
+    #    而台账靠正则抓「非全绿通道」行 ⇒ 永不被登记。现由 `collect_a_etf.py::_structural_gaps()`
+    #    统一发射（只往登记行追加，不影响 `成功 N/M` 的分子分母）。
     "macro:10y_treasury": {"kw": ["10y_treasury", "国债", "DGS10", "^TNX"], "cls": "A", "decisive": False,
                            "blocks": "—", "remedy": "重试", "fallback": "^TNX"},
     # ⚠️ 2026-10-05 新增（NFLX 轮实测）：`realtime_close` 是 §13「最新交易日实时收盘补充」通道，
@@ -158,6 +217,69 @@ RULES: dict[str, dict] = {
                            "不要用 Search() 兜底（语义不专属且窗口过滤后仍为空）",
                  "fallback": "§6 宏观新闻（含正文回填后，含大量个股级线索如 NVDA/AAPL 提及）；"
                              "§3/§4 基本面数据"},
+    # ⚠️ 2026-10-11 新增（SKHY 轮实测）。**注意这一条与其它条目的结构不同**：
+    #    `edgar_raw` **不是采集通道** —— 它既不出现在证据包的「通道健康度」里，
+    #    也不在 `_verify_snapshot_consistency` 的覆盖内 ⇒ 上面那条
+    #    `for name, status in info["channels"]` 循环**永远碰不到它**，
+    #    **光在这里登记规则是够不着的**（这正是 O4 的实质发现）。
+    #    ⇒ 唯一的发射方是 `_verify_edgar_raw.py` 落的状态副档
+    #      `evidence/<T>_<date>.edgar.json`（消费逻辑见 build() 末尾）。
+    #    实测：SKHY 的 CIK 0002120882 的 companyfacts **只含 `ffd` 税种 5 个概念**
+    #    （全是**申报费披露**），**无 us-gaap / ifrs-full** ⇒ 外国私人发行人无
+    #    US-GAAP XBRL，13 项核心科目**全部无法独立核验** ⇒ 每个财务数字都是单一来源。
+    "edgar_raw": {"kw": ["edgar_raw", "SEC 核验", "独立核验", "单一来源", "结构性缺失"],
+                  "cls": "A", "decisive": True,
+                  "blocks": "全部财务数字**只有单一来源**（供应商快照）而无法独立核验 ⇒ "
+                            "任何「利润 / 负债 / 现金流」类论断都缺少第二信源背书",
+                  "remedy": "跑 `_verify_edgar_raw.py <T> <date>`；若为外国私人发行人，"
+                            "必须打开 companyfacts 缓存看**税种键**（无 us-gaap 即结构性不可得，"
+                            "反复重试无意义）",
+                  "fallback": "交易所 / 供应商口径（**与快照同源，不构成独立核验**）；"
+                              "公司 IR 原始财报（人工核验）"},
+    # ⚠️ 2026-10-12 新增（GOOG 轮）。与 `edgar_raw` **同族**：都是「**手工触发的一步**，
+    #    结论原本只存在于终端输出里」⇒ 简报作者忘写，就没有任何门禁能发现。
+    #    发射方 = `_verify_earnings_quality.py --tickers <T> --as-of <date>` 落的
+    #    `evidence/<T>_<date>.earnings.json`（消费逻辑见 build() 末尾）。
+    #    实测 GOOG：非经营/非常规收益占 TTM 净利 **60.9%** ⇒ 报表 PE(TTM) 17.4x
+    #    被抬到经营性 **44.6x**（这正是铁律 40 记录的 GOOG 事件）。
+    #    注意：这不是「数据缺失」，而是**报表数字本身被扭曲** ⇒ 与 `forward_eps` 同类，
+    #    判 **C**（vendor 派生字段不可信），而不是 A（上游真缺）。
+    "earnings_quality": {"kw": ["earnings_quality", "收益质量", "非经营", "经营性 PE", "浮盈"],
+                         "cls": "C", "decisive": True,
+                         "blocks": "报表净利被一次性 / 非经营项目抬高 ⇒ **报表 PE 不是可信的"
+                                   "估值锚点**，「便宜」类论断在改用经营性口径重算前不成立",
+                         "remedy": "跑 `_verify_earnings_quality.py --tickers <T> --as-of <date>`；"
+                                   "判 FAIL 时必须扣非、重算经营性 PE 之后再与同业比较",
+                         "fallback": "经营性 PE = 市值 ÷（TTM 净利 − TTM 非经营 / 非常规收益）"
+                                     "（**与报表 PE 口径不同，引用须分别声明**）"},
+
+    # ⚠️ 2026-10-17 新增（CBOE 期权源接入配套）。**这一条不是「数据缺失」，而是「口径位移」。**
+    #    背景：yfinance 的期权链只在美东 09:30–16:00 实时刷新，盘前/盘后只返回上一交易日的
+    #    残留挂单（`bid`/`ask` 格式合法但 `lastTradeDate` 陈旧数周）⇒ 期权维度整体不可用。
+    #    对策：非盘中时段自动切 **CBOE 官方延迟报价**（做市商报价链，不依赖「当天有没有成交」）
+    #    ⇒ 盘前仍能重建完整期限结构（实测 17/17 个到期日可算 ATM IV）。
+    #    ⚠️ 但它**拿的是上一时段收盘快照，不是实时报价**：
+    #      · CBOE 延长时段（GTH 20:15–09:25）仅覆盖 SPX/SPXW/XSP，**不含股票与 ETF 期权**
+    #        ⇒ 盘前拿到的成交**必然止于上一交易日**（市场本身没成交，非接口缺陷）；
+    #      · 接口本身还有 **15 分钟延迟**（路径即 `delayed_quotes`）。
+    #    ⇒ 判 **B 类**（非上游真缺、非阈值误伤，而是受「采集时点」影响的口径位移），
+    #      但 **decisive=True** —— 因为它挡掉的是「此刻/盘中」这一类论断：期权读数相对
+    #      报告基准日的价格数据**旧一个交易日**，跨时点不可比（铁律 1、铁律 36）。
+    #      凡引用 IV / 偏斜 / 期限结构，**必须写明来源为 CBOE 延迟报价并标注其快照时点**。
+    #    ⇒ 检测源 = 证据包「采集时点」行（`_should_use_cboe_source()` 写入的 session_note）
+    #      中含「切 CBOE 官方延迟报价」⇒ 无需新增副档，避免副档与证据包各自漂移。
+    "CBOE_fallback_used": {
+        "kw": ["CBOE", "CBOE_fallback_used", "官方延迟报价", "delayed_quotes",
+               "上一时段收盘快照", "交易所模型"],
+        "cls": "B", "decisive": True,
+        "blocks": "期权 IV / 偏斜 / 期限结构来自 **CBOE 官方延迟报价的上一时段收盘快照**"
+                  "（非实时报价）⇒ **不可用于「此刻 / 盘中」的任何期权论断**，"
+                  "也不得与盘中 yfinance 口径的 IV 跨轮直接比较（跨时点不可比）；"
+                  "**收盘级分析（下行保护成本、事件定价位置）仍可用**",
+        "remedy": "若必须拿到实时期权读数，改在美东 09:30–16:00 常规时段重采（走 yfinance 主源）；"
+                  "否则接受「上一时段快照」并在简报中声明来源与快照时点",
+        "fallback": "收盘级 IV / 偏斜 / 期限结构（**CBOE 交易所模型口径，"
+                    "与项目自建 BSM 反解数值不可混用**）；波动率环境代理 ^VIX / ^VXN"},
 }
 
 BODY_NOTE = {"stale": "报价陈旧（超过新鲜度闸门）", "unavailable": "通道不可用", "missing": "无数据",
@@ -182,8 +304,11 @@ def parse_evidence(ticker: str, date: str) -> dict:
             channels.append((name.strip(), status.strip() or "unavailable"))
     # §3 被上游扣留 = 事实上的 profile 缺口
     withheld = bool(re.search(r"Profile fundamentals are withheld", t))
+    # ★ 2026-10-17：期权是否走了 CBOE 延迟报价回退（非盘中采集）。
+    #   判据是采集器写进证据包的「采集时点」行 —— **不新增副档**，避免副档与证据包各自漂移。
+    cboe_fallback = bool(re.search(r"切\s*CBOE\s*官方延迟报价", t))
     return {"n_ok": n_ok, "n_total": n_tot, "channels": channels, "profile_withheld": withheld,
-            "path": p.relative_to(ROOT).as_posix()}
+            "cboe_fallback": cboe_fallback, "path": p.relative_to(ROOT).as_posix()}
 
 
 def build(ticker: str, date: str) -> dict:
@@ -216,6 +341,109 @@ def build(ticker: str, date: str) -> dict:
             gaps.append({"channel": "profile (§3 快照)", "status": "withheld", "cls": rule["cls"],
                          "decisive": rule["decisive"], "blocks": rule["blocks"], "remedy": rule["remedy"],
                          "fallback": rule["fallback"], "label": "profile", "kw": rule["kw"]})
+
+    # —— 快照内部自洽性（2026-10-09 新增）——
+    # 上面那条循环只覆盖「通道健康度」里明确报 failed 的项。还有一类失真它永远抓不到：
+    # **调用成功、内容非空、格式合法，但数值与同一份快照的基点互相矛盾**（NVDA 的 Forward EPS）。
+    # 这是铁律 26（序关系/恒等式）在「估值快照」侧的对应物，必须由独立检测器来做。
+    # ⇒ 放在这里，使每一轮、每一个标的都自动受检，而不是靠人记得跑一次。
+    try:
+        from _verify_snapshot_consistency import check as _check_snapshot
+    except ImportError:  # 以包方式被导入时的回退
+        from wb_analysis._verify_snapshot_consistency import check as _check_snapshot
+    for f in _check_snapshot(ticker, date):
+        rule = RULES.get(f["label"], {})
+        gaps.append({
+            "channel": f"snapshot:{f['label']}",
+            "status": f["severity"],
+            "cls": rule.get("cls", "C"),
+            "decisive": bool(rule.get("decisive", True)),
+            "blocks": rule.get("blocks", f["detail"]),
+            "remedy": rule.get("remedy", "用 SEC 自算 TTM 交叉验证后再决定是否引用"),
+            "fallback": rule.get("fallback", "SEC 自算 TTM 口径的倍数"),
+            "label": f["label"],
+            "kw": rule.get("kw", [f["label"]]),
+            "note": f["detail"],
+        })
+
+    # —— SEC 独立核验状态（2026-10-11 新增，O4）——
+    # `edgar_raw` 不是采集通道 ⇒ 上面两个循环都覆盖不到它（见 RULES 里的长注释）。
+    # 唯一的发射方是 `_verify_edgar_raw.py` 落的状态副档；**副档不存在时按「未执行」处理
+    # 且不产生缺口** —— 因为对指数 / ETF 这类标的 EDGAR 本就不适用，
+    # 强行报缺口会把「不适用」误报成「缺失」。
+    _sc = EVID / f"{ticker}_{date}.edgar.json"
+    if _sc.exists():
+        try:
+            _st = json.loads(_sc.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — 副档坏掉不该阻断台账
+            _st = None
+        if _st and _st.get("status") != "verified":
+            _rule = RULES["edgar_raw"]
+            _stat = _st.get("status")
+            # status → (cls, decisive)：数字对不上是 C 类硬伤；结构性不可得是 A 类；
+            # 采集失败是 B 类（可重试）；部分缺失是 A 类但不阻断方向。
+            _cls, _dec = {
+                "mismatch": ("C", True),
+                "taxonomy_missing": ("A", True),
+                "partial": ("A", False),
+                "fetch_failed": ("B", False),
+            }.get(_stat, ("A", False))
+            gaps.append({
+                "channel": "edgar_raw", "status": _stat,
+                "cls": _cls, "decisive": _dec,
+                "blocks": _rule["blocks"], "remedy": _rule["remedy"],
+                "fallback": _rule["fallback"], "label": "edgar_raw", "kw": _rule["kw"],
+                "note": _st.get("detail", ""),
+            })
+        elif _st:
+            # verified：登记为**已解决**，使「核验过了」在台账里也有一行可查
+            _rule = RULES["edgar_raw"]
+            gaps.append({
+                "channel": "edgar_raw", "status": "resolved", "cls": _rule["cls"],
+                "decisive": False, "blocks": _rule["blocks"], "remedy": _rule["remedy"],
+                "fallback": _rule["fallback"], "label": "edgar_raw", "kw": _rule["kw"],
+                "resolved_by": _sc.relative_to(ROOT).as_posix(),
+                "note": _st.get("detail", ""),
+            })
+
+    # —— 收益质量闸门状态（2026-10-12 新增，与 edgar_raw 同族）———————
+    # Q5 是手工触发的一步，其结论原本只在终端里 ⇒ 必须由副档发射进台账，
+    # 否则「报表 PE 被浮盈抬高」这件会**改写结论方向**的事可以无声漏掉。
+    _eq = EVID / f"{ticker}_{date}.earnings.json"
+    if _eq.exists():
+        try:
+            _eqst = json.loads(_eq.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            _eqst = None
+        if _eqst and _eqst.get("status") in ("FAIL", "WARN"):
+            _rule = RULES["earnings_quality"]
+            _is_fail = _eqst.get("status") == "FAIL"
+            gaps.append({
+                "channel": "earnings_quality", "status": _eqst.get("status"),
+                "cls": _rule["cls"], "decisive": _is_fail,
+                "blocks": _rule["blocks"], "remedy": _rule["remedy"],
+                "fallback": _rule["fallback"], "label": "earnings_quality",
+                "kw": _rule["kw"], "note": _eqst.get("detail", ""),
+            })
+    # —— CBOE 延迟报价回退（2026-10-17 新增，CBOE 期权源接入配套）——
+    # 这一条与 `edgar_raw` / `earnings_quality` 同族：都是「**不在通道健康度里表达的**」
+    # 信息，必须由独立发射方送进台账，否则下游看不见。
+    # 为什么 case 是「有缺口」而不是「无缺口」：CBOE 回退拿的是**上一时段收盘快照**，
+    # 不是实时报价 ⇒ 期权读数与报告基准日的价格数据**旧一个交易日**，属**跨时点口径位移**。
+    # 若不在台账里出现一行，下游就会把「昨日快照」当作「此刻读数」引用 —— 这正是铁律 1/36
+    # 反复踩过的那类错误（铁律 36：期权信号会被采集时点反向改写）。
+    if info.get("cboe_fallback"):
+        _rule = RULES["CBOE_fallback_used"]
+        gaps.append({
+            "channel": "CBOE_fallback_used", "status": "used",
+            "cls": _rule["cls"], "decisive": _rule["decisive"],
+            "blocks": _rule["blocks"], "remedy": _rule["remedy"],
+            "fallback": _rule["fallback"], "label": "CBOE_fallback_used", "kw": _rule["kw"],
+            "note": "非盘中采集 ⇒ 期权走 CBOE 官方延迟报价；"
+                    "所取 IV / 偏斜 / 期限结构为**上一时段收盘快照**（15 分钟延迟），"
+                    "与项目自建 BSM 反解口径**不可混用**。",
+        })
+
     return {"ticker": ticker, "as_of": date, "evidence": info["path"],
             "channels_ok": info["n_ok"], "channels_total": info["n_total"],
             "gaps": gaps,

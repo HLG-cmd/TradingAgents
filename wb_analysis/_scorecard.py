@@ -16,7 +16,7 @@
 | `channels_ok` / `channels_total` | 证据包通道完整度 | 高 |
 | `decisive_gaps` | **决定性缺口数** | 低 |
 | `gap_declared` | 关键缺口是否写进简报（防止下游看不见洞） | 是 |
-| `verif_marks` | 报告里出现的独立核验来源数（Nasdaq/SEC/EDGAR/官方…） | 高 |
+| `verif_marks` | 报告里命中的**独立核验来源类别数**（SEC/EDGAR · Nasdaq · 官方/交易所 · 自算 · FRED · 行情源 · 独立核验，共 7 类） | 高 |
 | `honest_marks` | 显式"数据缺失/不可得/无法判定"声明数（诚实度） | 高 |
 | `conditional` | 是否含**条件式结论**（"若…则…"） | 是 |
 | `traceable` | 是否有 `RUN.json` + `_source.zip`（可追溯/可验证） | 是 |
@@ -29,6 +29,7 @@
   ./.venv/Scripts/python.exe wb_analysis/_scorecard.py --trend    # 只看趋势
 """
 import argparse
+import csv as _csv
 import json
 import re
 import sys
@@ -37,14 +38,48 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+# ★ 2026-10-10：`TREE_RE` / 功能目录集原为本地字面量，与 `_reports_index.py` 逐字重复
+#   ⇒ 单一来源 `wb_analysis/_paths.py`。
+from wb_analysis._paths import FUNC_DIRS, TREE_RE, iter_report_trees  # noqa: E402
+
 REPORTS = ROOT / "reports"
 CSV = REPORTS / "QUALITY.csv"
-SKIP = {"_datasets", "_other", "_archive", "_audit"}
-TREE_RE = re.compile(r"^([A-Za-z0-9.\-]+)_(\d{8})_(\d{6})$")
+SKIP = FUNC_DIRS
 
-VERIF_WORDS = ("Nasdaq 官方", "SEC EDGAR", "SEC 申报", "官方 API", "EDGAR", "官方数据", "computed", "自算")
+# ★ 2026-10-10 复盘：此前是 8 个**字面短语**（"SEC EDGAR" / "Nasdaq 官方" …），
+#   而各席位在正文里统一写 "SEC"、写 "自算" ⇒ 只命中 1/8：属**低判别力代理指标**
+#   （假阴性 —— 明明引了 EDGAR，指标却几乎不动）。改为按「**关键词族**」计数：
+#   同一来源的多种写法算作一类，输出 0–7 的**类别数**，逐轮趋势才有意义。
+VERIF_FAMILIES = (
+    ("SEC/EDGAR", re.compile(r"SEC|EDGAR|10-K|10-Q|8-K")),
+    ("Nasdaq", re.compile(r"Nasdaq|NASDAQ|纳斯达克")),
+    ("官方/交易所", re.compile(r"官方|交易所|exchange")),
+    ("自算/机算", re.compile(r"自算|机算|computed|自行计算|自行复算|本工具")),
+    ("FRED", re.compile(r"FRED")),
+    ("行情源", re.compile(r"yfinance|Yahoo|行情源|数据源|东方财富|同花顺")),
+    ("独立核验", re.compile(r"独立核验|第三方核验|独立来源|已核验|交叉核验")),
+)
 HONEST_WORDS = ("数据缺失", "不可得", "无法判定", "未提供", "不可估计", "缺失项", "不可用", "无数据")
 COND_WORDS = ("若", "如果", "条件式", "则改为", "则倾向")
+
+
+def _load_existing_csv(csv_path: Path) -> dict[str, dict[str, str]]:
+    """读取已有 QUALITY.csv 作为 `_source.zip` 离线时的回退缓存（以 tree 名为键）。"""
+    if not csv_path.exists():
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    try:
+        with csv_path.open(encoding="utf-8", newline="") as f:
+            for row in _csv.DictReader(f):
+                tr_name = (row.get("tree") or "").strip()
+                if tr_name and TREE_RE.match(tr_name):
+                    out[tr_name] = row
+    except Exception:  # noqa: BLE001
+        return {}
+    return out
 
 
 def read_zip_texts(zp: Path) -> tuple[str, dict]:
@@ -73,7 +108,7 @@ def read_zip_texts(zp: Path) -> tuple[str, dict]:
     return "\n".join(blob), key
 
 
-def score_tree(tr: Path) -> dict:
+def score_tree(tr: Path, prev_cache: dict[str, dict[str, str]] | None = None) -> dict:
     m = TREE_RE.match(tr.name)
     ticker = m.group(1) if m else tr.name.split("_")[0]
     files = [p for p in tr.rglob("*") if p.is_file()]
@@ -85,13 +120,14 @@ def score_tree(tr: Path) -> dict:
             run = json.loads((tr / "RUN.json").read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             run = {}
-    blob, key = read_zip_texts(tr / "_source.zip")
+    zp = tr / "_source.zip"
+    blob, key = read_zip_texts(zp)
 
     # 证据包通道完整度：从审计包里的证据 md 找「成功: N/M」
     ch = re.search(r"成功:\s*(\d+)\s*/\s*(\d+)", blob)
     gaps = key.get("gaps") or {}
     decisive = gaps.get("decisive_count")
-    if decisive is None:
+    if decisive is None and zp.exists():
         decisive = len([g for g in (gaps.get("gaps") or []) if g.get("decisive")])
     # 关键缺口是否在简报里声明（用台账的 kw 校验，与门禁同一口径）
     gap_declared = ""
@@ -101,20 +137,37 @@ def score_tree(tr: Path) -> dict:
         if brief:
             miss = [g for g in dec if not any(k in brief for k in (g.get("kw") or [g.get("label", "")]))]
             gap_declared = "no" if miss else "yes"
+
+    channels_ok: int | str = int(ch.group(1)) if ch else ""
+    channels_total: int | str = int(ch.group(2)) if ch else ""
+    traceable = "yes" if (tr / "RUN.json").exists() and (zp.exists() or (tr / "SOURCE_MANIFEST.json").exists()) else ""
+
+    # 若当前为剔除二进制 `_source.zip` 的轻量归档副本，从既有 QUALITY.csv 或 RUN.json 回填审计包指标
+    prev = (prev_cache or {}).get(tr.name) or {}
+    if not zp.exists() and prev:
+        if channels_ok == "" and prev.get("channels_ok", "").isdigit():
+            channels_ok = int(prev["channels_ok"])
+        if channels_total == "" and prev.get("channels_total", "").isdigit():
+            channels_total = int(prev["channels_total"])
+        if decisive is None and prev.get("decisive_gaps", "").isdigit():
+            decisive = int(prev["decisive_gaps"])
+        if not gap_declared and prev.get("gap_declared"):
+            gap_declared = prev["gap_declared"]
+
     return {
         "ticker": ticker,
         "tree": tr.name,
         "data_date": run.get("data_date", ""),
         "n_files": len(files),
         "report_chars": len(report),
-        "channels_ok": int(ch.group(1)) if ch else "",
-        "channels_total": int(ch.group(2)) if ch else "",
+        "channels_ok": channels_ok,
+        "channels_total": channels_total,
         "decisive_gaps": decisive if decisive is not None else "",
         "gap_declared": gap_declared,
-        "verif_marks": sum(1 for w in VERIF_WORDS if w in report),
+        "verif_marks": sum(1 for _n, rx in VERIF_FAMILIES if rx.search(report)),
         "honest_marks": sum(1 for w in HONEST_WORDS if w in report),
         "conditional": "yes" if sum(1 for w in COND_WORDS if w in report) >= 2 else "",
-        "traceable": "yes" if (tr / "RUN.json").exists() and (tr / "_source.zip").exists() else "",
+        "traceable": traceable,
         "scored_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
 
@@ -125,12 +178,10 @@ COLS = ["ticker", "data_date", "tree", "n_files", "report_chars", "channels_ok",
 
 
 def collect() -> list[dict]:
-    rows = []
-    if not REPORTS.exists():
-        return rows
-    for tk in sorted(d for d in REPORTS.iterdir() if d.is_dir() and d.name not in SKIP):
-        for tr in sorted(x for x in tk.iterdir() if x.is_dir()):
-            rows.append(score_tree(tr))
+    # ★ 2026-10-15 修：使用 `iter_report_trees(REPORTS)`（强制校验 `TREE_RE.match(tr.name)`），
+    #   防止 `reports/SKHY/_archive` 等非报告树子目录被当成报告树打分并产生 `ticker=""` 的脏行。
+    prev_cache = _load_existing_csv(CSV)
+    rows = [score_tree(tr, prev_cache) for _tk, tr in iter_report_trees(REPORTS)]
     return sorted(rows, key=lambda r: (r["ticker"], r["data_date"], r["tree"]))
 
 

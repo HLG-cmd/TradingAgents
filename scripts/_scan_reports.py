@@ -18,6 +18,10 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from wb_analysis._paths import FUNC_DIRS, TREE_RE, iter_report_trees  # noqa: E402
+
 REPORTS = ROOT / "reports"
 
 # assemble.py 的 12 角色必需文件（相对报告树）
@@ -51,15 +55,21 @@ def tree_info(d: Path) -> dict:
     cr = d / "complete_report.md"
     cr_chars = len(cr.read_text(encoding="utf-8")) if cr.exists() else 0
     ratings = {}
-    meta = d / "meta.json"
-    if meta.exists():
-        try:
-            ratings = json.loads(meta.read_text(encoding="utf-8")).get("ratings", {})
-        except Exception:  # noqa: BLE001
-            ratings = {"_error": "meta.json 解析失败"}
+    for mf in ("RUN.json", "meta.json"):
+        mp = d / mf
+        if mp.exists():
+            try:
+                ratings = json.loads(mp.read_text(encoding="utf-8")).get("ratings", {})
+                if ratings:
+                    break
+            except Exception:  # noqa: BLE001
+                ratings = {"_error": f"{mf} 解析失败"}
+    m = TREE_RE.match(d.name)
+    ticker = m.group(1) if m else d.parent.name
     return {
+        "ticker": ticker,
         "dir": d.name,
-        "mtime": datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+        "mtime": datetime.fromtimestamp((cr if cr.exists() else d).stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
         "n_files": len(files),
         "size_kb": round(size / 1024, 1),
         "complete_report_chars": cr_chars,
@@ -76,31 +86,16 @@ def main() -> int:
     print("reports/ 只读盘点（不修改任何文件）")
     print("=" * 100)
 
-    dirs = sorted([d for d in REPORTS.iterdir() if d.is_dir()], key=lambda d: d.name)
-    rows = []
-    for d in dirs:
-        if d.name.startswith("_"):
-            continue
-        if not re.search(r"_\d{8}_\d{6}$", d.name):
-            # 非标准报告树（如 SCREEN_REVIEW_... / STORAGE_3WAY_...）
-            info = {
-                "dir": d.name, "mtime": datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
-                "n_files": len([p for p in d.rglob("*") if p.is_file()]),
-                "size_kb": round(sum(p.stat().st_size for p in d.rglob("*") if p.is_file()) / 1024, 1),
-                "complete_report_chars": 0, "roles_present": 0, "roles_missing": ["(非 12 角色报告树)"],
-                "ratings": {}, "has_brief": False,
-                "extra_top": sorted({p.name for p in d.iterdir() if p.is_file()}),
-            }
-            rows.append(info)
-            continue
-        rows.append(tree_info(d))
+    # ★ 2026-10-15 修：使用 `iter_report_trees(REPORTS)` 扫描二级目录 `reports/<标的>/<树>/`，
+    #   修复此前按旧扁平布局扫描顶层导致全部标的目录被误判为「非 12 角色报告树」的缺陷。
+    rows = [tree_info(tr) for _tk, tr in iter_report_trees(REPORTS)]
 
-    print(f"\n共 {len(rows)} 个目录\n")
+    print(f"\n共 {len(rows)} 棵报告树\n")
     print(f"{'目录':34s} {'修改时间':17s} {'文件':>5s} {'KB':>8s} {'完整报告字符':>12s} {'角色':>5s}  评级")
     print("-" * 118)
     dup = {}
     for r in rows:
-        ticker = r["dir"].split("_")[0]
+        ticker = r["ticker"]
         dup.setdefault(ticker, []).append(r["dir"])
         flag = "" if r["roles_present"] == 12 else "  ← 不完整"
         rat = "/".join(str(v) for v in r["ratings"].values()) or "—"
@@ -108,7 +103,7 @@ def main() -> int:
               f"{r['complete_report_chars']:12d} {r['roles_present']:5d}  {rat}{flag}")
 
     print("\n" + "=" * 100)
-    print("★ 同一标的多次运行（候选：保留最新，其余归档）")
+    print("★ 同一标的多次运行（按历史轮次排列）")
     print("=" * 100)
     for t, ds in sorted(dup.items()):
         if len(ds) > 1:
@@ -119,15 +114,15 @@ def main() -> int:
     print("\n" + "=" * 100)
     print("★ 顶层散落文件（不在任何报告树内）")
     print("=" * 100)
-    loose = [p for p in REPORTS.iterdir() if p.is_file()]
+    loose = [p for p in REPORTS.iterdir() if p.is_file()] if REPORTS.exists() else []
     for p in sorted(loose, key=lambda x: x.name):
         print(f"  {p.name:52s} {p.stat().st_size/1024:8.1f} KB  "
-              f"{datetime.fromtimestamp(p.stat().st_mtime):%Y-%m-%d %H:%M}")
+                  f"{datetime.fromtimestamp(p.stat().st_mtime):%Y-%m-%d %H:%M}")
 
     print("\n" + "=" * 100)
-    print("★ 已存在的归档目录")
+    print("★ 已存在的功能/归档目录")
     print("=" * 100)
-    for name in ("_archive", "_audit"):
+    for name in sorted(FUNC_DIRS):
         d = REPORTS / name
         if d.is_dir():
             n = len([p for p in d.rglob("*") if p.is_file()])

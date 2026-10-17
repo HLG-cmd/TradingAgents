@@ -45,8 +45,14 @@ Q3/Q4 只看得见「税收」这一条扭曲路径。GOOG 的报表 PE(TTM) 17.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import pandas as pd
 
@@ -100,6 +106,41 @@ def _at(s, i=0):
     return None if pd.isna(v) else float(v)
 
 
+def _quarterly_unreliable(q, inc) -> bool:
+    """季度序列是否与年报对账失败（⇒ 不可作为 TTM 合计的基础）。
+
+    ★ 2026-10-15 立（SKHY 事件）：`yfinance` 对**外国私人发行人**可能返回
+    **累计（YTD）/ 错标期间**的「季度」数据。实测 SKHY：
+
+        季度列 2026-06-30  营收 79.319T   ← 单季
+        年报   FY2025      营收 97.147T   ← 全年
+        ⇒ 单季 / 全年 = **81.6%**，结构上不可能
+
+    若据此合计 4 季，会算出「非经营/净利 **+30.0%**」的**假 FAIL**
+    —— 而年报口径实为 **−19.8%**（方向相反，按「只挡抬高方向」规则本不该触发）。
+
+    判据（按铁律 10「设阈值先测三个数」）：
+      · 正常离散季度：单季约占全年 20%~35%（季节性极端可到 40%）；
+      · 错标 / 累计数据：单季可达全年的 60%~100%；
+      ⇒ 取 **0.5** 落在两者之间（正常侧留 1.25 倍余量，异常侧留 1.2 倍余量）。
+    另加一条更宽的兜底：4 季合计 > **1.8 ×** 年报 ⇒ 亦判不可用。
+    """
+    try:
+        qr = _series(q, "Total Revenue", "Operating Revenue")
+        ar = _series(inc, "Total Revenue", "Operating Revenue")
+        a0 = _at(ar, 0)
+        if qr is None or not a0 or a0 <= 0:
+            return False
+        vals = [v for v in (_at(qr, i) for i in range(4)) if v is not None]
+        if not vals:
+            return False
+        if max(vals) > 0.5 * a0:
+            return True
+        return sum(vals) > 1.8 * a0
+    except Exception:
+        return False
+
+
 def analyze_one(ticker: str, pe_tolerance: float = PE_TOLERANCE) -> dict:
     """返回该标的的收益质量指标与判定。任何抓取失败都返回 ok=False，不抛异常。"""
     rec: dict = {"ticker": ticker, "note": ""}
@@ -125,7 +166,13 @@ def analyze_one(ticker: str, pe_tolerance: float = PE_TOLERANCE) -> dict:
         rec_ni_ttm = None
         try:
             q = tk.quarterly_income_stmt
-            gq = _series(q, "Gain On Sale Of Security", "Gain On Sale Of Security 1")
+            # ★ 2026-10-15：季度序列必须先与年报对账；不一致即整段降级到 FY 口径。
+            #   否则外国发行人的累计/错标数据会造出假 FAIL（见 `_quarterly_unreliable`）。
+            if _quarterly_unreliable(q, inc):
+                raise ValueError("quarterly series unreconciled with annual revenue")
+            gq = _series(q, "Total Unusual Items", "Gain On Sale Of Security",
+                         "Gain On Sale Of Business", "Gain On Sale Of Security 1",
+                         "Special Income Charges")
             nq = _series(q, "Net Income", "Net Income Common Stockholders")
             if gq is not None and nq is not None:
                 g4 = [_at(gq, i) for i in range(4)]
@@ -142,7 +189,8 @@ def analyze_one(ticker: str, pe_tolerance: float = PE_TOLERANCE) -> dict:
             pass
         if gain_ttm is None:
             # 降级到年报（不聚合季度时至少能拦住常年性的浮盈）
-            g_a = _at(_series(inc, "Gain On Sale Of Security"))
+            g_a = _at(_series(inc, "Total Unusual Items", "Gain On Sale Of Security",
+                              "Gain On Sale Of Business", "Special Income Charges"))
             if g_a is not None and ni and ni > 0:
                 gain_ttm, gain_ni_share, gain_src = g_a, g_a / ni, "FY"
 
@@ -167,6 +215,17 @@ def analyze_one(ticker: str, pe_tolerance: float = PE_TOLERANCE) -> dict:
             ni_margin=(ni / rev if (ni and rev) else None),
             sbc_oi=(sbc / oi if (sbc and oi and oi > 0) else None),
             pe_rep=(mc / ni if (mc and ni and ni > 0) else None),
+            # ★★ 2026-10-12 新增（GOOG 轮实测）：**TTM 口径**的报表 PE。
+            #   起因：下面的 `pe_ex_gain` 用的是 **TTM 净利**（`rec_ni_ttm`），
+            #   而 `pe_rep` 用的是 **FY 净利** ⇒ 二者并排展示时**口径不同**，
+            #   读者会把「报表PE 32.2x → 剥离浮盈后 44.6x」当成同一口径下的对比，
+            #   而真实同口径对比是「PE(TTM) 17.4x → 44.6x」。
+            #   这个口径错配恰好让本工具的输出与铁律 40 记录的
+            #   「17.29x → 44.09x」对不上 —— 工具与人记的两个数不一致，根因在此。
+            #   ⇒ `pe_rep` 继续保留 FY 口径（Q4 正常化一致性闸门的对照物 `pe_norm`
+            #     也是 FY 口径，两者**必须同口径**才能比），
+            #     另立 `pe_ttm` 专供「剥离浮盈」一侧做同口径比较。
+            pe_ttm=(mc / rec_ni_ttm if (mc and rec_ni_ttm and rec_ni_ttm > 0) else None),
             pe_norm=(mc / norm_ni if (mc and norm_ni and norm_ni > 0) else None),
             mc_fcf_sbc=(mc / (fcf - sbc) if (mc and fcf and sbc is not None and (fcf - sbc) > 0) else None),
             gain_ttm=gain_ttm,
@@ -206,13 +265,13 @@ def analyze_one(ticker: str, pe_tolerance: float = PE_TOLERANCE) -> dict:
     if pe_rep and pe_norm and pe_norm > pe_rep * pe_tolerance:
         fails.append(f"正常化PE偏离 {pe_rep:.1f}x→{pe_norm:.1f}x")
 
-    # 硬 4：非经营收益（证券处置/公允价值变动）占净利过高 —— Q5 闸门
+    # 硬 4：非经营/非常规收益（证券处置/业务出售/重组等）占净利过高 —— Q5 闸门
     #   与硬 1~3 单向一致：只挡「报表被**抬高**」方向（gain 为正才算）。
     #   若 gain 为负（浮亏拖低净利），报表 PE 是**偏高**的，不属本闸门管辖。
     g_share, g_ttm, g_src = rec.get("gain_ni_share"), rec.get("gain_ttm"), rec.get("gain_src")
     if g_share is not None and g_ttm is not None and g_ttm > 0:
         if g_share >= GAIN_SECURITY_FAIL:
-            fails.append(f"非经营证券收益占净利 {g_share*100:.0f}%（{g_src}）")
+            fails.append(f"非经营/非常规收益占净利 {g_share*100:.0f}%（{g_src}）")
         elif g_share >= GAIN_SECURITY_WARN:
             rec.setdefault("_soft_gain", True)
 
@@ -227,7 +286,7 @@ def analyze_one(ticker: str, pe_tolerance: float = PE_TOLERANCE) -> dict:
     if mfs is not None and mfs > MC_FCF_SBC_WARN:
         warns.append(f"市值/(FCF−SBC) {mfs:.0f}x")
     if rec.pop("_soft_gain", False):
-        warns.append(f"非经营证券收益占净利 {g_share*100:.0f}%（{g_src}，未达 {GAIN_SECURITY_FAIL*100:.0f}% 硬线）")
+        warns.append(f"非经营/非常规收益占净利 {g_share*100:.0f}%（{g_src}，未达 {GAIN_SECURITY_FAIL*100:.0f}% 硬线）")
 
     rec["tax_share"] = tax_share
     rec["reasons"] = fails
@@ -242,6 +301,32 @@ def _fmt(v, pct=False, suf="x", nd=1):
     return f"{v*100:+.{nd}f}%" if pct else f"{v:.{nd}f}{suf}"
 
 
+#: PE / 市值倍数的**合理区间**。落在区间外**不是**「特别便宜/特别贵」，
+#: 而是「**分子分母口径不一致**」的量化标记（铁律 11 的同型：
+#: 坏值不越界，而是在逻辑上不成立）。
+#:
+#: ★ 2026-10-12 立（SKHY 实测）：`mc` 取自 `yfinance.info`（**美元**），
+#: 而 `ni`/`rev` 取自报表（**韩元**）⇒ `mc/ni = 0.0074`，
+#: 而旧版把它格式化成 **`0.0x`** —— 一个**看起来像真倍数的假数**，
+#: 比报 `—` 危险得多（铁律 3「静默失败」：外观正常 + 数值不可用）。
+#: ⇒ 落在区间外一律显示 `⚠口径异常`，并置 `pe_caliber_warn` 供下游识别。
+PE_SANE: tuple[float, float] = (1.0, 1000.0)
+
+
+def _fmt_pe(v) -> str:
+    """PE 类倍数的显示：**区间外不显示数字**，显示口径异常的标记。"""
+    if v is None:
+        return "—"
+    if not (PE_SANE[0] <= v <= PE_SANE[1]):
+        return "⚠口径异常"
+    return f"{v:.1f}x"
+
+
+def _pe_bad(*vals) -> bool:
+    """是否**任一** PE 类读数落在合理区间外（⇒ 分子分母口径不一致）。"""
+    return any(v is not None and not (PE_SANE[0] <= v <= PE_SANE[1]) for v in vals)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="收益质量验证器（负税 / 正常化偏离）")
     ap.add_argument("--from-radar", help="雷达 CSV 路径；配合 --top 取前 N 只")
@@ -250,6 +335,13 @@ def main() -> int:
     ap.add_argument("--pe-tolerance", type=float, default=PE_TOLERANCE,
                     help=f"正常化PE/报表PE 的容忍上限（默认 {PE_TOLERANCE}）")
     ap.add_argument("--exit-on-fail", action="store_true", help="存在 FAIL 时退出码 2（CI 用）")
+    # ★ 2026-10-12 新增：把判定落成**状态副档** `evidence/<T>_<date>.earnings.json`，
+    #   供 `_gap_ledger.py` 消费。起因与 edgar_raw 完全同族：
+    #   Q5 是**手工触发**的一步，它的结论此前只存在于终端输出里 ——
+    #   简报作者忘了写、门禁就永远抓不到，属于「检测器看着在工作、其实什么也没检」。
+    #   给了 `--as-of` 才落盘（不传则行为不变，向后兼容）。
+    ap.add_argument("--as-of", default=None, metavar="YYYY-MM-DD",
+                    help="基准日；给了它就把每只的判定落成 evidence/<T>_<date>.earnings.json")
     args = ap.parse_args()
 
     if args.tickers:
@@ -281,11 +373,14 @@ def main() -> int:
         if i % 20 == 0 or i == len(tickers):
             print(f"  ...已分析 {i}/{len(tickers)}", file=sys.stderr)
 
-    hdr = (f"{'代码':7s}{'有效税率':>11s}{'税收/净利':>10s}{'非经营/净利':>12s}{'报表PE':>9s}"
-           f"{'经营性PE':>10s}{'经营利润率':>11s}{'SBC/经营利润':>12s}{'市值/(FCF-SBC)':>15s}  判定")
+    # ⚠️ 两列 PE 口径不同、**不可互相比较**（2026-10-12 加标注）：
+    #    `报表PE(FY)` 用年报净利（与 `正常化PE` 同口径，供 Q4 闸门比对）；
+    #    `PE(TTM)` 用滚动四季净利（与「非经营/净利」同一口径）。
+    hdr = (f"{'代码':7s}{'有效税率':>11s}{'税收/净利':>10s}{'非经营/净利':>12s}{'报表PE(FY)':>12s}"
+           f"{'PE(TTM)':>10s}{'经营性PE':>10s}{'经营利润率':>11s}{'SBC/经营利润':>12s}{'市值/(FCF-SBC)':>15s}  判定")
     print()
     print(hdr)
-    print("-" * 130)
+    print("-" * 140)
     fails, warns = [], []
     for r in recs:
         if "reasons" not in r:
@@ -297,22 +392,37 @@ def main() -> int:
             warns.append(r)
         verdict = "FAIL: " + " / ".join(r["reasons"]) if r["reasons"] else (
             "WARN: " + " / ".join(r["warns"]) if r["warns"] else "通过")
+        caliber_bad = _pe_bad(r.get("pe_rep"), r.get("pe_ttm"), r.get("pe_ex_gain"),
+                              r.get("mc_fcf_sbc"))
+        verdict2 = verdict + ("  ⚠ **PE 类读数口径异常**（市值与报表不同币种？）"
+                              if caliber_bad and "PE" not in verdict else "")
         print(f"{r['ticker']:7s}{_fmt(r.get('etr'), True):>11s}{_fmt(r.get('tax_share'), True):>10s}"
-              f"{_fmt(r.get('gain_ni_share'), True):>12s}{_fmt(r.get('pe_rep')):>9s}"
-              f"{_fmt(r.get('pe_ex_gain')):>10s}{_fmt(r.get('oi_margin'), True):>11s}"
-              f"{_fmt(r.get('sbc_oi'), True):>12s}{_fmt(r.get('mc_fcf_sbc')):>15s}  {verdict}")
+              f"{_fmt(r.get('gain_ni_share'), True):>12s}{_fmt_pe(r.get('pe_rep')):>12s}"
+              f"{_fmt_pe(r.get('pe_ttm')):>12s}"
+              f"{_fmt_pe(r.get('pe_ex_gain')):>12s}{_fmt(r.get('oi_margin'), True):>11s}"
+              f"{_fmt(r.get('sbc_oi'), True):>12s}{_fmt_pe(r.get('mc_fcf_sbc')):>15s}  {verdict2}")
 
-    print("-" * 122)
+    print("-" * 132)
     print(f"\n通过 {len(recs) - len(fails) - len(warns)} 只 | 仅警告 {len(warns)} 只 | "
           f"FAIL {len(fails)} 只（共分析 {len(recs)} 只）")
     if fails:
         print("\n=== FAIL 清单（硬闸门：必须剔除或改用经营性口径）===")
         for r in fails:
             extra = ""
-            if r.get("pe_rep") and r.get("pe_norm") and r.get("pe_norm") > r["pe_rep"]:
-                extra = f"   报表PE {r['pe_rep']:.1f}x → 正常化 {r['pe_norm']:.1f}x"
-            if r.get("pe_rep") and r.get("pe_ex_gain"):
-                extra += f"   剥离浮盈后 PE {r['pe_ex_gain']:.1f}x"
+            bad = _pe_bad(r.get("pe_rep"), r.get("pe_ttm"), r.get("pe_ex_gain"),
+                          r.get("mc_fcf_sbc"))
+            if bad:
+                # ★ 口径异常时**不打印任何倍数** —— 打印出来的数字再"准确"也是无意义的，
+                #   而读者会把它当成真实倍数（本轮 SKHY 实测：旧版印 `0.0x`）。
+                extra = ("   ⚠ **PE 类倍数不可用**：市值（来自 info，美元）与报表（韩元）"
+                         "**不同币种** ⇒ 分子分母口径不一致，一律**不得引用**。")
+            else:
+                if r.get("pe_rep") and r.get("pe_norm") and r.get("pe_norm") > r["pe_rep"]:
+                    extra = (f"   报表PE(FY) {_fmt_pe(r['pe_rep'])}"
+                             f" → 正常化 {_fmt_pe(r['pe_norm'])}（同口径）")
+                if r.get("pe_ex_gain") and r.get("pe_ttm"):
+                    extra += (f"   剥离浮盈后 PE {_fmt_pe(r['pe_ex_gain'])}"
+                              f"（PE(TTM) {_fmt_pe(r['pe_ttm'])} → 同口径）")
             print(f"  {r['ticker']:7s} {' / '.join(r['reasons'])}{extra}")
     if warns:
         print("\n=== 仅警告清单（软指标，需人工判断；不阻断）===")
@@ -321,6 +431,39 @@ def main() -> int:
     print("\n★ 提醒：本验证器只挡「报表净利被一次性/非经营项目抬高」"
           "（负税、异常税率、证券公允价值变动）。"
           "通过 ≠ 值得买，只表示**报表 PE 是一个可信的输入**。")
+
+    # ── 落状态副档（供 _gap_ledger 消费）────────────────────────────────
+    if args.as_of:
+        ev = ROOT / "wb_analysis" / "evidence"
+        if ev.exists():
+            for r in recs:
+                if "reasons" not in r:
+                    continue
+                status = "FAIL" if r["reasons"] else ("WARN" if r["warns"] else "OK")
+                out = ev / f"{r['ticker']}_{args.as_of}.earnings.json"
+                out.write_text(json.dumps({
+                    "ticker": r["ticker"], "as_of": args.as_of, "status": status,
+                    "reasons": r.get("reasons", []), "warns": r.get("warns", []),
+                    "gain_ni_share": r.get("gain_ni_share"),
+                    "gain_src": r.get("gain_src"),
+                    "pe_rep_fy": r.get("pe_rep"), "pe_ttm": r.get("pe_ttm"),
+                    "pe_ex_gain": r.get("pe_ex_gain"), "pe_norm": r.get("pe_norm"),
+                    # ★ PE 类读数是否落在合理区间外（⇒ 分子分母口径不一致，一律不得引用）
+                    "pe_caliber_warn": _pe_bad(r.get("pe_rep"), r.get("pe_ttm"),
+                                               r.get("pe_ex_gain"), r.get("mc_fcf_sbc")),
+                    "oi_margin": r.get("oi_margin"), "sbc_oi": r.get("sbc_oi"),
+                    "mc_fcf_sbc": r.get("mc_fcf_sbc"),
+                    "detail": (("收益质量闸门 FAIL：" + " / ".join(r["reasons"]))
+                               if r["reasons"] else
+                               ("收益质量闸门 WARN：" + " / ".join(r["warns"]))
+                               if r["warns"] else "收益质量闸门通过")
+                              + ("；⚠ **但 PE 类倍数一律不可用**：市值与报表**不同币种**"
+                                 " ⇒ 本项的标准代理口径（经营性 PE）**在本标的上不成立**，"
+                                 "只能改用「非经营收益占净利的比例」这一无量纲读数。"
+                                 if _pe_bad(r.get("pe_rep"), r.get("pe_ttm"),
+                                            r.get("pe_ex_gain"), r.get("mc_fcf_sbc")) else ""),
+                }, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
+                print(f"[earnings] 状态副档 -> {out.relative_to(ROOT).as_posix()}（status={status}）")
     return 2 if (fails and args.exit_on_fail) else 0
 
 

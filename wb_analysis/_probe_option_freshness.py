@@ -15,11 +15,17 @@
 """
 import sys
 from collections import Counter
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yfinance as yf
 
-ET = timezone(timedelta(hours=-4))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from wb_analysis._thresholds import MARKET_TZ_NAME  # noqa: E402
+
+# ⚠️ 2026-10-10：`timezone(timedelta(hours=-4))` 只在夏令时成立（冬季应为 UTC−5）⇒ 改用 IANA 时区名。
+ET = ZoneInfo(MARKET_TZ_NAME)
 
 
 def main() -> int:

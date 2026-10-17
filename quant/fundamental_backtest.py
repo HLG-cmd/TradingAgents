@@ -40,11 +40,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from quant.stock_pools import get_latest_nasdaq_100, get_nasdaq100_sectors
-from quant.screener_engine import FACTOR_WEIGHTS
+from quant.screener_engine import FACTOR_WEIGHTS, MARGINAL_T, SIGNIFICANT_T
 from quant.edgar_fundamentals import fetch_facts, get_point_in_time, cumulative_split_factor
 from tradingagents.dataflows.stockstats_utils import load_ohlcv  # noqa: E402
-from tradingagents.dataflows.symbol_utils import NoMarketDataError  # noqa: E402
-from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: E402
 
 MAX_WORKERS = 5
 
@@ -350,9 +348,9 @@ def main() -> int:
         if col not in R.columns:
             continue
         s = summarize(R[col])
-        if abs(s["t"]) >= 2.0:
+        if abs(s["t"]) >= SIGNIFICANT_T:
             verdict = "✓ 显著"
-        elif abs(s["t"]) >= 1.5:
+        elif abs(s["t"]) >= MARGINAL_T:
             verdict = "~ 弱"
         else:
             verdict = "  不显著"
@@ -401,9 +399,9 @@ def main() -> int:
     print("结论")
     print("═" * 100)
     s = summarize(R[f"{prefix}_IC_composite"])
-    if abs(s["t"]) >= 2.0:
+    if abs(s["t"]) >= SIGNIFICANT_T:
         print(f"  基本面综合分: IC={s['IC']:.4f}, t={s['t']:.2f} -> 统计上显著")
-    elif abs(s["t"]) >= 1.5:
+    elif abs(s["t"]) >= MARGINAL_T:
         print(f"  基本面综合分: IC={s['IC']:.4f}, t={s['t']:.2f} -> 预测力偏弱，未达常规显著")
     else:
         print(f"  基本面综合分: IC={s['IC']:.4f}, t={s['t']:.2f} -> 接近随机（IC≈0）")
@@ -447,8 +445,8 @@ def main() -> int:
             t = (r.mean() - b.mean()) / se if se > 0 else np.nan
             flip = (np.sign(r.mean()) != np.sign(b.mean())
                     and abs(r.mean()) > 0.005 and abs(b.mean()) > 0.005)
-            tag = ("★ 显著翻转" if (flip and abs(t) >= 2) else
-                   "★ 显著偏离" if abs(t) >= 2 else
+            tag = ("★ 显著翻转" if (flip and abs(t) >= SIGNIFICANT_T) else
+                   "★ 显著偏离" if abs(t) >= SIGNIFICANT_T else
                    "~ 符号不稳" if flip else "  稳定")
             if tag.startswith("★"):
                 alerts += 1

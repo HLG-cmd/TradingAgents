@@ -44,8 +44,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from quant.stock_pools import NASDAQ_100
+from quant.screener_engine import MARGINAL_T, SIGNIFICANT_T  # noqa: E402
 from tradingagents.dataflows.stockstats_utils import load_ohlcv  # noqa: E402
-from tradingagents.dataflows.symbol_utils import NoMarketDataError  # noqa: E402
 
 MAX_WORKERS = 5
 
@@ -226,11 +226,11 @@ def watch_report(R: pd.DataFrame, recent_n: int, history_path: Path) -> int:
 
         # 两级告警：符号翻转**且**显著才是强告警；仅翻转但 t 很小属噪声，只作提示。
         # （实测该样本上 t≈0.8，若一律强告警会持续误报。）
-        if flip and abs(t) >= 2.0:
+        if flip and abs(t) >= SIGNIFICANT_T:
             verdict = "★ 显著翻转"
             alerts.append(("strong",
                            f"{label[col]}：IC 由 {bm:+.4f} 显著翻转为 {rm:+.4f}（t={t:.2f}）"))
-        elif abs(t) >= 2.0:
+        elif abs(t) >= SIGNIFICANT_T:
             verdict = "★ 显著偏离"
             alerts.append(("strong",
                            f"{label[col]}：近期 {rm:+.4f} 相对基线 {bm:+.4f} 显著偏离（t={t:.2f}）"))
@@ -238,7 +238,7 @@ def watch_report(R: pd.DataFrame, recent_n: int, history_path: Path) -> int:
             verdict = "~ 符号不稳"
             alerts.append(("weak",
                            f"{label[col]}：符号已翻转（{bm:+.4f}→{rm:+.4f}），但 t={t:.2f} 不显著"))
-        elif abs(t) >= 1.5:
+        elif abs(t) >= MARGINAL_T:
             verdict = "~ 轻度偏离"
         else:
             verdict = "  稳定"
@@ -401,9 +401,9 @@ def main() -> int:
         s = summarize(R[f"IC_{col}"])
         sp = R[f"SP_{col}"].mean()
         flag = ""
-        if abs(s["t"]) >= 2.0:
+        if abs(s["t"]) >= SIGNIFICANT_T:
             flag = "  ✓显著"
-        elif abs(s["t"]) >= 1.0:
+        elif abs(s["t"]) >= MARGINAL_T:
             flag = "  ~弱"
         print(f"  {label[col]:<14}{s['IC']:>9.4f}{s['ICIR']:>8.3f}{s['t']:>8.2f}"
               f"{s['胜率']:>8.1%}{s['N']:>5}{sp:>20.2%}{flag}")
@@ -431,11 +431,11 @@ def main() -> int:
     print("结论")
     print("═" * 96)
     ts = summarize(R["IC_trend_score"])
-    if ts["t"] >= 2.0:
+    if ts["t"] >= SIGNIFICANT_T:
         verdict = "趋势档具备统计显著的正向预测力"
-    elif ts["t"] >= 1.0:
+    elif ts["t"] >= MARGINAL_T:
         verdict = "趋势档预测力偏弱，未达常规显著水平"
-    elif ts["t"] <= -1.0:
+    elif ts["t"] <= -MARGINAL_T:
         verdict = "趋势档呈负向 —— 该区间动量实为反向指标"
     else:
         verdict = "趋势档接近随机（IC≈0）"

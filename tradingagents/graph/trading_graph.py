@@ -518,8 +518,11 @@ class TradingAgentsGraph:
         # deterministically resolved instrument identity for all agents. On a
         # historical run, gate lessons to those whose outcome was known by the
         # trade date so a backtest can't learn from the future (#1251).
+        isolate = self.config.get("isolate_ticker_memory", True)
         past_context = self.memory_log.get_past_context(
-            company_name, as_of=self._memory_as_of(trade_date)
+            company_name,
+            n_cross=0 if isolate else 3,
+            as_of=self._memory_as_of(trade_date),
         )
         instrument_context = self.resolve_instrument_context(company_name, asset_type)
         init_agent_state = self.propagator.create_initial_state(
@@ -542,8 +545,9 @@ class TradingAgentsGraph:
             trace = []
             last_printed = None
             for chunk in self.graph.stream(graph_input, **args):
-                if chunk["messages"]:
-                    msg = chunk["messages"][-1]
+                messages = chunk.get("messages")
+                if messages:
+                    msg = messages[-1]
                     # Nodes after the trader don't append to messages, so the
                     # same trailing message repeats across chunks. Print it only
                     # when it changes (#1027); the trace/state merge is unchanged.
@@ -551,7 +555,7 @@ class TradingAgentsGraph:
                     if signature != last_printed:
                         msg.pretty_print()
                         last_printed = signature
-                    trace.append(chunk)
+                trace.append(chunk)
             # Streamed chunks are per-node deltas. Merge them so the returned
             # state matches what graph.invoke() yields in the non-debug path.
             final_state = {}

@@ -13,12 +13,21 @@
 """
 import sys
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yfinance as yf
 
-ET = timezone(timedelta(hours=-4))
-MAX_AGE_DAYS = 5
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from wb_analysis._thresholds import MARKET_TZ_NAME, MAX_QUOTE_AGE_DAYS  # noqa: E402
+
+# ⚠️ 2026-10-10：此前写 `timezone(timedelta(hours=-4))` —— 那只在**夏令时**（EDT）成立，
+#   冬季（EST）是 UTC−5。本工具的核心职责恰恰是判「盘前/盘中/盘后」，
+#   换季时硬编码会静默错一小时，可能把 09:00 误判成盘中。改用 IANA 时区名。
+ET = ZoneInfo(MARKET_TZ_NAME)
+# 阈值取自**唯一定义源**（与 collect_index / _audit_gaps 同值）。
+MAX_AGE_DAYS = MAX_QUOTE_AGE_DAYS
 
 
 def main() -> int:

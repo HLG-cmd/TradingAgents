@@ -1,7 +1,7 @@
 # lifecycle: maintenance
 # created: 2026-09-23
 # usage: ./.venv/Scripts/python.exe scripts/_prune_backup.py [--apply]
-"""清理 `.workbuddy/backup/` 里的回滚包：**按前缀各留最新 N 个**。
+"""清理 `.workbuddy-ai/backup/` 里的回滚包：**按前缀各留最新 N 个**。
 
 ## 为什么不能「全局留最近 N 个」
 2026-09-23 实测踩坑：最初写「保留最近 3 个」，结果把**最大的那个回滚包**
@@ -18,12 +18,18 @@
 """
 import argparse
 import hashlib
+import sys
 import zipfile
 from pathlib import Path
 from collections import defaultdict
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
-BK = ROOT / ".workbuddy" / "backup"
+BK = ROOT / ".workbuddy-ai" / "backup"
 KEEP_PER_PREFIX = 2
 
 
@@ -110,7 +116,7 @@ def main() -> int:
 
     keep = sorted({p for p in BK.glob("*.zip")} - {p for p, _ in drop})
     print("=" * 84)
-    print(f".workbuddy/backup 清理（{'APPLY' if args.apply else 'DRY-RUN'}）")
+    print(f".workbuddy-ai/backup 清理（{'APPLY' if args.apply else 'DRY-RUN'}）")
     print("=" * 84)
     total = 0
     for p, why in drop:

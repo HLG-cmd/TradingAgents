@@ -83,12 +83,36 @@ def chk_lifecycle() -> tuple[str, str]:
 
 
 def chk_reports() -> tuple[str, str]:
+    """报告层是否有堆积 / 孤儿 / 缺草稿。
+
+    ★★ 2026-10-16 修（本日第 7 例「检查器判据缺陷」，**已实测复现**）：
+    原判据把「0 条问题条目」直接当成「无问题」，但 **`n == 0` 有两种含义**：
+      · 真的没有卫生问题（正常）；
+      · **工具崩了 / 没跑起来 ⇒ 一条问题条目都没输出（同样 n == 0）**。
+    ⇒ 两者不可区分 ⇒ **工具崩溃被读成「无问题」= 假绿**。
+
+    实测：把 `_reports_index.py` 换成「exit 3 + 打印垃圾」的桩后，
+    本函数仍返回 `PASS — 报告树 ? 棵，无堆积问题`。
+
+    与铁律 3「静默失败」同族；`test_precheck_gate.py` 已为 `_precheck` 守住
+    「崩溃 ≠ 检出问题」，但 **本检查当时没有同样的保护**。
+
+    ⇒ 修法：**先验 rc，再看内容**。`rc != 0` 一律不得进 PASS 分支。
+    """
     rc, out = run([PY, str(ROOT / "wb_analysis" / "_reports_index.py"), "--check"])
+    # ① 先验「工具是否真的跑成功」—— 崩溃时不得把「无输出」读成「无问题」
+    if rc != 0:
+        first = out.strip().splitlines()[0][:70] if out.strip() else "(无输出)"
+        return "FAIL", f"`_reports_index.py --check` 未正常退出（rc={rc}）⇒ 无法判断，首行：{first}"
     lines = [l.strip() for l in out.splitlines() if l.strip().startswith("- [")]
     n = len(lines)
     if n == 0:
         m = re.search(r"报告树\s*(\d+)\s*棵", out)
-        return "PASS", f"报告树 {m.group(1) if m else '?'} 棵，无堆积问题"
+        if not m:
+            # ② 连「报告树 N 棵」都解析不到 ⇒ 输出格式已变，不能假定为 0
+            return "WARN", ("`_reports_index.py --check` 输出无法解析（未见「报告树 N 棵」）"
+                            "⇒ **不能假定为 0 问题**，请人工跑一次确认")
+        return "PASS", f"报告树 {m.group(1)} 棵，无堆积问题"
     # ★ 2026-10-11（O6）：告警必须**带可执行入口**。
     #   此前只报「N 项待整理（孤儿/重复/散落）」，操作者得自己猜到该跑
     #   `_seal_run.py --orphans` —— 而该入口**早就存在**且已是「先打包回滚、校验不过即中止」
@@ -105,9 +129,23 @@ def chk_reports() -> tuple[str, str]:
 
 
 def chk_seal() -> tuple[str, str]:
+    """是否有待封存产物。
+
+    ★★ 2026-10-16 修（本日第 6 例「检查器判据缺陷」）：
+    原判据 `n = int(m.group(1)) if m else 0` —— **正则不命中就当作「0 轮」**
+    ⇒ 只要 `_seal_run.py --plan` 的输出格式一变（改措辞、加前缀、被警告截断），
+    本检查就**静默报 PASS**，而实际可能堆着一批待封存产物。
+
+    ⇒ 判据改为：**解析失败 ≠ 没问题**。取不到数字时报 WARN 并要求人工确认
+    （与铁律 3「静默失败」同源：报成功 + 外观正常 ≠ 真的没问题）。
+    """
     rc, out = run([PY, str(ROOT / "wb_analysis" / "_seal_run.py"), "--plan"])
     m = re.search(r"待封存\s*(\d+)\s*轮", out)
-    n = int(m.group(1)) if m else 0
+    if not m:
+        return "WARN", ("无法解析 `_seal_run.py --plan` 的输出 ⇒ **不能假定为 0**，"
+                        "请人工确认；首行："
+                        + (out.strip().splitlines()[0][:60] if out.strip() else "(空输出)"))
+    n = int(m.group(1))
     return ("PASS", "无待封存产物（瞬态目录已清）") if n == 0 else \
            ("WARN", f"{n} 轮产物待封存：跑 _seal_run.py --all --apply")
 
@@ -142,15 +180,44 @@ def chk_transient_empty() -> tuple[str, str]:
 
 
 def chk_gitignore() -> tuple[str, str]:
+    """瞬态目录与回滚包是否真被 git 忽略。
+
+    ★★ 2026-10-16 修（本日第 5 例「检查器判据缺陷」，实测复现）：
+    原判据是**纯子串** `n not in t`（`t` = 全文）⇒
+    **把条目注释掉后，注释行里仍含该子串 ⇒ 照样报 PASS**。
+
+    实证：把 4 条必需项全部写成 `# wb_analysis/evidence/` 后，
+    `git check-ignore -v wb_analysis/evidence/x.md` 返回 **1（不再忽略）**
+    —— 瞬态文件此时可被 `git add` 进去，而体检仍报「均已忽略」= **假绿**。
+
+    ⇒ 判据改为：**先剥掉注释（`#` 之后）与空行，再逐条比对有效规则**。
+      并额外用 `git check-ignore` 做一次**功能性断言**（真正的判据是 git 的行为，
+      不是文本形态）—— 这是把「文本检查」升级为「行为检查」。
+    """
     f = ROOT / ".gitignore"
     if not f.exists():
         return "WARN", "无 .gitignore"
-    t = f.read_text(encoding="utf-8", errors="replace")
+
+    # ① 文本层：剥注释后逐条比对（注释行不算数）
+    active: set[str] = set()
+    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+        s = line.split("#", 1)[0].strip()
+        if s:
+            active.add(s)
     need = ["wb_analysis/evidence/", "wb_analysis/drafts/", "wb_analysis/analysis/",
             ".workbuddy-ai/backup/"]
-    miss = [n for n in need if n not in t]
-    return ("PASS", "瞬态目录与回滚包均已忽略") if not miss else \
-           ("WARN", f"未忽略：{', '.join(miss)}")
+    miss = [n for n in need if n not in active]
+    if miss:
+        return "WARN", f"未忽略（注释掉的不算）：{', '.join(miss)}"
+
+    # ② 行为层：让 git 自己回答（真正的判据）—— 用一个必然匹配的探针路径
+    probe = "wb_analysis/evidence/__probe__.md"
+    # ⚠️ `run()` 已内置 `cwd=ROOT` 且签名不含 cwd ⇒ 不要多传。（多传会 TypeError）
+    rc, out = run(["git", "check-ignore", "-v", probe])
+    if rc != 0:
+        return ("WARN", f"{len(need)} 条规则文本存在，但 `git check-ignore` 判定**未忽略**"
+                       f"（rc={rc}）⇒ 规则可能被后面的 ! 反转或写法有误")
+    return "PASS", "瞬态目录与回滚包均已忽略（文本规则 + git 行为双重确认）"
 
 
 # 根目录允许的 .py：只有 pytest 配置（它必须放在根，否则不被识别）
@@ -194,18 +261,29 @@ def chk_root_clean() -> tuple[str, str]:
 
 
 def chk_quant() -> tuple[str, str]:
+    # ★★ 2026-10-16 修（本日第 8 例「检查器判据缺陷」，**已精确复现**）：
+    #   原判据是 `if "OK" in out`，而被执行代码末句是 `print('OK')`。
+    #   **断言失败时 traceback 会回显整行源码**，那行里就含 `print('OK')`
+    #   ⇒ 子串命中 ⇒ 实测「`.env` 清空（凭证失效）时仍报 PASS」= **假绿**。
+    #   这是**凭证检查**，假绿意味着「体检说凭证正常、实际 EDGAR 会 403」——
+    #   铁律 3「静默失败」的典型。
+    #   ⇒ 两条修法：① **先验 rc**（真正的判据是退出码，不是输出里有无某串）；
+    #     ② 成功标记改成**源码回显里不出现**的形式（见 `_MARK`：它由 chr() 拼出，
+    #        源码里没有该字面量 ⇒ 失败回显时不会误命中）。
+    _MARK = chr(79) + chr(75)   # == "OK"，但源码中无此字面量
     code = ("import sys; sys.path.insert(0, r'%s');"
             "from quant import screener_engine, stock_pools, edgar_fundamentals, price_history;"
             "ua = edgar_fundamentals.SEC_USER_AGENT;"
             "assert '@' in ua and 'admin@example.com' not in ua, f'SEC 凭证未配置或为默认占位符: {ua}';"
-            "print('OK')" % str(ROOT))
+            "print(%r)" % (str(ROOT), _MARK))
     rc, out = run([PY, "-c", code])
-    if "OK" in out:
+    if rc == 0 and _MARK in out:
         return "PASS", "自建包可导入，且 .env 凭证读取正常"
     if "No module named" in out or "ModuleNotFoundError" in out:
         mod = out.strip().splitlines()[-1]
         return "WARN", f"当前解释器缺运行依赖（{mod}）⇒ 请用项目 .venv 运行"
-    return "FAIL", f"自建包或凭证异常：{out.strip().splitlines()[-1][:70] if out.strip() else rc}"
+    first = out.strip().splitlines()[-1][:70] if out.strip() else f"(无输出, rc={rc})"
+    return "FAIL", f"自建包或凭证异常（rc={rc}）：{first}"
 
 
 # ── 长期堆积预算 ──────────────────────────────────────────────────────────────
@@ -376,7 +454,30 @@ BASELINE_K = "not DeepSeekLive"
 #    含 TRAder 列走 PROPOSAL_RE 兜底的**已知边界**（已文档化：pick() 不认 Action 标签，
 #    但 scan() 对 47/51 棵有 RUN.json 的树走清单，故真实显示仍是 Title Case）；
 #   ③ 报告树命名契约 TREE_RE 与功能目录 SKIP_DIRS。
-BASELINE_PASSED = 852
+BASELINE_PASSED = 921
+# ★ 2026-10-17：868 → 921。依据＝实测 `pytest tests/ -q` 输出「921 passed」，
+#   增量 53 项全部来自新增 `tests/test_option_source.py`：
+#   期权数据源随时点切换（盘中 yfinance / 非盘中 CBOE 官方延迟报价）这条分支此前**无法被测试**
+#   —— 它把 `datetime.now()` 写死在函数体里，非盘中那条路径只能靠「某天恰好凌晨跑一次」验证。
+#   现将时钟改为可注入（`_thresholds.option_source_decision(now=...)`），两条路径均可被夹具证明。
+#   53 项覆盖：时段边界（09:30 含起点 / 16:00 不含终点，两端闭区间化都会静默错配）、
+#   源选择与快照声明文案、CBOE 符号解析与同形接口、错误语义（4xx 不重试 / 瞬时错误必重试 /
+#   `available()` 吞异常）、**来源声明诚实性**（`source` 由「实际成功」驱动而非「时间判据」——
+#   修复前 CBOE 取数失败退回 yfinance 时仍错标成 CBOE 口径），
+#   以及「判据不得在消费方本地重写」的单一来源约束（用 tokenize 剔除注释后检查，
+#   避免把「这里曾写死过 X」的留痕误报成违规）。
+# ★ 2026-10-16（第三次）：864 → 868。依据＝实测 `pytest tests/ -q -k "not DeepSeekLive"`
+#   输出「868 passed」，增量 4 项来自新增 `tests/test_gate_false_green.py`：
+#   锁定本日第 8/9 例『假绿』（chk_quant 凭证检查被源码回显骗过 /
+#   _check_role_files 空草稿被判通过）。两者均已用『注入坏实现必 FAIL』验证测试有判别力。
+# ★ 2026-10-16（第二次）：858 → 864。依据＝实测 `pytest tests/ -q -k "not DeepSeekLive"`
+#   输出「864 passed」，增量 6 项来自新增 `tests/test_health_checkers.py`：
+#   锁定本日第 5/6/7 例『检查器判据缺陷』（chk_gitignore 注释不算忽略 /
+#   chk_seal 解析失败不得默认 0 / chk_reports 工具崩溃不得假绿），
+#   并已用 `_verify_new_tests_have_teeth.py` 验证**测试本身有判别力**（注入坏实现必 FAIL）。
+# ★ 2026-10-16：852 → 858。依据＝实测 `pytest tests/ -q -k "not DeepSeekLive"`
+#   输出「858 passed」，增量 6 项来自 `test_audit_values_sumregex.py` 补齐的
+#   「右侧带显式正负号」算式用例（EXPR_RE 剩余缺口修复的回归保护）。
 
 # safe-delete 钩子的批量确认标记：出现它说明「删除被拦」而非「测试没收集」。
 SAFE_DELETE_MARK = "SAFE_DELETE_BULK_CONFIRM_REQUIRED"

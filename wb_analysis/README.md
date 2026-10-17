@@ -7,6 +7,7 @@
 | 文件 | 作用 |
 |---|---|
 | `collect.py` / `collect_index.py` | 采集器：个股 / 指数，各约 35 项数据 |
+| `_option_source.py` | **期权数据源适配器**：CBOE 官方延迟报价 → yfinance 同形接口。**盘前/盘后自动启用**（拿的是「上一时段收盘快照」，非实时报价；**仅美股个股与主要 ETF 有效**） |
 | `_derive_stock.py` / `_derive_ndx.py` | 派生指标（均线、ATR、分位、聚合估值等） |
 | `assemble.py` | 渲染器：12 个角色的 md → 报告树 |
 | `_precheck.py` | **交付门禁**（7 项检查，交付前只跑这一条） |
@@ -33,4 +34,4 @@
 
 ## 想改代码前
 
-先读 `.workbuddy/memory/MEMORY.md` 与 `IRONLAWS.md`（铁律全文）；改完跑 `_selftest.py`。
+先读 `.workbuddy-ai/memory/MEMORY.md` 与 `IRONLAWS.md`（铁律全文）；改完跑 `_selftest.py`。

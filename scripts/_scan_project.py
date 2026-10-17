@@ -16,6 +16,9 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from wb_analysis._paths import iter_report_trees  # noqa: E402
 
 ROLE_MIN_CHARS = 400          # 认为「该小节有实质内容」的阈值
 SECTION_RE = re.compile(r"^#{2,3} .+", re.M)
@@ -39,12 +42,9 @@ def main() -> int:
     for sub in ("evidence", "drafts", "analysis"):
         d = ROOT / "wb_analysis" / sub
         n, mb = dir_stat(d)
-        # 按标的聚合
         tk = Counter()
         for p in d.iterdir() if d.exists() else []:
-            if p.is_dir():
-                tk[p.name.split("_")[0]] += 1
-            elif p.is_file():
+            if p.is_dir() or p.is_file():
                 tk[p.name.split("_")[0]] += 1
         print(f"  {sub:10s} {n:5d} 个文件  {mb:7.2f} MB   "
               f"标的分布 top8: {dict(tk.most_common(8))}")
@@ -62,11 +62,11 @@ def main() -> int:
         print(f"    {t:12s} {d}  {len(fs)} 个文件: {', '.join(sorted(fs))}")
 
     hr("3. 项目根散落文件（非目录、非 git 跟踪的产物）")
-    skip = {".git", ".venv", "node_modules", ".workbuddy"}
+    skip = {".git", ".venv", "node_modules", ".workbuddy", ".workbuddy-ai"}
     for p in sorted(ROOT.iterdir()):
         if p.is_dir() and p.name in skip:
             continue
-        if p.is_file() and p.suffix.lower() in (".csv", ".html", ".txt", ".json", ".md"):
+        if p.is_file() and p.suffix.lower() in (".csv", ".html", ".txt", ".json", ".md", ".log"):
             print(f"  {p.name:46s} {p.stat().st_size/1024:8.1f} KB  "
                   f"{datetime.fromtimestamp(p.stat().st_mtime):%Y-%m-%d %H:%M}")
     stray = [p for p in ROOT.glob("*.py") if p.is_file()]
@@ -76,20 +76,20 @@ def main() -> int:
     sc = ROOT / "scripts"
     for p in sorted(sc.glob("*.py")):
         t = p.read_text(encoding="utf-8", errors="replace")
-        has_doc = t.lstrip().startswith('"""') or t.lstrip().startswith("'''")
+        has_doc = '"""' in t[:500] or "'''" in t[:500]
         print(f"  {p.name:38s} {p.stat().st_size:7d} B  文档字符串={'有' if has_doc else '★无'}")
 
     hr("5. 缓存与临时目录")
     for rel in ("__pycache__", "wb_analysis/__pycache__", "tradingagents/__pycache__",
-                ".workbuddy/backup", "wb_analysis/_backup"):
+                ".workbuddy-ai/backup", "wb_analysis/_backup"):
         d = ROOT / rel
         if d.exists():
             n, mb = dir_stat(d)
             print(f"  {rel:32s} {n:5d} 个文件  {mb:7.2f} MB")
 
-    hr("6. 报告树内容缺陷信号（空小节 / meta.json 里的缺陷声明）")
+    hr("6. 报告树内容缺陷信号（空小节 / RUN.json 里的说明）")
     rep = ROOT / "reports"
-    for d in sorted([x for x in rep.iterdir() if x.is_dir() and re.search(r"_\d{8}_\d{6}$", x.name)]):
+    for _tk, d in iter_report_trees(rep):
         empty = []
         for f in sorted(d.rglob("*.md")):
             try:
@@ -98,13 +98,6 @@ def main() -> int:
                 continue
             if len(t) < ROLE_MIN_CHARS:
                 empty.append(f"{f.relative_to(d)}:{len(t)}")
-        note = ""
-        mj = d / "meta.json"
-        if mj.exists():
-            try:
-                note = (json.loads(mj.read_text(encoding="utf-8")).get("notes") or "")[:0]
-            except Exception:  # noqa: BLE001
-                note = "meta 解析失败"
         tag = "★ 有偏短文件" if empty else "OK"
         print(f"  {d.name:34s} {tag}  {('; '.join(empty))[:70]}")
 

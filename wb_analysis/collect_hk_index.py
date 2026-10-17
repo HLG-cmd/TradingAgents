@@ -44,7 +44,6 @@ import datetime as dt
 import json
 import pathlib
 import re
-import subprocess
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -54,33 +53,12 @@ if hasattr(sys.stderr, "reconfigure"):
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "wb_analysis" / "evidence"
-WESTOCK = pathlib.Path(r"C:\Users\HLJ\.local\bin\westock.exe")
-
-
-def run_westock(args: list[str], timeout: int = 180) -> str:
-    """调用 westock CLI，返回 stdout 原文（失败时返回带标注的错误串）。"""
-    try:
-        p = subprocess.run(
-            [str(WESTOCK), *args], capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout,
-        )
-        if p.returncode != 0:
-            return f"<westock 退出码 {p.returncode}>\n{p.stdout}\n{p.stderr}"
-        return p.stdout
-    except Exception as e:  # noqa: BLE001
-        return f"<westock 调用失败 {type(e).__name__}: {e}>"
-
-
-def parse_md_table(text: str) -> tuple[list[str], list[list[str]]]:
-    """解析 CLI 输出的 markdown 表格 → (表头, 数据行)。非表格返回空。"""
-    rows = [l.strip() for l in text.splitlines() if l.strip().startswith("|")]
-    if len(rows) < 2:
-        return [], []
-    def cells(line: str) -> list[str]:
-        return [c.strip() for c in line.strip().strip("|").split("|")]
-    header = cells(rows[0])
-    body = [cells(r) for r in rows[1:] if not re.match(r"^\|[\s\-:|]+\|$", r)]
-    return header, body
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+# westock CLI 的统一接入层（路径解析 + 调用 + 表格解析）。
+# ★ 2026-10-10：本文件与 `collect_a_etf.py` 曾**逐字各存一份** run_westock/parse_md_table，
+#   且各自硬编码 `C:\Users\HLJ\.local\bin\westock.exe`（机器特定）⇒ 抽出共享模块。
+from wb_analysis._westock import WESTOCK, parse_md_table, run_westock  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:

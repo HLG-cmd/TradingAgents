@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PY = str(ROOT / ".venv" / "Scripts" / "python.exe")
+PY = sys.executable
 
 
 def main() -> int:
@@ -36,6 +36,7 @@ def main() -> int:
         return 1
 
     ev = ROOT / "wb_analysis" / "evidence"
+    ev.mkdir(parents=True, exist_ok=True)
     raw_path = ev / f"{ticker}_{date}.derived.raw.txt"
     md_path = ev / f"{ticker}_{date}.derived.md"
     raw_path.write_text(raw, encoding="utf-8", newline="\n")
@@ -44,11 +45,18 @@ def main() -> int:
     out = f"# {ticker} 派生指标（由 wb_analysis/_derive_stock.py 生成，可直接引用）\n\n```\n{body}\n```\n"
     md_path.write_text(out, encoding="utf-8", newline="\n")
 
+    # 同步写入草稿目录 0_derived.md，使个股与指数路径完全对齐（消除 _check_freshness 与 _lint_drafts 断层）
+    drafts = ROOT / "wb_analysis" / "drafts" / f"{ticker}_{date}"
+    drafts.mkdir(parents=True, exist_ok=True)
+    draft_md_path = drafts / "0_derived.md"
+    draft_md_path.write_text(out, encoding="utf-8", newline="\n")
+
     # 往返自校验
     back = out.split("```\n", 1)[1].rsplit("\n```", 1)[0] + "\n"
     assert back == raw, "roundtrip mismatch"
 
     print(f"wrote {len(out.encode('utf-8'))} bytes -> {md_path}")
+    print(f"wrote {len(out.encode('utf-8'))} bytes -> {draft_md_path}")
     print(f"raw  {len(raw.encode('utf-8'))} bytes -> {raw_path}")
     print("roundtrip ok")
     return 0

@@ -1,6 +1,10 @@
 # 运行手册（Runbook）—— 这套 Agent 流程该怎么跑
 
 > 面向使用者，不是开发者。设计原理与能力边界见 `SCREENER.md`。
+>
+> ★ **只是想跑一只标的？** 直接看 **[`../README.md`](../README.md) 的「怎么在这台机器上跑」** ——
+> 那里按「标的类型 → 用哪个采集器」给了四条链路的完整配方（美股个股 / 美股指数 / A股ETF / 港股指数）。
+> 本文件讲的是**三层流程的整体设计与边界**，偏方法论。
 
 ---
 
@@ -105,9 +109,13 @@ run_quant_screening(tickers, weights=WEIGHT_PROFILES["no_trend"])
 ### 3.1 采证
 
 ```bash
+# 美股个股（wb_deep_dive 是它的便捷入口；也可直接用 collect.py）
 python quant/wb_deep_dive.py --tickers NVDA,MU,SNDK      # 从第 1 层候选里挑 1~3 只
 python quant/wb_deep_dive.py --tickers NVDA --no-news --no-social   # 想更快：跳过新闻与社媒（约 30 秒/只）
 ```
+
+⚠️ **`wb_deep_dive.py` 只覆盖「美股个股」。其他三类标的各有专用采集器**
+（A股ETF / 港股指数 / 美股指数），**入口对照表见 [`../README.md`](../README.md)**。
 
 **产物**：`wb_analysis/evidence/<TICKER>_<日期>.md`（+ `.json`）
 **看什么**：结尾的**通道健康度**。全绿（30/30 左右）才说明证据完整；
@@ -129,7 +137,8 @@ python quant/wb_deep_dive.py --tickers NVDA --no-news --no-social   # 想更快�
 # 必须用 --from-dir（走草稿目录）；直接用 TICKER 会命中空骨架 JSON！
 python wb_analysis/assemble.py --from-dir wb_analysis/drafts/NVDA_2026-09-16
 ```
-**产物**：`reports/<TICKER>_<YYYYmmdd_HHMMSS>/` 报告树
+**产物**：`reports/<TICKER>/<TICKER>_<YYYYmmdd_HHMMSS>/` 报告树（**按标的分子目录**；
+旧扁平布局 `reports/<TICKER>_<时间戳>/` 需 `assemble.py --flat`）
 
 ### 3.4 渲染后必须反读校验
 
@@ -145,9 +154,10 @@ assemble 的「契约校验通过」只覆盖格式，**不保证评级没被误
 ## 4. 第 3 层：定期验证（季度）
 
 ```bash
-python quant/factor_backtest.py --watch              # 价格类因子（权重 20%）
-python quant/fundamental_backtest.py --watch --neutral  # 基本面类（权重 80%，EDGAR）
+python quant/factor_backtest.py --watch              # 价格类因子（权重 5%：trend 档）
+python quant/fundamental_backtest.py --watch --neutral  # 基本面类（权重 95%，EDGAR）
 ```
+（权重随 `screener_engine.FACTOR_WEIGHTS` 走，**本文不另写死**；2026-10-02 起 trend 已由 20% 降为 5%。）
 **退出码 2 = 有告警。** 已配置季度自动化（下次 2026-10-01），到点会汇报。
 
 ---
@@ -192,7 +202,7 @@ python -c "from quant.stock_pools import get_latest_nasdaq_100 as g; from quant.
 
 每条 XBRL 记录都带 `filed`（申报日）——「在 T 日市场知道什么」= `filed <= T` 中 `end` 最晚的那条，
 保证不会用到当时尚未公布的数据。**三个必须避开的坑**（`start` 字段时长过滤 / tag 回退链取覆盖最新期间 /
-拆股口径 `市值 = 复权价 × 申报股本 × F`）见 `.workbuddy/memory/DOMAINS.md` → 量化选股子系统 / SEC EDGAR，
+拆股口径 `市值 = 复权价 × 申报股本 × F`）见 `.workbuddy-ai/memory/DOMAINS.md` → 量化选股子系统 / SEC EDGAR，
 回归测试见 `tests/test_edgar_fundamentals.py`。
 
 ---

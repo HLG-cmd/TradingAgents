@@ -185,6 +185,9 @@ def _market_today_eastern():
         return now_local.normalize()
 
 
+_PURGED_CACHE_KEYS: set[tuple[str, str]] = set()
+
+
 def _purge_sibling_cache_variants(cache_dir: str, safe_symbol: str, keep: str) -> int:
     """删掉同标的的**其它日期变体**缓存，只保留本次要用的那一份。
 
@@ -194,6 +197,11 @@ def _purge_sibling_cache_variants(cache_dir: str, safe_symbol: str, keep: str) -
     文件名约定被上游测试钉死 ⇒ 不能改格式，只能在写入前清理同标的的旧变体。
     这些是可随时重新下载的**再生数据**，删除不丢信息。
     """
+    key = (os.path.abspath(cache_dir), safe_symbol)
+    if key in _PURGED_CACHE_KEYS and os.path.exists(keep):
+        return 0
+    _PURGED_CACHE_KEYS.add(key)
+
     prefix = f"{safe_symbol}-YFin-data-"
     keep_name = os.path.basename(keep)
     removed = 0

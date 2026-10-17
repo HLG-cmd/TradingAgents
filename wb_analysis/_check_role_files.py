@@ -26,6 +26,7 @@ from wb_analysis._contract import (  # noqa: E402
     RATING_ALLOWED_FILES,
     THREE_BOLD_UPPER_RE as THREE,
 )
+from wb_analysis._paths import is_archived_path  # noqa: E402
 
 RATING_OK = set(RATING_ALLOWED_FILES)  # 只允许出现 1 次五档词的席位（结论块那处）
 REQUIRED_SECTION = {
@@ -73,9 +74,25 @@ def main() -> int:
                  #    被作废的旧稿不参与交付，却被本检查器计入「问题项」，制造了 6 条噪声
                  #    （manager_stale / trader_stale / 4 个风险席位 _stale）。
                  #    两套检查器对「哪些文件算交付物」的口径必须一致，否则问题数无法横向比较。
-                 and "_stale" not in p.name and "_archive" not in p.as_posix()]
+                 # ★ 2026-10-10：改走 `wb_analysis/_paths.py::is_archived_path()` 单一来源。
+                 #   此前这里 `_stale` 只比 `p.name`、`_archive` 却比 `p.as_posix()` —— **同一件事
+                 #   两种比法**，于是 `_stale*/` **子目录**里的角色稿会被误计入交付物，而
+                 #   `_lint_drafts.py`（按子串比全路径）不会 ⇒ 两套检查器的问题数无法横向比较。
+                 #   实测当前 `drafts/`+`evidence/` 下不存在任何 `_stale*`/`_archive*` 目录，
+                 #   故本次对称化**可证为 no-op**，只是把未来的漏洞堵上。
+                 and not is_archived_path(p)]
         if not files:
-            print("  （尚无角色文件）")
+            # ★★ 2026-10-16 修（本日第 9 例「检查器判据缺陷」，**已实测复现**）：
+            #   原实现只打印提示、**不计入 `bad`** ⇒ 末尾 `return 1 if bad else 0` 得到 0
+            #   ⇒ **空草稿目录被判「通过」**。
+            #   实测与 `_verify_ratings.py` 冲突：同一空目录
+            #     · 本脚本            → rc=0（通过）
+            #     · `_verify_ratings` → rc=1（列出 12 个缺失角色文件）
+            #   ⇒ 「同一交付物、两个门禁结论相反」，正是本项目最反对的口径漂移。
+            #   ⇒ 「零个角色文件」是**缺陷**而非中性状态：交付物本应含 12 个角色文件。
+            print("  ✗ 无任何角色文件（交付物应含 12 个角色文件）")
+            bad += 1
+            continue
         for f in files:
             t = f.read_text(encoding="utf-8")
             rel = f.relative_to(d).as_posix()

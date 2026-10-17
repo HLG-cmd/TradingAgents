@@ -171,12 +171,19 @@ def main() -> int:
         return 0
 
     tagged, untagged, exempt = scan()
+    misplaced = [p for p, h in tagged if h["lifecycle"] == "oneoff" and p.parent.name != "_oneoff"]
     if args.check:
         if untagged:
             print(f"✗ {len(untagged)} 个脚本缺少 `# lifecycle:` 声明：")
             for p in untagged:
                 print(f"    {p.relative_to(ROOT).as_posix()}")
             print("  ⇒ 补声明（reusable / maintenance / oneoff）后重试。")
+            return 1
+        if misplaced:
+            print(f"✗ {len(misplaced)} 个 oneoff 脚本尚未移入 `_oneoff/` 目录：")
+            for p in misplaced:
+                print(f"    {p.relative_to(ROOT).as_posix()}")
+            print("  ⇒ 跑 `scripts/_tidy_scripts.py --apply` 归位。")
             return 1
         print(f"✓ 全部 {len(tagged)} 个脚本均已声明生命周期"
               f"（豁免 {len(exempt)}：{', '.join(p.name for p in exempt)}）")

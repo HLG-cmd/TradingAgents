@@ -30,8 +30,16 @@ from rich.table import Table
 from rich.panel import Panel
 import questionary
 
-from quant.stock_pools import NASDAQ_100, SP_500_CORE, get_latest_nasdaq_100
-from quant.screener_engine import run_quant_screening, export_radar_csv
+from quant.stock_pools import (
+    SP_500_CORE,
+    get_latest_nasdaq_100,
+    get_latest_sp500,
+)
+from quant.screener_engine import (
+    FACTOR_WEIGHTS,
+    run_quant_screening,
+    export_radar_csv,
+)
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
@@ -42,7 +50,11 @@ console = Console(width=max(200, os.environ.get("COLUMNS") and int(os.environ["C
 
 def main():
     parser = argparse.ArgumentParser(description="TradingAgents Smart Screener v2.0")
-    parser.add_argument("--pool", choices=["nasdaq", "sp500", "custom"], help="股票池: nasdaq, sp500, 或 custom")
+    parser.add_argument(
+        "--pool",
+        choices=["nasdaq", "sp500", "sp500_core", "custom"],
+        help="股票池: nasdaq, sp500(全量动态), sp500_core(99只核心), 或 custom",
+    )
     parser.add_argument("--tickers", help="自定义股票代码，逗号分隔 (如 NVDA,AAPL,GOOGL)")
     parser.add_argument("--top", type=int, default=3, help="深度会诊的候选股票数量 (默认 3)")
     parser.add_argument("--rounds", type=int, choices=[1, 2, 3], help="对抗辩论轮数 (默认 2)")
@@ -63,8 +75,9 @@ def main():
             "请选择选股目标池:",
             choices=[
                 questionary.Choice("1. 纳斯达克 100 成分股 (科技/成长龙头, 支持动态同步)", "nasdaq"),
-                questionary.Choice("2. 标普 500 核心成分股 (美股大盘全行业核心)", "sp500"),
-                questionary.Choice("3. 自定义股票池 (手动输入多只代码)", "custom"),
+                questionary.Choice("2. 标普 500 全量成分股 (约 503 只, 支持动态同步)", "sp500"),
+                questionary.Choice("3. 标普 500 核心成分股 (99 只精选大盘核心)", "sp500_core"),
+                questionary.Choice("4. 自定义股票池 (手动输入多只代码)", "custom"),
             ]
         ).ask()
 
@@ -77,9 +90,13 @@ def main():
         pool_name = "纳斯达克100"
         pool_key = "nasdaq"
     elif choice == "sp500":
+        tickers = get_latest_sp500()
+        pool_name = "标普500全量"
+        pool_key = "sp500"
+    elif choice == "sp500_core":
         tickers = SP_500_CORE
         pool_name = "标普500核心"
-        pool_key = "sp500"
+        pool_key = "sp500_core"
     else:
         raw_input = questionary.text("请输入股票代码 (逗号分隔，如 NVDA, AAPL, GOOGL, TSLA, MSFT):").ask()
         tickers = [t.strip().upper() for t in raw_input.split(",") if t.strip()]
@@ -287,9 +304,15 @@ def main():
     reports_dir.mkdir(parents=True, exist_ok=True)
     report_file = reports_dir / f"screener_{pool_key}_{timestamp}.md"
     
+    w_str = (
+        f"质量 {FACTOR_WEIGHTS['quality']*100:.0f}% + "
+        f"估值 {FACTOR_WEIGHTS['value']*100:.0f}% + "
+        f"成长 {FACTOR_WEIGHTS['growth']*100:.0f}% + "
+        f"趋势 {FACTOR_WEIGHTS['trend']*100:.0f}%"
+    )
     md_content = f"# {pool_name} 智能量化漏斗与终审报告 (v2.0)\n\n"
     md_content += f"- **生成时间**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-    md_content += f"- **多因子模型**: 四维 GARP (质量 30% + 估值 25% + 成长 25% + 动量 20%)\n"
+    md_content += f"- **多因子模型**: 四维 GARP ({w_str})\n"
     md_content += f"- **辩论轮数**: {debate_choice} 轮对抗交锋\n\n"
     md_content += "## 一、四维 GARP 多因子初筛 Top 10\n\n"
     try:

@@ -36,6 +36,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# 期权新鲜度阈值取自**唯一定义源**（2026-10-10 收敛）。
+# ⚠️ 此前本文件在 3 处硬编码 5.0/5 天，只在注释里声称「与 collect_index.py 对齐」——
+#    而本文件 docstring 记录的第一次事故恰恰是「阈值与采集器不一致 ⇒ 把 A 类缺口误判成 B 类」。
+#    ⚠️ 不 import `collect_index`：它模块级 `os.chdir` + `load_dotenv` 会污染本进程。
+from wb_analysis._thresholds import MAX_QUOTE_AGE_DAYS  # noqa: E402
+
 EV_DIR = PROJECT_ROOT / "wb_analysis" / "evidence"
 
 VERDICT_LABEL = {
@@ -202,8 +208,8 @@ def audit_options(md: str) -> list[dict]:
             base = ((p["bid"] > 0) & (p["ask"] > 0) & (p["impliedVolatility"] > 0)
                     & ((p["strike"] - spot * 0.9).abs() < spot * 0.06))
             put_ivs += [float(v) for v in p.loc[base, "impliedVolatility"].tolist()]
-            # ★ 关键：叠加新鲜度过滤（与 collect_index.py 的 MAX_QUOTE_AGE_DAYS 对齐）
-            fresh = base & (p["_age"] <= 5.0)
+            # ★ 关键：叠加新鲜度过滤（阈值取自 `wb_analysis/_thresholds.py`，与 collect_index 同源）
+            fresh = base & (p["_age"] <= MAX_QUOTE_AGE_DAYS)
             fresh_put_ivs += [float(v) for v in p.loc[fresh, "impliedVolatility"].tolist()]
     except Exception as exc:  # noqa: BLE001
         out.append({"channel": "etf:option_iv", "verdict": "A",
@@ -227,17 +233,17 @@ def audit_options(md: str) -> list[dict]:
     # 误判为「B 类阈值误伤」，进而得出「数据可得、是闸门设错」的错误结论。
     # 事实是：yfinance 对 QQQ 全链的报价整体陈旧（最新成交距今 16.9 天），
     # 合格样本 0 个。**数值落在合理区间 ≠ 数据可用**，必须先过时间戳闸门。
-    if newest_age_days is not None and newest_age_days > 5.0 and not fresh_put_ivs:
+    if newest_age_days is not None and newest_age_days > MAX_QUOTE_AGE_DAYS and not fresh_put_ivs:
         out.append({
             "channel": "etf:option_iv",
             "evidence": "已在证据包中被屏蔽" if iv_blocked else "证据包中有值",
             "upstream_now": (f"有双边报价合约占比 {quote_ratio:.1%}，"
                              f"但**最新一笔成交距今 {age_txt} 天**，"
-                             f"合格（≤5 天）样本 0 个"),
+                             f"合格（≤{MAX_QUOTE_AGE_DAYS:.0f} 天）样本 0 个"),
             "verdict": "A",
             "note": (f"**根因是采集时点落在盘前/盘后，不是数据源缺陷。** "
                      f"共 {quoted_total} 个合约有合法双边报价，但逐笔核查 `lastTradeDate` 后，"
-                     f"最新成交距今仍有 {age_txt} 天（阈值 5 天）。"
+                     f"最新成交距今仍有 {age_txt} 天（阈值 {MAX_QUOTE_AGE_DAYS:.0f} 天）。"
                      f"数「有 {len(put_ivs)} 张 put IV 且中位看似正常」是**陷阱**——"
                      f"陈旧报价的中间价常低于当前内在价值，反解出的 IV 可达 145%~252%。"
                      f"⇒ **本次期权维度不可引用，声明缺口是正确的。**"
@@ -301,7 +307,6 @@ def audit_series(md: str, as_of: str) -> list[dict]:
     import pandas as pd
     import yfinance as yf
 
-    from tradingagents.dataflows.stockstats_utils import StockstatsUtils
     out = []
     for ind in ("close_50_sma", "rsi", "macd"):
         blk = _blk(md, ind)

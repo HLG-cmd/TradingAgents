@@ -37,11 +37,20 @@ if hasattr(sys.stderr, "reconfigure"):
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-ANALYSIS_DIR = PROJECT_ROOT / "wb_analysis" / "analysis"
+# 契约常量（评级词三/五档、交易员末行正则）的**唯一来源** —— 见 `_contract.py` 抬头的漂移史。
+# ⚠️ 2026-10-10：此前这里硬编码了 `RATINGS_5_TIER` / `TRADER_ACTIONS`，注释写「与上游逐字一致」，
+#    但它既没 import 上游、也没进 `_selftest.py` 的 CONSUMERS 名单 ⇒ **完全无人看管**；
+#    一旦上游加词（如 `Strong Buy`）或项目侧改白名单，这里静默分叉。
+#    项目侧统一以 `_contract` 为准；「项目侧 == 上游」由 `_selftest.py` 的断言锁住。
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from wb_analysis._contract import (  # noqa: E402
+    FIVE_LEVELS as RATINGS_5_TIER,
+    PROPOSAL_STRICT_RE as _TRADER_STOP_LINE,
+    THREE_LEVELS as TRADER_ACTIONS,
+)
 
-# 与上游逐字一致的评级词汇（agents/utils/rating.py, agents/schemas.py）
-RATINGS_5_TIER = ("Buy", "Overweight", "Hold", "Underweight", "Sell")
-TRADER_ACTIONS = ("Buy", "Hold", "Sell")
+ANALYSIS_DIR = PROJECT_ROOT / "wb_analysis" / "analysis"
 
 # 分析师在合并报告中的呈现顺序与文件名，与 reporting.py 完全一致
 ANALYST_SECTIONS = (
@@ -51,7 +60,7 @@ ANALYST_SECTIONS = (
     ("Fundamentals Analyst", "fundamentals", "fundamentals.md"),
 )
 
-_TRADER_STOP_LINE = re.compile(r"FINAL TRANSACTION PROPOSAL:\s*\*\*(BUY|HOLD|SELL)\*\*", re.I)
+# （交易员末行正则 `_TRADER_STOP_LINE` 已由顶部从 `_contract` import，此处不再本地定义）
 
 
 def _safe_component(text: str) -> str:
@@ -60,8 +69,20 @@ def _safe_component(text: str) -> str:
     return cleaned or "UNKNOWN"
 
 
-def load_from_dir(draft_dir: Path) -> dict:
+class MetaMissingError(RuntimeError):
+    """`--from-dir` 需要一份**可用**的 `meta.json`，但它缺失 / 不可解析 / 缺必备字段。"""
+
+
+def load_from_dir(draft_dir: Path, strict: bool = True) -> dict:
     """从「草稿目录」读取分析结果。
+
+    ★ 2026-10-10：`meta.json` 由「可选」改为 **strict 下必需**。
+    历史坑：缺它时 `as_of` / `ratings` 会**静默**退化为 `""` / `{}`（源码里是 `meta.get(..., 默认值)`），
+    渲染出的报告树外观正常、`data_date` 与三档评级却全空 ⇒ 属铁律 3「静默失败」，
+    下游 `_precheck`「报告树反读」直接失据。
+    现在 strict=True（默认）时，**缺 `meta.json` / 解析失败 / 缺 `as_of`+`ratings` 字段**
+    一律抛 `MetaMissingError`，由 `main()` 转成退出码 2；只有显式传 `strict=False`
+    才回到旧的宽松行为（供个别排障场景使用）。
 
     草稿目录与最终报告树同构，每个角色一个 .md 文件，外加可选的 ``meta.json``：
 
@@ -88,7 +109,22 @@ def load_from_dir(draft_dir: Path) -> dict:
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
     meta_path = draft_dir / "meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    if not meta_path.exists():
+        if strict:
+            raise MetaMissingError(f"缺少 {meta_path.name}（{meta_path}）")
+        meta = {}
+    else:
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            raise MetaMissingError(f"{meta_path.name} 解析失败：{exc!r}") from exc
+        if not isinstance(meta, dict):
+            raise MetaMissingError(f"{meta_path.name} 不是 JSON 对象（实为 {type(meta).__name__}）")
+
+    if strict:
+        missing = [k for k in ("as_of", "ratings") if not meta.get(k)]
+        if missing:
+            raise MetaMissingError(f"{meta_path.name} 缺必备字段：{', '.join(missing)}")
 
     ticker = meta.get("ticker")
     if not ticker:
@@ -290,6 +326,13 @@ def render_report_tree(data: dict, save_path: Path) -> Path:
 
         pm_text = (risk.get("portfolio_manager") or "").strip()
         if pm_text:
+            # ★ 2026-10-11（O8）：**草稿名与渲染名刻意不同**，别当成 bug 去"修"。
+            #   草稿：`4_risk/portfolio_manager.md`（与 3 个风险分析师同目录）
+            #   渲染：`5_portfolio/decision.md`（独立成第 5 个目录）
+            #   理由：组合经理不是「第 4 个风险分析师」，它是**最终决策**，
+            #         与三份风险意见并列会误导读者（且 §V 在合成报告里单独成章）。
+            #   ⇒ 下游读渲染树请一律用 `5_portfolio/decision.md`
+            #     （`_verify_report.py` / `_reports_index.py` 均已如此）。
             d = save_path / "5_portfolio"
             d.mkdir(exist_ok=True)
             (d / "decision.md").write_text(pm_text, encoding="utf-8")
@@ -351,7 +394,7 @@ def check_completeness(data: dict) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description="把分析结果渲染成 TradingAgents 同构报告树")
     ap.add_argument("target", nargs="?", help="ticker（如 NVDA）或分析结果 JSON 路径")
-    ap.add_argument("--from-dir", help="从草稿目录读取（12 个 .md + meta.json），优先于 target")
+    ap.add_argument("--from-dir", help="从草稿目录读取（12 个 .md + **必备** meta.json），优先于 target")
     ap.add_argument("--date", default=None, help="基准日期 YYYY-MM-DD，用于定位 JSON")
     ap.add_argument("--out", default=str(PROJECT_ROOT / "reports"), help="报告输出根目录")
     ap.add_argument("--stamp", default=None, help="自定义时间戳 YYYYmmdd_HHMMSS（默认取当前时间）")
@@ -359,6 +402,8 @@ def main() -> int:
                     help="使用旧布局：直接写 <out>/<TICKER>_<stamp>/，不再按标的分子目录")
     ap.add_argument("--allow-incomplete", action="store_true",
                     help="跳过「正文不得为空」硬门禁（仅在明确知道自己在做什么时使用）")
+    ap.add_argument("--allow-no-meta", action="store_true",
+                    help="允许 --from-dir 缺 meta.json 渲染（**会静默产生空 as_of/ratings**，仅排障用）")
     args = ap.parse_args()
 
     if args.from_dir:
@@ -366,7 +411,22 @@ def main() -> int:
         if not src.is_dir():
             print(f"✗ 草稿目录不存在: {src}", file=sys.stderr)
             return 1
-        data = load_from_dir(src)
+        try:
+            data = load_from_dir(src, strict=not args.allow_no_meta)
+        except MetaMissingError as exc:
+            print(f"✗ 拒绝渲染：meta.json 不可用 —— {exc}", file=sys.stderr)
+            print(
+                "\n  `--from-dir` 需要草稿目录里有一份**可用**的 meta.json：\n"
+                "    {\"ticker\": \"NVDA\", \"as_of\": \"2026-10-09\", \"ratings\": {...}, \"notes\": \"...\"}\n"
+                "  缺它时报告树会**静默**渲染成 data_date:\"\"、ratings:{}（外观正常、评级却全空），\n"
+                "  下游门禁无从察觉 —— 属铁律 3「静默失败」，故此处**硬阻断**（退出码 2）。\n"
+                "\n  正确做法（任选其一）：\n"
+                "    1) 先跑 $VENV wb_analysis/_gen_meta.py <T>_<date> 自动生成 meta.json\n"
+                "    2) 按上面结构手工补写 meta.json\n"
+                "    3) 确需无 meta 渲染时，显式加 --allow-no-meta（自担静默降级风险）\n",
+                file=sys.stderr,
+            )
+            return 2
         source_desc = str(src)
     else:
         if not args.target:
@@ -418,6 +478,17 @@ def main() -> int:
     save_path = (Path(args.out) / f"{ticker_dir}_{stamp}" if args.flat
                  else Path(args.out) / ticker_dir / f"{ticker_dir}_{stamp}")
     complete = render_report_tree(data, save_path)
+
+    # ★ 2026-10-10 新增：渲染单页自包含 HTML 报告（吸收上游 report_html 亮点）
+    #   提供暗黑模式、自适应排版、纯离线内联 CSS、支持一键打印 PDF。
+    try:
+        from wb_analysis._report_html import render_html_report
+        html_content = render_html_report(data)
+        html_path = save_path / "complete_report.html"
+        html_path.write_text(html_content, encoding="utf-8", newline="\n")
+        print(f"  [HTML] 自包含单页 HTML 报告已生成: {html_path.name}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [WARN] HTML 报告生成异常（不阻断交付）: {exc!r}")
 
     # ★ 2026-09-23 新增：**运行清单（RUN.json）** —— 把一次运行的四个命名空间显式串起来。
     #   动机：产物分散在 evidence / drafts / analysis / reports 四处，且只有 reports 带时间戳，

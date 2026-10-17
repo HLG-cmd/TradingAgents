@@ -40,7 +40,7 @@ if hasattr(sys.stderr, "reconfigure"):
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-os.chdir(PROJECT_ROOT)
+# ★ 2026-10-15：移除模块级 os.chdir(PROJECT_ROOT)，改为在 main() 入口执行，消除 import 副作用
 
 from dotenv import load_dotenv
 
@@ -126,6 +126,22 @@ PREDICTION_TOPICS = (
 )
 
 _INDICATOR_LOOKBACK = 10
+
+#: 走网络的数据通道的**默认重试次数**（`_safe_call` 的退避 = 1.5×(n+1) 秒）。
+#:
+#: ★★ 2026-10-11 新增。起因：NFLX 采集时 yfinance **整片 403**，35 通道险些全废。
+#: 归因结论（实测，务必别再误判）：
+#:   · 本机出网走 v2rayN 代理（**Tun 模式** ⇒ 改 `NO_PROXY`/直连都没用，出口 IP 不变）；
+#:   · **代理节点会间歇性抽风**，不是 Yahoo 对 IP 的永久封禁 ——
+#:     同一 URL 连打：第 1 次 `HTTP 403`、第 2 次 `HTTP 200`；
+#:     `query1/query2/finance.yahoo.com` 首页三者同时 403；
+#:     同一时段 Nasdaq 官方端点先 200、几分钟后 `502 Bad Gateway`。
+#:   · ⇒ 判据是「**重试能否穿透**」，而不是「换个 UA 或换台主机」。
+#: 原实现只给 FRED 传了 `retries=2`，其余 yfinance 通道全 `retries=0` ——
+#: **一次抖动就静默丢掉一个通道**，整包从 35/35 掉成 N/35，
+#: 而汇总只写「非全绿通道: get_stock_data=fail」，看起来像上游真缺数据（假缺口）。
+#: ⇒ 凡走网络的通道一律给足重试；这是**单一口径**，不要再在调用点各写各的数字。
+_NET_RETRIES: int = 3
 
 # 通道「优雅降级」时写进证据包的占位串（大小写不敏感匹配）。
 # 被 ``_safe_call`` 用于把「返回了占位串的通道」判为 unavailable 而非 ok —— 见其文档。
@@ -295,7 +311,12 @@ def _fundamentals_sanity(text: object) -> str:
     ② **单位陷阱**：``Debt to Equity = 18.859`` 显然是**百分数**（即 18.859%），
        若按「倍」引用会得出「负债是权益的 18.9 倍」这种荒谬结论。
 
-    本函数把这两类问题显式写进证据包，避免分析角色把无法对账的数字当事实用。
+    ③ **币种不一致**（2026-10-15 新增）：外国发行人 ADR 的 ``currency``（价格/市值口径）
+       与 ``financialCurrency``（财报口径）可能不同（实测 SKHY：USD vs KRW）
+       ⇒ 快照把两套币种混算，产出「净利率 85.6%」这类荒谬值。
+       此时**跨币种倍数（PE 系列）与绝对金额不可用**，但**纯比率仍可用**。
+
+    本函数把这三类问题显式写进证据包，避免分析角色把无法对账的数字当事实用。
     """
     if not text:
         return ""
@@ -304,14 +325,38 @@ def _fundamentals_sanity(text: object) -> str:
         m = re.search(rf"^{re.escape(label)}:\s*([-\d.]+)", str(text), re.M)
         return float(m.group(1)) if m else None
 
+    def txt(label: str):
+        m = re.search(rf"^{re.escape(label)}:\s*(\S+)", str(text), re.M)
+        return m.group(1) if m else None
+
     rev, ni = num("Revenue (TTM)"), num("Net Income")
     net_margin, roe = num("Profit Margin"), num("Return on Equity")
     mcap, pb = num("Market Cap"), num("Price to Book")
     pe, fpe = num("PE Ratio (TTM)"), num("Forward PE")
     eps, feps = num("EPS (TTM)"), num("Forward EPS")
     de = num("Debt to Equity")
+    cur, fin_cur = txt("Currency"), txt("Financial Currency")
 
     warns: list[str] = []
+
+    # ★★★ 2026-10-15 新增：币种一致性（外国发行人 ADR 的静默失真）。
+    #   实测 SKHY（SK 海力士美股 ADR）：`currency=USD` 而 `financialCurrency=KRW`
+    #   ⇒ 快照把美元价格/市值与韩元财报**混算**，产出「净利率 85.6%」「Forward EPS 34.48」
+    #   这类荒谬值；而既有的「净利多口径不一致」只报「差距 100%」，**不点出根因**。
+    #   这是铁律 3 的典型静默失败：字段外观正常、不触发任何缺失检查。
+    if cur and fin_cur and cur.strip().upper() != fin_cur.strip().upper():
+        warns.append(
+            f"- **⚠️ 币种不一致（关键，优先于本块其它条目）**：快照的**价格 / 市值口径为 {cur}**，"
+            f"而**财务报表口径为 {fin_cur}** ⇒ 快照把两套币种混算。\n"
+            f"  · **不可用**：一切**跨币种推出的倍数与每股指标** —— `PE Ratio (TTM)` / `Forward PE` / "
+            f"`PEG Ratio` / `EPS (TTM)` / `Forward EPS` / `Price to Book` / `Book Value`；\n"
+            f"  · **不可用**：带币种的**绝对金额**（`Market Cap` / `Revenue (TTM)` / `Net Income` / "
+            f"`Free Cash Flow` / `EBITDA` / `Gross Profit`）—— 它们与 {cur} 计价的价格不同币种；\n"
+            f"  · **仍可用**：**纯比率**（`Profit Margin` / `Operating Margin` / `Return on Equity` / "
+            f"`Return on Assets` / `Current Ratio`）—— 分子分母同币种，比值与币种无关。\n"
+            f"  ⇒ 估值倍数请**改用 §4 财务报表口径自行复算**（或先做汇率换算再计算），"
+            f"**禁止直接引用快照的 PE 系列**。"
+        )
 
     # 用 市值/PB 反推**总**账面价值。
     # ⚠️ 不能用快照里的 `Book Value`——那是**每股**账面价值（GOOG 为 50.896 美元/股），
@@ -785,11 +830,27 @@ def _render_option_block(ticker: str, opts: dict) -> str:
                  f"合格样本 **{fresh.get('n_fresh')}** 个"
                  f"（扫描到有双边报价的合约 {fresh.get('n_quoted')} 个）")
     lines.append(f"- **采集时点**：{fresh.get('session_note') or '未记录'}")
-    lines.append("- **IV 算法**：**自建 Black-Scholes-Merton 反解**"
-                 "（拟合中间价，含股息率），**不使用 yfinance 的 "
-                 "``impliedVolatility``** —— 后者与报价不自洽。"
-                 "过滤链：双边报价 > 0 → `ask ≥ bid` → 点差 ≤ 30% → "
-                 "**成交日新鲜度合格** → 反解 IV 落在 [2%,120%]。")
+    # ★ 2026-10-16：**来源声明**（方案 A 时点分支的配套，与 collect_index 同步）。
+    #   两个源的 IV/偏斜口径不同、数值不可混用，故必须显式标注。
+    _src = (opts.get("source") or "").strip()
+    _is_cboe = not _src.startswith("yfinance")
+    from wb_analysis.collect_index import _source_label, _iv_method_label
+    lines.append(f"- **数据来源：{_source_label(_src)}**")
+    lines.append(f"  - {opts.get('source_note') or '（未记录时点说明）'}")
+    if _is_cboe:
+        lines.append("  - ⚠️ **口径提示**：本源的 `iv`/`delta` 由**交易所模型**给出，"
+                     "与项目自建 BSM 反解的数值**不可直接比较**"
+                     "（实测同轮偏斜差异可达数 pp，根因是样本数与 delta 定义）。"
+                     "**本报告全篇统一使用本接口口径。**")
+    lines.append("- **IV 算法**："
+                 + ("**交易所模型直出（CBOE 官方，无需反解）**。"
+                    "过滤链：双边报价 > 0 → `ask ≥ bid` → 点差 ≤ 30% → 成交日新鲜度合格。"
+                    if _is_cboe else
+                    "**自建 Black-Scholes-Merton 反解**"
+                    "（拟合中间价，含股息率），**不使用 yfinance 的 "
+                    "``impliedVolatility``** —— 后者与报价不自洽。"
+                    "过滤链：双边报价 > 0 → `ask ≥ bid` → 点差 ≤ 30% → "
+                    "**成交日新鲜度合格** → 反解 IV 落在 [2%,120%]。"))
     lines.append("- **偏斜主口径 = 25-delta 配对**（put IV(−25Δ) − call IV(+25Δ)）；"
                  "±10% 距现价为备用口径。**两个口径数值不同，不可混用。**")
     lines.append("")
@@ -856,11 +917,26 @@ def _render_option_block(ticker: str, opts: dict) -> str:
     if ts:
         lines.append(f"- 📈 **期限结构**：{ts['near_expiry']}（{ts['near_days']}天）ATM IV "
                      f"{ts['near_atm_iv']} vs {ts['far_expiry']}（{ts['far_days']}天）"
-                     f" {ts['far_atm_iv']} → 斜率 **{ts['slope_pp']:+}pp**，"
-                     f"形态为 **{'正向（近低远高）' if ts['contango'] else '倒挂（近高远低）'}**。"
-                     + ("倒挂通常对应**近期事件风险定价**高于长期。"
-                        if not ts["contango"] else
-                        "正向结构是常态，说明近期未被额外定价。"))
+                     f" {ts['far_atm_iv']} → **端点**斜率 **{ts['slope_pp']:+}pp**，"
+                     f"形态为 **{'正向（近低远高）' if ts['contango'] else '倒挂（近高远低）'}**。")
+        if ts.get("atm_series"):
+            lines.append("  · 逐档 ATM IV：" + " → ".join(
+                f"{s['days']}天 {s['atm_iv']}" for s in ts["atm_series"]))
+        # ★★ 2026-10-12：端点斜率**不足以**支撑「近期是否被额外定价」的判断 ——
+        #   只比最近与最远两档会漏掉中段驼峰（实测 GOOG：32 天处比相邻档高 4~5pp，
+        #   而端点斜率反而显示"正常的正向结构"）。有驼峰时必须把它说出来，
+        #   并**禁止**下游沿用旧的「近期未被额外定价」措辞。
+        if ts.get("hump"):
+            h = ts["hump"]
+            lines.append(f"  ⚠️ **曲线非单调 —— {h['days']} 天处出现驼峰**：ATM IV {h['atm_iv']}，"
+                         f"同时高出相邻两档 ≥ **{h['excess_pp']}pp**"
+                         f"（{h['window_from']} 与 {h['window_to']}）"
+                         f" ⇒ **事件风险定价集中在 {h['window_from']} ~ {h['window_to']} 窗口内**。")
+            lines.append("  ⛔ **不得**仅据端点斜率说「近期未被额外定价」—— 该结论已被驼峰证伪。")
+        elif ts["contango"]:
+            lines.append("  · 逐档走势与端点斜率一致，未见内部驼峰 ⇒ 可说「近期未被额外定价」。")
+        else:
+            lines.append("  · 倒挂通常对应**近期事件风险定价**高于长期。")
     if opts.get("fallback_note"):
         lines.append(f"- 📌 **回退说明**：{opts['fallback_note']}")
     if opts.get("oi_note"):
@@ -901,12 +977,39 @@ def _render_vol_proxy_block(vp: dict) -> str:
     return "\n".join(vl) if vl else "(无数据)"
 
 
-def _safe_call(name: str, fn, *args, retries: int = 0) -> tuple[str, str]:
+def _retry(fn, *args, retries: int = _NET_RETRIES, delay: float = 1.5):
+    """给**不走 `_safe_call` 的网络块**（期权 / 波动率代理 / 实时收盘）同一套退避重试。
+
+    为什么需要第二个重试入口：§11/§12/§13 是直接 `try/except` 调用的
+    （它们返回结构化 dict，不是文本，塞不进 `_safe_call` 的「占位串识别」契约）。
+    但它们同样走 yfinance，同样会被**代理抖动**打成 403 ——
+    若只修 `_safe_call` 路径，这三节仍会在抖动时整段变成 `(不可用: ...)`。
+
+    与 `_safe_call` 保持**同一退避口径**（1.5×(n+1) 秒），避免两处漂移。
+    """
+    last: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return fn(*args)
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if attempt < retries:
+                time.sleep(delay * (attempt + 1))
+    assert last is not None
+    raise last
+
+
+def _safe_call(name: str, fn, *args, retries: int = _NET_RETRIES) -> tuple[str, str]:
     """调用一个数据通道，返回 (状态, 文本)。状态为 ok / unavailable / fail。
 
-    ``retries`` 用于瞬时故障较多的通道。实测（2026-09-16，GOOG）：FRED 的 5 个宏观
-    通道在一次采集里有 1 个因 ``SSLV3_ALERT_HANDSHAKE_FAILURE`` 失败，
-    而紧接着单独重试即成功——**单次 TLS 抖动不该静默丢掉一个宏观指标**。
+    ``retries`` **默认即 `_NET_RETRIES`**（2026-10-11 改）—— 理由见 `_NET_RETRIES`
+    的注释：本机出网经代理，节点会间歇抽风，而「每个调用点自己记得传 retries」
+    这种约定**必然漂移**（原实现 30+ 个通道里只有 FRED 传了）。
+    凡是读接口都可安全重试，故把重试设为**默认行为**，要关须显式写 ``retries=0``。
+
+    历史沿革：``retries`` 最早是为 FRED 瞬时故障引入的。实测（2026-09-16，GOOG）：
+    FRED 的 5 个宏观通道在一次采集里有 1 个因 ``SSLV3_ALERT_HANDSHAKE_FAILURE``
+    失败，而紧接着单独重试即成功——**单次 TLS 抖动不该静默丢掉一个宏观指标**。
 
     **★★ 2026-09-17 新增：占位串识别（堵住「假绿」）**
 
@@ -1101,9 +1204,11 @@ def collect_one(
     # --- 10. 宏观指标 ---
     macro_lines = []
     for alias in MACRO_ALIASES:
-        # FRED 是瞬时故障最多的通道（TLS 握手 / 连接重置），给 2 次重试
+        # FRED 是瞬时故障最多的通道（TLS 握手 / 连接重置）。
+        # 2026-10-11 起重试统一由 `_safe_call` 的默认值 `_NET_RETRIES` 提供，
+        # 不再在此处写死数字（原先写死 2 ⇒ 与其它通道口径不一致）。
         st, txt = _safe_call("get_macro_indicators", route, "get_macro_indicators",
-                             alias, as_of, 365, retries=2)
+                             alias, as_of, 365)
         health[f"macro:{alias}"] = st
         macro_lines.append(f"### {alias}\n```\n{_compact_macro(txt)}\n```")
     blocks.append("## 10. 宏观经济指标（FRED）\n\n" + "\n\n".join(macro_lines))
@@ -1139,7 +1244,7 @@ def collect_one(
         try:
             from wb_analysis.collect_index import fetch_option_structure
 
-            opts = fetch_option_structure(ticker)
+            opts = _retry(fetch_option_structure, ticker)
             if opts.get("error"):
                 health["option_structure"] = "error"
             else:
@@ -1172,7 +1277,7 @@ def collect_one(
         try:
             from wb_analysis.collect_index import fetch_volatility_proxies
 
-            vp = fetch_volatility_proxies(as_of)
+            vp = _retry(fetch_volatility_proxies, as_of)
             health["vol_proxies"] = "ok" if vp.get("proxies") else "unavailable"
             blocks.append(
                 "## 12. 波动率与债券代理通道（弥补 FRED 发布滞后）\n\n"
@@ -1193,7 +1298,7 @@ def collect_one(
 
     # --- 13. 最新交易日实时收盘补充（日线接口的当日滞后）---
     try:
-        rt_md, rt_stats = _realtime_close_block(ticker, as_of)
+        rt_md, rt_stats = _retry(_realtime_close_block, ticker, as_of)
         stats["realtime"] = rt_stats
         health["realtime_close"] = "ok" if rt_stats.get("realtime_price") else "unavailable"
         blocks.append("## 13. 最新交易日实时收盘补充\n\n" + rt_md)
@@ -1262,16 +1367,73 @@ def collect_one(
     }
 
 
+def today_eastern() -> str:
+    """返回**美东当日**（数据源 `today` 的口径），而非本机日期。
+
+    ★ 2026-10-11（O3）修正：`--date` 的默认值原为 `dt.date.today()`＝**本机日期**。
+    北京时区比美东早 12~13 小时 ⇒ 本机日期**天然比美东当日早一天**（例：
+    本机 10-11 10:15 = 美东 10-10 22:15）。而数据源的 `today` 走美东日历
+    ⇒ 默认值本身就是一个「未来日期」，会静默触发下面的 §3 扣留。
+    """
+    import zoneinfo
+    return dt.datetime.now(zoneinfo.ZoneInfo("America/New_York")).date().isoformat()
+
+
+def date_caliber_guard(date_str: str, allow_stale: bool) -> bool:
+    """★ O3 守卫：`--date` 口径＝**美东当日**，不是「最后一根 bar 的日期」。
+
+    血泪（2026-10-05 NFLX 轮实测）：传**早于**美东当日的日期时，数据源会
+    **静默扣留 §3 估值快照**（PE / PB / 市值 / 52 周区间整段消失），而
+    **通道健康度照读 35/35** —— 因为调用确实「成功」、返回的是一段**非空的
+    拒答说明**，所以 channel_health / 空段落检测 / 占位符检测**全都抓不到**。
+    这类「外观正常的数据缺失」正是本项目最贵的失败模式（铁律 3 同类）。
+
+    返回 True 表示可继续采集。
+    """
+    import zoneinfo
+    try:
+        want = dt.date.fromisoformat(date_str)
+    except ValueError:
+        print(f"✗ --date 不是合法日期：{date_str!r}（应为 YYYY-MM-DD）")
+        return False
+    now_ny = dt.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+    today_ny = now_ny.date()
+    print(f"[口径检查] --date={want} ｜ 美东当日={today_ny}"
+          f"（采集时点 美东 {now_ny:%Y-%m-%d %H:%M %a}）")
+    if want == today_ny:
+        print("  ✓ 口径一致：--date 即美东当日。")
+        return True
+    if want > today_ny:
+        print(f"  ✗ --date 晚于美东当日 {(want - today_ny).days} 天 —— 属未来日期，"
+              f"数据源不可能存在该日数据 ⇒ 拒绝执行。")
+        return False
+    print(f"  ⚠️ --date 早于美东当日 {(today_ny - want).days} 天。"
+          f"**这正是「§3 估值快照被静默扣留」的触发条件**（通道健康度仍会显示全绿）。")
+    print(f"     ⇒ 若确为按历史基准日复盘，请加 `--allow-stale-date` 显式确认；"
+          f"否则请改用 `--date {today_ny}` 重跑。")
+    return bool(allow_stale)
+
+
 def main() -> int:
+    os.chdir(PROJECT_ROOT)
     ap = argparse.ArgumentParser(description="TradingAgents 免费证据采集器（不调用 LLM）")
     ap.add_argument("tickers", nargs="+", help="股票代码，可多个，如 NVDA AMD")
-    ap.add_argument("--date", default=dt.date.today().isoformat(), help="基准日期 YYYY-MM-DD")
+    ap.add_argument("--date", default=None,
+                    help="基准日期 YYYY-MM-DD。口径＝**美东当日**（数据源的 today），"
+                         "**不是**最后一根 bar 的日期；默认取美东当日（**非本机日期**）")
+    ap.add_argument("--allow-stale-date", action="store_true",
+                    help="显式确认 `--date` 早于美东当日（会触发 §3 快照扣留，默认拒绝）")
     ap.add_argument("--lookback", type=int, default=365, help="行情/新闻回溯自然日数")
     ap.add_argument("--no-news", action="store_true", help="跳过新闻通道（更快）")
     ap.add_argument("--no-social", action="store_true", help="跳过 StockTwits/Reddit 通道（更快）")
     ap.add_argument("--no-options", action="store_true",
                     help="跳过期权链/波动率代理通道（期权链需较长时间）")
     args = ap.parse_args()
+
+    if args.date is None:
+        args.date = today_eastern()
+    if not date_caliber_guard(args.date, args.allow_stale_date):
+        return 2
 
     print(f"[证据采集] 标的: {', '.join(t.upper() for t in args.tickers)}  基准日: {args.date}")
     results = []

@@ -24,6 +24,8 @@ class TradingMemoryLog:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
         # Optional cap on resolved entries. None disables rotation.
         self._max_entries = cfg.get("memory_log_max_entries")
+        self._cached_mtime: float | None = None
+        self._cached_entries: list[dict] | None = None
 
     # --- Write path (Phase A) ---
 
@@ -47,6 +49,8 @@ class TradingMemoryLog:
         entry = f"{tag}\n\nDECISION:\n{final_trade_decision}{self._SEPARATOR}"
         with open(self._log_path, "a", encoding="utf-8") as f:
             f.write(entry)
+        self._cached_mtime = None
+        self._cached_entries = None
 
     # --- Read path (Phase A) ---
 
@@ -54,6 +58,13 @@ class TradingMemoryLog:
         """Parse all entries from log. Returns list of dicts."""
         if not self._log_path or not self._log_path.exists():
             return []
+        try:
+            mtime = self._log_path.stat().st_mtime
+            if self._cached_mtime == mtime and self._cached_entries is not None:
+                return [dict(e) for e in self._cached_entries]
+        except OSError:
+            pass
+
         text = self._log_path.read_text(encoding="utf-8")
         raw_entries = [e.strip() for e in text.split(self._SEPARATOR) if e.strip()]
         entries = []
@@ -61,7 +72,13 @@ class TradingMemoryLog:
             parsed = self._parse_entry(raw)
             if parsed:
                 entries.append(parsed)
-        return entries
+
+        try:
+            self._cached_mtime = self._log_path.stat().st_mtime
+            self._cached_entries = entries
+        except OSError:
+            pass
+        return [dict(e) for e in entries]
 
     def get_pending_entries(self) -> list[dict]:
         """Return entries with outcome:pending (for Phase B)."""
@@ -87,11 +104,11 @@ class TradingMemoryLog:
 
         same, cross = [], []
         for e in reversed(entries):
-            if len(same) >= n_same and len(cross) >= n_cross:
+            if len(same) >= n_same and (n_cross <= 0 or len(cross) >= n_cross):
                 break
             if e["ticker"] == ticker and len(same) < n_same:
                 same.append(e)
-            elif e["ticker"] != ticker and len(cross) < n_cross:
+            elif n_cross > 0 and e["ticker"] != ticker and len(cross) < n_cross:
                 cross.append(e)
 
         if not same and not cross:
@@ -105,6 +122,47 @@ class TradingMemoryLog:
             parts.append("Recent cross-ticker lessons:")
             parts.extend(self._format_reflection_only(e) for e in cross)
         return "\n\n".join(parts)
+
+    def clear_pending_entries(self, ticker: str | None = None) -> int:
+        """Remove pending entries from the log.
+
+        If ticker is provided, only removes pending entries for that ticker;
+        otherwise removes all pending entries across all tickers.
+        Returns the number of removed entries.
+        """
+        if not self._log_path or not self._log_path.exists():
+            return 0
+        text = self._log_path.read_text(encoding="utf-8")
+        blocks = text.split(self._SEPARATOR)
+        new_blocks = []
+        removed = 0
+        for block in blocks:
+            stripped = block.strip()
+            if not stripped:
+                new_blocks.append(block)
+                continue
+            lines = stripped.splitlines()
+            tag_line = lines[0].strip()
+            if tag_line.endswith("| pending]"):
+                if ticker is None or f"| {ticker} |" in tag_line:
+                    removed += 1
+                    continue
+            new_blocks.append(block)
+        if removed:
+            new_text = self._SEPARATOR.join(new_blocks)
+            tmp_path = self._log_path.with_suffix(".tmp")
+            tmp_path.write_text(new_text, encoding="utf-8")
+            tmp_path.replace(self._log_path)
+            self._cached_mtime = None
+            self._cached_entries = None
+        return removed
+
+    def clear_all(self) -> None:
+        """Clear the entire memory log, creating a clean slate."""
+        if self._log_path and self._log_path.exists():
+            self._log_path.write_text("", encoding="utf-8")
+            self._cached_mtime = None
+            self._cached_entries = []
 
     # --- Update path (Phase B) ---
 
@@ -173,6 +231,8 @@ class TradingMemoryLog:
         tmp_path = self._log_path.with_suffix(".tmp")
         tmp_path.write_text(new_text, encoding="utf-8")
         tmp_path.replace(self._log_path)
+        self._cached_mtime = None
+        self._cached_entries = None
 
     def batch_update_with_outcomes(self, updates: list[dict]) -> None:
         """Apply multiple outcome updates in a single read + atomic write.
@@ -227,6 +287,8 @@ class TradingMemoryLog:
         tmp_path = self._log_path.with_suffix(".tmp")
         tmp_path.write_text(new_text, encoding="utf-8")
         tmp_path.replace(self._log_path)
+        self._cached_mtime = None
+        self._cached_entries = None
 
     # --- Helpers ---
 

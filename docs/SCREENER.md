@@ -217,7 +217,7 @@ python quant/factor_backtest.py --watch   # 退出码 2 = 有告警，需要看�
 `--watch` 会：
 1. 用**非重叠双样本 t 检验**对比「近 12 期」与「此前基线」
 2. 做**窗口敏感性检验**（近 6/12/18/24 期符号是否一致）
-3. 把结果**累积**到 `reports/factor_ic_history.csv`
+3. 把结果**累积**到 `reports/_datasets/factor_ic_history.csv`
 4. 有强告警或符号漂移时返回退出码 2
 
 **设计要点**：它只在符号翻转**且统计显著**（t≥2）时强告警；仅翻转但 t 很小

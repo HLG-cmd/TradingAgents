@@ -78,6 +78,10 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # the oldest resolved entries are pruned once this limit is exceeded.
     # Pending entries are never pruned. None disables rotation entirely.
     "memory_log_max_entries": None,
+    # Memory isolation: when True, an analysis run only uses reflections from the
+    # same ticker and never injects cross-ticker lessons, ensuring each asset is
+    # analyzed completely independently without bias from other stocks.
+    "isolate_ticker_memory": True,
     # LLM settings
     "llm_provider": "openai",
     "deep_think_llm": "gpt-5.6",

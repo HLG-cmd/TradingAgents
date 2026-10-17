@@ -185,8 +185,31 @@ class TestStructuredOutputCapabilityDispatch:
 
 
 def _has_real_deepseek_key():
-    key = os.environ.get("DEEPSEEK_API_KEY", "")
-    return bool(key) and key != "placeholder"
+    """判断是否具备**可用于真实调用**的凭据。
+
+    ★ 2026-10-16 修：原判据 `bool(key) and key != "placeholder"` 只排除字面量
+      `placeholder`。实测该项目的 `.env` 里 `DEEPSEEK_API_KEY` 是一个 16 字符的
+      **测试/失效值**（既非 placeholder，也非真 key）⇒ 被判为「有真 key」⇒
+      实时用例照常执行 ⇒ 401 AuthenticationError ⇒ **全量 `pytest` 必失败 1 项**，
+      破坏「回归基线 752 passed」的可信度（健康检查只能靠「已排除真实 API 测试」
+      的附加豁免来解释，属治标）。
+
+      改为三层判据：① 非空；② 不是占位字面量；③ 具备真实 key 的形状
+      （DeepSeek 官方 key 形如 `sk-` + 32 位以上）。任一不满足即跳过。
+      这样「假 key / 测试 key」不再制造假失败，而真 key 仍会被执行。
+
+      注意：本函数只做**跳过判定**，不校验凭据有效性（离线无法校验），
+      因此无法覆盖「形状合法但已失效」的 key —— 那类仍会失败，属预期。
+    """
+    key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    if not key:
+        return False
+    if key.lower() in {"placeholder", "test", "dummy", "fake", "none", "null", "changeme"}:
+        return False
+    if key.lower().startswith(("sk-test", "sk-dummy", "sk-fake")):
+        return False
+    # 真实 DeepSeek key：`sk-` 前缀 + 足够长度
+    return key.startswith("sk-") and len(key) >= 32
 
 
 @pytest.mark.integration

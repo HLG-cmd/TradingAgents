@@ -232,19 +232,9 @@ def _get_stock_stats_bulk(
     # Calculate the indicator for all rows at once
     df[indicator]  # This triggers stockstats to calculate the indicator
 
-    # Create a dictionary mapping date strings to indicator values
-    result_dict = {}
-    for _, row in df.iterrows():
-        date_str = row["Date"]
-        indicator_value = row[indicator]
-
-        # Handle NaN/None values
-        if pd.isna(indicator_value):
-            result_dict[date_str] = "N/A"
-        else:
-            result_dict[date_str] = str(indicator_value)
-
-    return result_dict
+    # Optimized fast dictionary construction avoiding iterrows overhead
+    values = df[indicator].apply(lambda v: "N/A" if pd.isna(v) else str(v))
+    return dict(zip(df["Date"], values))
 
 
 def get_stockstats_indicator(
@@ -302,6 +292,14 @@ def get_fundamentals(
             ("Name", info.get("longName")),
             ("Sector", info.get("sector")),
             ("Industry", info.get("industry")),
+            # ★ 2026-10-15 新增：币种字段。
+            #   外国发行人 ADR 会出现 `currency`（价格/市值口径）≠ `financialCurrency`（财报口径），
+            #   此时快照把两套币种混算 ⇒ 净利率 / Forward EPS / PE 系列全部失真
+            #   （实测 SKHY：currency=USD、financialCurrency=KRW，净利率被算成 85.6%）。
+            #   这两个字段是 `_fundamentals_sanity` 检测币种不一致的**唯一输入**，
+            #   删掉它们会让该检测静默失效（铁律 3）。
+            ("Currency", info.get("currency")),
+            ("Financial Currency", info.get("financialCurrency")),
             ("Market Cap", info.get("marketCap")),
             ("PE Ratio (TTM)", info.get("trailingPE")),
             ("Forward PE", info.get("forwardPE")),

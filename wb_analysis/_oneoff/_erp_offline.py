@@ -1,8 +1,12 @@
 # lifecycle: oneoff
 # created: 2026-09-23
-# serves: ERP 离线降级（FRED 不可达时）
-# usage: ./.venv/Scripts/python.exe wb_analysis/_erp_offline.py
-"""ERP 分位的离线重算（FRED 不可达时的降级路径）。
+# serves: ERP 离线降级（FRED 不可达时）—— ★ **2026-09-17 那次事件的冻结记录，不是可复用工具**
+# frozen: 2026-09-17 事件快照。输入（PE=26.04、9 月 DGS10 逐日值）**全部硬编码在当时**，
+#         ⚠️ **直接跑会得到一份看似正常、实则陈旧的读数** —— 这正是铁律 3「静默失败」的形态。
+#         另：L24 读的 `wb_analysis/evidence/erp_history_sp500.json` **路径已迁到 `_cache/`**，
+#         故现在跑还会 `FileNotFoundError`。**保留它是为了留下"当时怎么算出来的"审计线索**，
+#         需要当期 ERP 分位请用 `erp_context.py` + `wb_analysis/_cache/erp_history_sp500.json`。
+"""ERP 分位的离线重算（FRED 不可达时的降级路径）—— 2026-09-17 事件的一次性记录。
 
 背景：2026-09-17 15:40 起 api.stlouisfed.org 与 fred.stlouisfed.org 全部超时
 （同日 14:39 的采集仍能取到 FRED 数据，属瞬时性中断），erp_context.py 无法完成。

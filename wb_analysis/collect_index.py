@@ -56,13 +56,14 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-os.chdir(PROJECT_ROOT)
+# ★ 2026-10-15：移除模块级 os.chdir(PROJECT_ROOT)，改为在 main() 入口执行，消除 import 副作用
 
 from dotenv import load_dotenv
 
 load_dotenv(PROJECT_ROOT / ".env")
 
 from quant.stock_pools import NASDAQ_100, get_latest_sp500
+from wb_analysis._thresholds import HUMP_MIN_PP, MAX_QUOTE_AGE_DAYS  # noqa: E402
 from wb_analysis.collect import (  # noqa: E402
     MACRO_ALIASES,
     PREDICTION_TOPICS,
@@ -74,6 +75,10 @@ from wb_analysis.collect import (  # noqa: E402
     _reddit_block,
     _safe_call,
     _stocktwits_block,
+    # ★ 2026-10-11（O3）：`--date` 口径守卫与「美东当日」取值**共用 collect.py 的实现**，
+    #   不在此处复制逻辑 —— 指数采集器与个股采集器是同一个失败模式的两条入口。
+    date_caliber_guard,
+    today_eastern,
 )
 
 EV_DIR = PROJECT_ROOT / "wb_analysis" / "evidence"
@@ -134,7 +139,10 @@ _CURRENT = dict(INDEX_CONFIGS[DEFAULT_INDEX])
 #    盘前/盘后/休市采集会拿到陈旧快照。** 这是采集时点问题，不是数据源缺陷。
 # ⇒ **本阈值保留不变**：它正确地拦住了盘前采集的垃圾数据。
 #    放行条件是「新鲜样本 > 0」，盘前场景自然为 0，无需改阈值。
-MAX_QUOTE_AGE_DAYS = 5
+# ⚠️ 2026-10-10：值本身已上提到 `wb_analysis/_thresholds.py`（**唯一定义源**），
+#    由顶部 import 提供 —— 因为 `_probe_option_dual_quote.py` 与 `_audit_gaps.py`
+#    曾各自抄一份同样的 5 天（后者还只在注释里声称「与本文件对齐」）。
+#    改口径请改 `_thresholds.py`，三处自动同步。
 
 _INDICATOR_LOOKBACK = 10
 
@@ -400,21 +408,29 @@ def probe_option_freshness(etf: str = ETF_PROXY) -> dict:
            "in_session": None, "session_note": ""}
 
     # ★ 先判定采集时点 —— 这是比数值过滤更前置的一道闸门
+    #   ⚠️ 2026-10-17：判据已收敛到 `_thresholds.market_session_phase()`（单一来源）。
+    #   此前这里**又写了一份** `9.5 <= _h < 16.0` 字面量 —— 与 `_should_use_cboe_source()`
+    #   各持一份边界，改一处忘一处就会出现「切了源但仍按旧口径判时段」的静默错配。
+    #   措辞也已同步到 CBOE 回退后的现实：非盘中**不再是死路**（自动切 CBOE 快照），
+    #   但仍须声明「拿的是上一时段快照」。
     try:
         import zoneinfo
+        from wb_analysis._thresholds import market_session_phase
+
         _now_ny = dt.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
-        _h = _now_ny.hour + _now_ny.minute / 60.0
-        _weekday = _now_ny.weekday() < 5
-        out["in_session"] = bool(_weekday and 9.5 <= _h < 16.0)
+        _phase = market_session_phase(_now_ny)
+        out["session_phase"] = _phase
+        out["in_session"] = (_phase == "in_session")
         if out["in_session"]:
             out["session_note"] = (f"采集时点 {_now_ny:%Y-%m-%d %H:%M} 美东，"
                                    f"处于常规交易时段，期权链应实时刷新")
         else:
-            _phase = "盘前" if _h < 9.5 else ("盘后" if _weekday else "非交易日")
+            _label = {"pre_market": "盘前", "after_hours": "盘后",
+                      "closed_day": "非交易日"}[_phase]
             out["session_note"] = (
-                f"采集时点 {_now_ny:%Y-%m-%d %H:%M} 美东，处于**{_phase}**——"
-                f"此时 yfinance 返回的期权链多为上一交易日的残留快照，"
-                f"lastTradeDate 可能已过时数周。**建议改在美东 09:30–16:00 采集。**")
+                f"采集时点 {_now_ny:%Y-%m-%d %H:%M} 美东，处于**{_label}**——"
+                f"yfinance 此时只返回上一交易日的残留快照（lastTradeDate 可能过时数周），"
+                f"故**期权自动改走 CBOE 官方延迟报价**（上一时段收盘快照，非实时报价）。")
     except Exception:  # noqa: BLE001
         pass
 
@@ -457,6 +473,57 @@ def probe_option_freshness(etf: str = ETF_PROXY) -> dict:
     return out
 
 
+def _source_label(src: str | None) -> str:
+    """期权来源标签（供证据包声明用）。未知来源如实标注，不美化。"""
+    return {
+        "yfinance": "yfinance（第三方聚合器，盘中实时刷新）",
+        "cboe_delayed": "CBOE 官方延迟报价（`cdn.cboe.com/api/global/delayed_quotes/options/`，"
+                        "免密钥，**15 分钟延迟**；非盘中时段提供**上一时段收盘快照**）",
+    }.get((src or "").strip(), f"未标注（{src or '缺失'}）")
+
+
+def _iv_method_label(src: str | None) -> str:
+    """IV 计算方法标签（随来源变化）。"""
+    return ("自建 Black-Scholes-Merton 反解"
+            if (src or "").startswith("yfinance")
+            else "交易所模型直出（CBOE 官方，无需反解）")
+
+
+def _should_use_cboe_source() -> tuple[bool, str]:
+    """判定是否该切到 CBOE（非盘中时段），返回 (是否切换, 说明)。
+
+    ★ 2026-10-17：**判据已上移到 `wb_analysis/_thresholds.py` 的 `option_source_decision()`**
+    —— 时段边界是全局判据（同时决定「走哪个源」），不得在消费方本地重写。
+    本函数只做转发，保留原签名以免影响既有调用点与测试。
+    """
+    from wb_analysis._thresholds import option_source_decision
+    try:
+        return option_source_decision()
+    except Exception:  # noqa: BLE001
+        # 判定失败时**保守选择主源**（不静默切到另一口径）
+        return False, "时点判定失败 ⇒ 保守用 yfinance 主源"
+
+
+def _resolve_source_note(use_cboe: bool, cboe_ok: bool, session_note: str) -> str:
+    """拼出「本次实际用了哪个源」的人读说明。
+
+    **必须区分「打算用」与「真的用上了」**：`use_cboe` 是纯时间判据（盘前/盘后即 True），
+    而 `cboe_ok` 才代表 CBOE 真的返回了数据。二者不一致时（403 / 网络失败 ⇒ 退回 yfinance），
+    说明里必须**显式写出这层降级** —— 否则证据包会声明成 CBOE 口径，
+    而数值其实来自自建 BSM 反解，两个口径的偏斜差异可达数 pp。
+
+    返回给证据包渲染，形如：
+      · 盘中：`…（常规交易时段）⇒ 用 yfinance 主源`
+      · 盘前且 CBOE 成功：`…（盘前）⇒ 切 CBOE 官方延迟报价（拿的是**上一时段收盘快照**，非实时报价）`
+      · 盘前但 CBOE 失败：上一句 + `｜⚠️ **但 CBOE 取数未成功，本轮回退 yfinance 主源**…`
+    """
+    if not use_cboe or cboe_ok:
+        return session_note
+    return (session_note
+            + "｜⚠️ **但 CBOE 取数未成功，本轮回退 yfinance 主源**"
+              "（该标的可能无可用期权，如指数符号 / A 股 ETF）")
+
+
 def fetch_option_structure(etf: str = ETF_PROXY) -> dict:
     """取 ETF 期权链，构建机构资金面指标 —— 填补「无期权/资金面证据」的缺口。
 
@@ -496,16 +563,60 @@ def fetch_option_structure(etf: str = ETF_PROXY) -> dict:
     # **必须按成交日过滤**，否则会把陈旧价格当成当前市场观点。
 
     try:
-        t = yf.Ticker(etf)
+        # ★★ 2026-10-16 新增：**时点分支**（方案 A：主源 + 回退）
+        #   问题：yfinance 的期权链只在美东 09:30–16:00 实时刷新；盘前/盘后它只返回
+        #   **上一交易日的残留挂单**（bid/ask 格式合法但 lastTradeDate 陈旧数周）。
+        #   实测（NDX 2026-10-16 轮，美东 08:29 盘前）：扫 29 个到期日、387 个有双边报价
+        #   合约，最新成交距今 **23.2 天**、合格样本 **0** ⇒ IV 等级 NONE ⇒ 维度整体不可用。
+        #
+        #   对策：非盘中时段自动切换 **CBOE 官方延迟报价**（免密钥，robots.txt 未禁止）。
+        #   它是**做市商报价链**（远月覆盖率 100%），不依赖「当天有没有成交」
+        #   ⇒ 盘前/盘后拿到的是**完整的上一时段快照**。
+        #   实证：只保留「上一交易日成交」的合约，31 个到期日全部可算 ATM IV。
+        #
+        #   ⚠️ 两条纪律：
+        #     ① **盘中不切换** —— 原路径已验证新鲜（距今 0.0 天），避免回归风险；
+        #     ② **口径不同不可混用** —— CBOE 的 iv/delta 是交易所模型，与项目自建 BSM
+        #        反解数值不同（同轮 2026-10-30 偏斜：CBOE −0.62pp vs 项目 −4.24pp）。
+        #        故返回值带 `source`，由渲染层在证据包里显式声明来源。
+        use_cboe, session_note = _should_use_cboe_source()
+        t = None
+        # ★ 2026-10-17：**必须区分「打算用 CBOE」与「真的用上了 CBOE」**。
+        #   此前 `source` 只看 `use_cboe`（纯时间判据）⇒ 一旦 CBOE 取数失败、退回 yfinance，
+        #   返回的 `source` 仍写 "cboe_delayed"，freshness 块也写 "已切 CBOE 源，跳过探测"
+        #   ⇒ **实际用的是 yfinance 的数据，却对外声明成 CBOE 口径**。
+        #   这会污染下游：证据包会打印「数据来源：CBOE 官方延迟报价」以及
+        #   「口径提示：本源的 iv/delta 由交易所模型给出」——而数值其实来自 BSM 反解。
+        #   两个源的口径本就不可混用（偏斜差异可达数 pp），声明错了比不声明更危险。
+        #   ⇒ 改用 `cboe_ok`（**实际**成功取到 CBOE 数据）驱动声明。
+        cboe_ok = False
+        if use_cboe:
+            try:
+                from wb_analysis._option_source import fetch_chain
+                t = fetch_chain(etf)
+                exps = list(t.options or [])
+                if not exps:
+                    t = None                      # 退回 yfinance（虽然预期也拿不到）
+                else:
+                    cboe_ok = True
+            except Exception:                     # noqa: BLE001
+                t = None                          # CBOE 不可用 ⇒ 退回原路径并如实登记
+        if t is None:
+            t = yf.Ticker(etf)
         exps = list(getattr(t, "options", None) or [])
         if not exps:
             return {"error": "无期权链数据"}
 
+        # spot：CBOE 用顶层 current_price；yfinance 用 fast_info / history
         spot = None
-        try:
-            spot = t.fast_info["lastPrice"]
-        except Exception:  # noqa: BLE001
-            pass
+        _cboe_spot = getattr(t, "spot", None)
+        if _cboe_spot:
+            spot = float(_cboe_spot)
+        if not spot:
+            try:
+                spot = t.fast_info["lastPrice"]
+            except Exception:  # noqa: BLE001
+                pass
         if not spot:
             try:
                 hist = t.history(period="5d")
@@ -820,6 +931,15 @@ def fetch_option_structure(etf: str = ETF_PROXY) -> dict:
             grade = "NONE"
 
         # --- 期限结构：最近的 ATM 可得日 vs 最远的 ATM 可得日 ---
+        # ★★ 2026-10-12：**只有端点是不够的**。实测 GOOG（基准 2026-10-11）ATM IV 逐档为
+        #    4天 36.59 → 11天 31.15 → **32天 36.29** → 95天 32.08，
+        #    端点斜率仅 −1.98pp ⇒ 旧措辞断言「正向结构是常态，说明近期未被额外定价」，
+        #    可**中段 32 天处比相邻两档高出 4~5pp** —— 那正是事件定价的形态
+        #    （与 Alphabet Q3 财报落在 10 月底~11 月中吻合）。
+        #    ⇒ 端点选择把方向带偏了。故补一个**局部驼峰**判据：
+        #    某一档同时高出**左右相邻档** ≥ HUMP_MIN_PP ⇒ 事件定价集中在那个窗口。
+        #    判据用「同时高于相邻两档」而非「与端点的差」，因为端点本身就有噪声
+        #    （本例近端 4 天反而比 11 天高 5.4pp，纯端点比较无法区分噪声与信号）。
         term = None
         atm_rows = [r for r in profiles
                     if r["atm_put_iv"] is not None and r["atm_call_iv"] is not None]
@@ -828,6 +948,19 @@ def fetch_option_structure(etf: str = ETF_PROXY) -> dict:
             near, far = atm_rows[0], atm_rows[-1]
             near_iv = round((near["atm_put_iv"] + near["atm_call_iv"]) / 2, 2)
             far_iv = round((far["atm_put_iv"] + far["atm_call_iv"]) / 2, 2)
+            _series = [{"expiry": r["expiry"], "days": r["days"],
+                        "atm_iv": round((r["atm_put_iv"] + r["atm_call_iv"]) / 2, 2)}
+                       for r in atm_rows]
+            hump = None
+            for i in range(1, len(_series) - 1):
+                cur, lo_, hi_ = _series[i], _series[i - 1], _series[i + 1]
+                if (cur["atm_iv"] - lo_["atm_iv"] >= HUMP_MIN_PP
+                        and cur["atm_iv"] - hi_["atm_iv"] >= HUMP_MIN_PP):
+                    hump = {"expiry": cur["expiry"], "days": cur["days"], "atm_iv": cur["atm_iv"],
+                            "excess_pp": round(min(cur["atm_iv"] - lo_["atm_iv"],
+                                                   cur["atm_iv"] - hi_["atm_iv"]), 2),
+                            "window_from": lo_["expiry"], "window_to": hi_["expiry"]}
+                    break
             term = {
                 "near_expiry": near["expiry"], "near_days": near["days"],
                 "near_atm_iv": near_iv,
@@ -835,6 +968,8 @@ def fetch_option_structure(etf: str = ETF_PROXY) -> dict:
                 "far_atm_iv": far_iv,
                 "slope_pp": round(near_iv - far_iv, 2),
                 "contango": near_iv < far_iv,
+                "atm_series": _series,
+                "hump": hump,
             }
 
         # --- 风险中性偏度替代：OTM put IV ÷ ATM put IV ---
@@ -869,7 +1004,30 @@ def fetch_option_structure(etf: str = ETF_PROXY) -> dict:
                     r["oi_unreliable"] = True
 
         # --- 新鲜度诊断：区分「闸门正常拒绝」与「上游整体陈旧」 ---
-        freshness = probe_option_freshness(etf)
+        # ★ 2026-10-16：切到 CBOE 时**跳过该探测**。
+        #   原因：probe_option_freshness 走 yfinance，而其判据是「最新成交距今 ≤5 天」。
+        #   CBOE 在盘前给的是**上一时段收盘快照**（按设计如此），若仍按该判据探测，
+        #   要么走 yfinance 拿到陈旧的残留挂单（假 negative），
+        #   要么即便探测 CBOE 也会因「昨日成交」被判 stale —— 两者都是误报。
+        #   ⇒ 切源时不再做 stale 探测，改为记录来源与时段说明（见 source / source_note）。
+        if cboe_ok:
+            freshness = {
+                "etf": etf, "expiries_checked": len(future), "min_age_days": None,
+                "n_fresh": None, "n_quoted": None, "stale": False,
+                "ages_days": [], "in_session": False, "session_note": session_note,
+                "source": "cboe_delayed",
+                "skipped_reason": "已切 CBOE 源，跳过 yfinance 口径的新鲜度探测",
+            }
+        else:
+            freshness = probe_option_freshness(etf)
+            if use_cboe:
+                # 想切 CBOE 但没切成功（403 / 网络失败）⇒ 退回 yfinance 主源。
+                # 必须**显式记录这层降级**，否则下游会以为走的是 CBOE。
+                freshness["cboe_fallback_failed"] = True
+                freshness["session_note"] = (
+                    f"{session_note}｜⚠️ **但 CBOE 取数未成功，本轮回退 yfinance 主源**"
+                    f"（该标的可能无可用期权，如指数符号 / A 股 ETF）"
+                )
         stale_note = None
         if freshness.get("stale"):
             # ★ 2026-09-17 修正：此处原先把结论写成「yfinance 数据源的系统性状态」
@@ -895,6 +1053,10 @@ def fetch_option_structure(etf: str = ETF_PROXY) -> dict:
 
         return {
             "etf": etf, "spot": round(spot, 2),
+            # ★ 2026-10-16：来源声明（方案 A 时点分支）。下游**必须**在证据包里
+            #   声明本轮的 IV/偏斜来自哪个源 —— 两者口径不同、数值不可混用。
+            "source": ("cboe_delayed" if cboe_ok else "yfinance"),
+            "source_note": _resolve_source_note(use_cboe, cboe_ok, session_note),
             "rate_used": round(rate, 4), "div_yield_used": div_yield,
             "div_note": div_note,
             "freshness": freshness,
@@ -1684,10 +1846,24 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
             notes.append(
                 f"- 📈 **期限结构**：{ts['near_expiry']}（{ts['near_days']}天）ATM IV "
                 f"{ts['near_atm_iv']} vs {ts['far_expiry']}（{ts['far_days']}天）"
-                f" {ts['far_atm_iv']} → 斜率 **{ts['slope_pp']:+}pp**，形态为 **{shape}**。"
-                + ("倒挂通常对应**近期事件风险定价**高于长期。"
-                   if not ts["contango"] else
-                   "正向结构是常态，说明近期未被额外定价。"))
+                f" {ts['far_atm_iv']} → **端点**斜率 **{ts['slope_pp']:+}pp**，形态为 **{shape}**。")
+            # ★★ 2026-10-12：端点斜率**不足以**支撑「近期是否被额外定价」——
+            #   只比最近/最远两档会漏掉中段驼峰。判据与理由见 `_thresholds.HUMP_MIN_PP`。
+            if ts.get("atm_series"):
+                notes.append("  · 逐档 ATM IV：" + " → ".join(
+                    f"{s['days']}天 {s['atm_iv']}" for s in ts["atm_series"]))
+            if ts.get("hump"):
+                h = ts["hump"]
+                notes.append(
+                    f"  ⚠️ **曲线非单调 —— {h['days']} 天处出现驼峰**：ATM IV {h['atm_iv']}，"
+                    f"同时高出相邻两档 ≥ **{h['excess_pp']}pp**"
+                    f"（{h['window_from']} 与 {h['window_to']}）"
+                    f" ⇒ **事件风险定价集中在 {h['window_from']} ~ {h['window_to']} 窗口内**。")
+                notes.append("  ⛔ **不得**仅据端点斜率说「近期未被额外定价」—— 已被驼峰证伪。")
+            elif ts["contango"]:
+                notes.append("  · 逐档走势与端点斜率一致，未见内部驼峰 ⇒ 可说「近期未被额外定价」。")
+            else:
+                notes.append("  · 倒挂通常对应**近期事件风险定价**高于长期。")
 
         if opts.get("div_note") and staleness_ok:
             notes.append(f"- 💰 **股息率参数**：{opts['div_note']}")
@@ -1696,10 +1872,36 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
         if opts.get("oi_note"):
             notes.append(f"- ⚠️ **持仓量（OI）口径不可信**：{opts['oi_note']}")
 
+        # ★ 2026-10-16：**来源声明**（方案 A 时点分支的配套）。
+        #   两个源的 IV/偏斜口径不同、数值不可混用，故必须显式标注。
+        _src = (opts.get("source") or "").strip()
+        _is_cboe = not _src.startswith("yfinance")
+        _src_block = (
+            f"- **数据来源：{_source_label(_src)}**\n"
+            f"  - {opts.get('source_note') or '（未记录时点说明）'}\n"
+            + ("  - ⚠️ **口径提示**：本源的 `iv`/`delta` 由**交易所模型**给出，"
+               "与项目自建 BSM 反解的数值**不可直接比较**"
+               "（实测同轮 2026-10-30 偏斜：本接口 −0.62pp vs BSM 反解 −4.24pp，"
+               "根因是样本数与 delta 定义差异）。**本报告全篇统一使用本接口口径。**\n"
+               if _is_cboe else "")
+        )
+        _iv_block = (
+            f"- **IV 计算方法**：**{_iv_method_label(_src)}**\n"
+            + ("  - 本源的 IV 与 greeks 由**交易所模型**直接给出，"
+               "无需（也不应）再用 BSM 反解；过滤链仍适用："
+               "双边报价 > 0 → `ask ≥ bid` → 点差 ≤ 30% → 成交日新鲜度合格。\n"
+               if _is_cboe else
+               "  （拟合中间价，二分法 70 次迭代，**含股息率**），"
+               "**不使用 yfinance 自带的 `impliedVolatility`** —— "
+               "后者与报价不自洽（call/put 偏离方向相反）。\n"
+               "  过滤链：双边报价 > 0 → `ask ≥ bid` → 点差 ≤ 30% → "
+               "**成交日新鲜度合格** → 反解 IV 落在 [2%, 120%]。\n")
+        )
         blocks.append(
             "## 13. 期权市场内部结构（指数本身无期权，以 "
             f"{ETF_PROXY} 为代理）\n\n"
-            f"- 标的价: {opts['spot']}　|　BSM 反解用无风险利率: "
+            + _src_block
+            + f"- 标的价: {opts['spot']}　|　BSM 反解用无风险利率: "
             f"{opts.get('rate_used')}　|　股息率: {opts.get('div_yield_used')}\n"
             f"- 扫描范围: **{opts.get('n_expiries_scanned')} / {opts.get('n_expiries_total')}** "
             "个未来到期日（全量，非抽样）\n"
@@ -1709,13 +1911,8 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
             f"- **报价新鲜度**：取成交日≤ {opts.get('quote_age_filter_days')} 天的合约"
             f"；本次最新成交距今 **{fresh.get('min_age_days')} 天**"
             f"、合格样本 **{fresh.get('n_fresh')}** 个\n"
-            "- **IV 计算方法**：**自建 Black-Scholes-Merton 反解**"
-            "（拟合中间价，二分法 70 次迭代，**含股息率**），"
-            "**不使用 yfinance 自带的 `impliedVolatility`** —— "
-            "后者与报价不自洽（call/put 偏离方向相反）。\n"
-            "  过滤链：双边报价 > 0 → `ask ≥ bid` → 点差 ≤ 30% → "
-            "**成交日新鲜度合格** → 反解 IV 落在 [2%, 120%]。\n"
-            "- **偏斜主口径为 25-delta 区间中位数**：在 `|Δ|∈[0.20,0.30]` 内取"
+            + _iv_block
+            + "- **偏斜主口径为 25-delta 区间中位数**：在 `|Δ|∈[0.20,0.30]` 内取"
             "**全部合格合约 IV 的中位数**作差（put − call）；无样本时依次放宽到"
             "`[0.15,0.35]`、`[0.10,0.45]`，**实际区间见 JSON 的 `skew_25d_band`**"
             "——区间越宽，与标准 25Δ 的可比性越低。备用口径为 ±10% 距现价。\n"
@@ -1781,8 +1978,13 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
 
 
 def main() -> int:
+    os.chdir(PROJECT_ROOT)
     ap = argparse.ArgumentParser(description="指数证据采集器（不调用 LLM），支持 NDX / SPX，默认 NDX")
-    ap.add_argument("--date", default=dt.date.today().isoformat(), help="基准日期 YYYY-MM-DD")
+    ap.add_argument("--date", default=None,
+                    help="基准日期 YYYY-MM-DD。口径＝**美东当日**（数据源的 today），"
+                         "**不是**最后一根 bar 的日期；默认取美东当日（**非本机日期**）")
+    ap.add_argument("--allow-stale-date", action="store_true",
+                    help="显式确认 `--date` 早于美东当日（会触发 §3 快照扣留，默认拒绝）")
     ap.add_argument("--lookback", type=int, default=365, help="行情回溯自然日数")
     ap.add_argument("--index", choices=list(INDEX_CONFIGS.keys()), default=DEFAULT_INDEX,
                     help="目标指数：NDX（纳斯达克100）或 SPX（标普500），默认 NDX")
@@ -1790,6 +1992,12 @@ def main() -> int:
     ap.add_argument("--no-social", action="store_true")
     ap.add_argument("--top-insiders", type=int, default=12, help="聚合内部人交易的权重股数量")
     args = ap.parse_args()
+
+    # ★ 2026-10-11（O3）：与 collect.py 同一道口径守卫（实现在 collect.py，此处不复制）
+    if args.date is None:
+        args.date = today_eastern()
+    if not date_caliber_guard(args.date, args.allow_stale_date):
+        return 2
 
     t0 = time.time()
     print(f"[指数证据采集] {args.index}  基准日 {args.date}\n")

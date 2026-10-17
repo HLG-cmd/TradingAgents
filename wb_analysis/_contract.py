@@ -33,8 +33,9 @@
 - **五档**（研究经理 / 组合经理 / 交易员的 `**Action**` / 三个风控席位）：
   `Buy` `Overweight` `Hold` `Underweight` `Sell`
 - **交易员末行**：`FINAL TRANSACTION PROPOSAL: **SELL**`（**大写**，恰 1 次，且在末行）
-- **情绪六档**：`Very Bullish` `Bullish` `Somewhat Bullish` `Neutral`
-  `Somewhat Bearish` `Bearish` `Very Bearish`（sentiment.md 的结构化头部用）
+- **情绪六档**：`Bullish` `Mildly Bullish` `Neutral` `Mixed`
+  `Mildly Bearish` `Bearish`（sentiment.md 的结构化头部用）
+  ⇒ ⚠️ **以 `tradingagents/agents/schemas.py::SentimentBand` 为准**（与 `FRAMEWORK.md` §六档逐字一致）。
 - ⚠️ trader.md 的**结论块首行是 `**Action**: Sell`（Title Case）**，
   而**末行是 `**SELL**`（大写）** —— 同一个文件里大小写相反，这是契约本身，不是笔误。
 """
@@ -53,10 +54,13 @@ FIVE_LEVELS: tuple[str, ...] = ("Buy", "Overweight", "Hold", "Underweight", "Sel
 #: 交易员三档（`**Action**:` 与末行 PROPOSAL 用）
 THREE_LEVELS: tuple[str, ...] = ("Buy", "Hold", "Sell")
 
-#: 情绪六/七档（`sentiment.md` 结构化头部）
+#: 情绪六档（`sentiment.md` 结构化头部）。
+#: ★ 2026-10-10 修正：此前这里写的是 **7 档**（`Very Bullish` / `Somewhat Bullish` / …），
+#:   与**上游 `tradingagents/agents/schemas.py::SentimentBand`、`FRAMEWORK.md` §六档、
+#:   以及归档报告的实际取值**（NVDA 轮实测 `Mildly Bullish`）**全部不符** —— 属遗留草稿用词。
+#:   该常量**无任何消费方**（全仓仅此处定义 + `__all__` 列出），故对齐到权威 6 档，消除漂移。
 SENTIMENT_LEVELS: tuple[str, ...] = (
-    "Very Bullish", "Bullish", "Somewhat Bullish", "Neutral",
-    "Somewhat Bearish", "Bearish", "Very Bearish",
+    "Bullish", "Mildly Bullish", "Neutral", "Mixed", "Mildly Bearish", "Bearish",
 )
 
 #: 交易员的契约行前缀（末行，恰 1 次）
@@ -84,7 +88,16 @@ FIVE_TITLE_RE = re.compile(rf"(?<![A-Za-z])({_alt(FIVE_LEVELS)})(?![A-Za-z])")
 #: 交易员末行的**大写**三档：`**HOLD**`
 THREE_BOLD_UPPER_RE = re.compile(r"\*\*(BUY|HOLD|SELL)\*\*")
 #: 交易员末行整体：`FINAL TRANSACTION PROPOSAL: **SELL**`
+#: ⚠️ 抓 `(\w+)`（宽松）：用于**读取**取值（`_reports_index` 抽 trader_action 时不在乎是否三档）。
 PROPOSAL_RE = re.compile(rf"{FINAL_PROPOSAL}:\s*\*\*(\w+)\*\*")
+
+#: 交易员末行整体 —— **严格版**：末行必须恰好是 `**BUY|HOLD|SELL**`（大小写不敏感）。
+#: ⚠️ 两条正则**语义不同、不可互换**（2026-10-10 收敛）：
+#:   · 宽松版抓 `(\w+)` ⇒ `**Foo**` 也能匹配，用于**取值**；
+#:   · 严格版限定三档 ⇒ `**Foo**` 判为不合契约，用于**校验**（`assemble`/`_verify_report`）。
+#: 此前这两条正则分别被 `assemble.py:54`、`_verify_report.py:29`、`_lint_drafts.py:233`
+#: **逐字各抄一遍**（其中两处与严格版完全等价）⇒ 统一到这里，改一处即三处同步。
+PROPOSAL_STRICT_RE = re.compile(rf"{FINAL_PROPOSAL}:\s*\*\*({_alt(THREE_LEVELS)})\*\*", re.I)
 
 #: 结论块标签 → 取值正则。**只认标签，不做「扫全文取第一个五档词」的退化解析**
 #: （退化解析正是铁律 8 警告的污染路径；宁可报错也不猜）。
@@ -117,6 +130,38 @@ FINAL_ALLOWED_FILES: frozenset[str] = frozenset({"trader.md"})
 #: 它们必须**逐字写出**档位词才能"定义"词汇表 —— 属合法的定义性引用。
 DOC_FILES: frozenset[str] = frozenset({"0_brief.md", "0_derived.md", "_constraints.md"})
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. 非 12 角色链路的专用通道（其产物以 `wb_analysis/evidence/` 为正规归宿）
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: ★ 2026-10-10：本表由 `_reports_index.py` 上提为**唯一定义源**。
+#:
+#: 背景：这张豁免表原先只有 `_reports_index.py` 认识 —— 它的注释本来就写得很清楚：
+#: 「不属于 12 角色链路、且**不产出报告树**的专用通道/过程产物 —— 它们**本就以
+#: `evidence/` 为正规归宿**（如 `collect_treasury.py` 内建的 OUT_DIR）」。
+#: 但 `_seal_run.py --orphans` 与 `scripts/_health.py` **都不认识它** ⇒ 三处判据打架：
+#:   · `_reports_index.py` → 豁免 ⇒ 卫生检查 0 问题
+#:   · `_seal_run.py`      → 判为孤儿 ⇒ **`--orphans --apply` 会真的把它删掉**（删除雷）
+#:   · `_health.py`        → 只数文件数 ⇒ 恒报「瞬态目录非空」WARN
+#: 这与「同一份契约被 8 个文件各写一遍」是同一类失败：**同一口径写在多处，必然漂移**。
+#: ⇒ **新增此类通道时只改这里**，三个消费方自动同步（`_selftest.py` 有断言守住）。
+#:
+#: ⚠ **别把它和 `macro:10y_treasury` 搞混**（2026-10-10 记）——两者名字像、来源完全不同：
+#:   · `macro:10y_treasury` = `collect.py` §10 里的**每股 FRED 通道**（只取 10Y 一根），
+#:     服务个股/指数的 ERP；它**是** 12 角色链路的一环，已在 `_gap_ledger.RULES` 登记。
+#:   · 本表 `TREASURY` 前缀 = `collect_treasury.py` 的**宏观专题曲线**（11 个期限 + 利差 +
+#:     TIPS + 通胀预期），**不服务任何单一标的**，故豁免、不进审计包、不被 `--orphans` 清扫。
+NON_TREE_PREFIXES: tuple[str, ...] = ("TREASURY",)
+
+
+def is_non_tree_artifact(name: str) -> bool:
+    """该 `evidence/` 文件名是否属于「非 12 角色链路、不产出报告树」的专用通道产物。
+
+    这类产物**不是残留**：它服务任意标的（不是某一轮），以 `evidence/` 为正规归宿，
+    既不进任何一轮的审计包，也**不允许**被 `--orphans` 清扫。
+    """
+    return name.startswith(NON_TREE_PREFIXES)
+
 
 def allows_five(filename: str) -> bool:
     """该文件名是否属于「允许结论块用五档词」的席位。"""
@@ -126,6 +171,8 @@ def allows_five(filename: str) -> bool:
 __all__ = [
     "FIVE_LEVELS", "THREE_LEVELS", "SENTIMENT_LEVELS", "FINAL_PROPOSAL",
     "FIVE_RE", "FIVE_TITLE_RE", "THREE_BOLD_UPPER_RE", "PROPOSAL_RE",
+    "PROPOSAL_STRICT_RE",
     "LABEL_PATTERNS", "RATING_ALLOWED_FILES", "FINAL_ALLOWED_FILES",
     "DOC_FILES", "allows_five",
+    "NON_TREE_PREFIXES", "is_non_tree_artifact",
 ]

@@ -1,7 +1,7 @@
 # TradingAgents 项目长期记忆
 
 > 本文件只存**每次都要遵守的**：架构 / 命令 / 12 角色契约 / 校验器硬约束 / 用户偏好（**铁律全文与单行索引见 `IRONLAWS.md`**）。
-> ★★ **开工第一件事：完整读 `.workbuddy-ai/memory/IRONLAWS.md`（铁律 1–48 全文）** —— 索引会丢细节，**只照索引办事而没读全文 = 没读**。
+> ★★ **开工第一件事：完整读 `.workbuddy-ai/memory/IRONLAWS.md`（铁律 1–51 全文）** —— 索引会丢细节，**只照索引办事而没读全文 = 没读**。
 > 备份：`_backup/`（`ls` 看全部，带日期后缀）。
 > ★ 2026-10-14 记忆合并：原 `.workbuddy/`（国内版）整体迁入 `.workbuddy-ai/`，全量打包存 `.workbuddy-ai/backup/domestic_workbuddy_20261014_full.zip`；代码内旧路径引用已同步切换，`.workbuddy/` 已不再存在。
 
@@ -58,6 +58,13 @@ TauricResearch 多智能体框架中文定制版 + 自建量化选股层（详�
 - ★ **数据缺口台账**：`wb_analysis/_gap_ledger.py <T> <date> [--check <草稿目录>]`
   · 每轮产出 `evidence/<T>_<date>.gaps.json`（登记 `cls` A/B/C/S · `decisive` · `blocks` · `remedy` · `fallback`）
   · **决定性缺口未写进 `0_brief.md` ⇒ 门禁 FAIL**（`_precheck.py` 第 2 项）；**新通道须登记进 `RULES` 表**（键名＝通道名，非语义名）
+- ★ **期权数据源随时点切换**（2026-10-17 起）：盘中走 yfinance；**盘前/盘后/非交易日自动切 CBOE 官方延迟报价**
+  · 判据唯一来源 = `_thresholds.option_source_decision()`（**消费方只许转发，不得本地重写时段边界**）
+  · 取数 = `wb_analysis/_option_source.py`｜台账 = `RULES["CBOE_fallback_used"]`（B 类/决定性）
+  · ⚠️ **非盘中拿的是「上一时段收盘快照」，不是实时报价**（CBOE 延长时段仅覆盖 SPX/SPXW/XSP，
+    **不含股票/ETF 期权**）⇒ 不得用于「此刻」类论断，**与盘中口径跨轮不可比**；两个源的 IV/偏斜**不可混用**
+  · 覆盖：✅ 美股个股与主要 ETF｜❌ **指数符号**（NDX/^NDX，无期权，仍用 ETF 代理）｜❌ **A 股 ETF**
+  · 自检 = `_selftest.py` 期权时点分支夹具（**时钟可注入，两条路径均可被夹具证明**）；回归 = `tests/test_option_source.py`
 - ★ **脚本生命周期**：每个 `.py` 头部必须声明 `# lifecycle: reusable|maintenance|oneoff`
   （`__init__.py`/`conftest.py` 豁免）；`oneoff` 归同级 `_oneoff/`（**审计线索，不删**）；新探针用 `_tidy_scripts.py --new` 登记
 - ★ **新文件放哪儿**（顺序问）：跑分析会用到→`wb_analysis/`；只在改代码排障用→`scripts/`；被调用的引擎→`quant/`；产出→`reports/`。**验收＝同一职责只在一处**
@@ -117,7 +124,7 @@ market / fundamentals / news / sentiment → bull ⇄ bear → manager → trade
 
 ## 铁律速查
 
-**铁律 1–48 全文 ＋ 单行索引表 ＋「低 PE 来源四件套」速查，全部在 `.workbuddy-ai/memory/IRONLAWS.md`。**
+**铁律 1–51 全文 ＋ 单行索引表 ＋「低 PE 来源四件套」速查，全部在 `.workbuddy-ai/memory/IRONLAWS.md`。**
 
 > ★★ 开工第一件事＝**完整读 `IRONLAWS.md`**。索引会丢细节，**只照索引办事而没读全文 = 没读**。
 > 索引表已于 2026-10-10 随全文一并移入该文件：本文件长期贴近宿主**按字节截断**阈值（≈15000 B），

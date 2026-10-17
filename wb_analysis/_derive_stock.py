@@ -12,7 +12,6 @@
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -24,6 +23,45 @@ if hasattr(sys.stderr, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parent.parent
 EV = ROOT / "wb_analysis" / "evidence"
+
+# ── 铁律 24 自检表：指标名 → 该指标**声称**的窗口长度（单位：K 线根数）──────
+#   症状（2026-10-11 SKHY 实测，**第二次真阳性**；首次 AVGO）：
+#   上市仅 65 个交易日，数据源仍返回 `close_200_sma = 167.35`，而该值恰等于
+#   「全部 65 根收盘的算术均值」167.352923（误差 < 0.005）
+#   ⇒ 所谓「200 日均线」实为「上市以来均价」——把 expanding mean 冒充固定窗口。
+#   判据不是「值看起来怪」，而是**算术上不可能**：窗口 200 > 可用根数 65。
+#   ⇒ 拿到新上市标的第一件事是数 K 线根数；本表把它变成机器动作。
+#   ⚠️ 窗口值必须能从指标名直接读出，不得凭印象填：
+#      close_50_sma / close_200_sma / close_10_ema 由名字给出 ⇒ 命中即「真阳性」；
+#      boll 族与 vwma 取**源默认口径 20**，atr/rsi 取经典 14 ⇒ 命中只报「疑似」。
+IND_WINDOW: dict[str, int] = {
+    "close_50_sma": 50,
+    "close_200_sma": 200,
+    "close_10_ema": 10,
+    "vwma": 20,
+    "boll": 20,
+    "boll_ub": 20,
+    "boll_lb": 20,
+    "atr": 14,
+    "rsi": 14,
+}
+# 窗口由名字直接给出的指标：命中即为**确定**的伪指标，而非疑似
+IND_WINDOW_HARD = {"close_50_sma", "close_200_sma", "close_10_ema"}
+
+
+def parse_bars(md: str) -> list[tuple]:
+    """从 K 线表解析 ``(date, open, high, low, close, volume)``。
+
+    全文只解析一次（供铁律 24 自检与 B/C 段复用），避免多处扫描产生漂移。
+    """
+    rows: list[tuple] = []
+    for line in md.splitlines():
+        mm = re.match(
+            r"^(\d{4}-\d{2}-\d{2})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)$",
+            line.strip())
+        if mm:
+            rows.append((mm.group(1), *[float(x) for x in mm.groups()[1:]]))
+    return rows
 
 
 def parse_statement(md: str, idx: int) -> dict[str, list[float | None]]:
@@ -97,6 +135,9 @@ def report(ticker: str, date: str) -> None:
     ind_latest_date = series("close_50_sma")
     ind_latest_date = ind_latest_date[0][0] if ind_latest_date else "?"
 
+    # ★ K 线表只在全文解析一次（B/C 段与铁律 24 自检复用），避免多处扫描漂移
+    rows = parse_bars(md)
+
     # ★★ 2026-09-23 修**贴错标签 + 用过时字段**两处缺陷：
     #   ① 原写法 `收盘 {close} @ {date}` 里 `date` 是**命令行基准日**，不是该收盘价真实日期；
     #   ② `close` 取证据包 L16 的 `latest_close`，而它**持有的是日线末日（可能已过时）的收盘**，
@@ -123,11 +164,15 @@ def report(ticker: str, date: str) -> None:
            ("close_50_sma", "close_200_sma", "close_10_ema", "vwma", "boll", "boll_ub", "boll_lb")}
     for k, v in IND.items():
         if v:
-            print(f"  {k:<13} {v:>9.2f}   距现价 {(close / v - 1) * 100:+.3f}%")
+            diff = close - v
+            pct_diff = (close / v - 1) * 100
+            print(f"  {k:<13} {v:>9.2f}   距现价 {diff:+8.2f} ({pct_diff:+.3f}%)")
     for k, key in (("52W HIGH", "high_52w"), ("52W LOW", "low_52w")):
         v = stat(key)
         if v:
-            print(f"  {k:<13} {v:>9.2f}   距现价 {(close / v - 1) * 100:+.3f}%")
+            diff = close - v
+            pct_diff = (close / v - 1) * 100
+            print(f"  {k:<13} {v:>9.2f}   距现价 {diff:+8.2f} ({pct_diff:+.3f}%)")
 
     bu, bm, bl = IND["boll_ub"], IND["boll"], IND["boll_lb"]
     if bu and bl and bm:
@@ -142,13 +187,92 @@ def report(ticker: str, date: str) -> None:
     print(f"  收益 5日 {stat('ret_5d')}% | 20日 {stat('ret_20d')}% | "
           f"60日 {stat('ret_60d')}% | 120日 {stat('ret_120d')}%")
 
+    # ── 铁律 24 自检：可用 K 线根数 vs 指标窗口 ──────────────────────────
+    #   ⚠️ 根数**必须**取自 §1 的 `- bars:` 字段，不能用 K 线表行数：
+    #      证据包 §1 只显示「最近 20 根 K 线」，指标序列也只给最近 5 个点 ——
+    #      拿表长当根数会让**所有**标的都误报（20 < 50/200）。
+    #   ★ 2026-10-12 修：原实现「缺 `bars:` 字段就退回 `len(rows)`」是个**假阳性源** ——
+    #      旧版证据包（如 GOOG_2026-10-10）确实没有该字段，而表恒为 20 行
+    #      ⇒ 会对**长历史标的**报出「50 日线、200 日线都不存在」的假警报。
+    #      故改为三态：有字段 ⇒ 用它；无字段但表带截断标记 ⇒ **无法判定，明确跳过**；
+    #      无字段且无截断标记 ⇒ 才可用表长（视表为完整）。
+    _barsf = stat("bars")
+    _trunc = re.search(r"最近\s*(\d+)\s*根\s*K\s*线", md)
+    n_bars: int | None
+    if _barsf:
+        n_bars = int(_barsf)
+        _bars_src = "§1 `- bars:` 字段"
+    elif _trunc and int(_trunc.group(1)) == len(rows):
+        n_bars = None
+        _bars_src = f"**不可判定**（缺 `bars:` 字段，且 K 线表被截断为 {len(rows)} 行）"
+    else:
+        n_bars = len(rows)
+        _bars_src = f"K 线表行数 {len(rows)}（无截断标记，视为完整）"
+
+    def _confirm_expanding_mean(name: str) -> tuple[int, bool] | None:
+        """用 expanding-mean 反算校验：若序列是累加均值 E_n=S_n/n，则
+        ``close_n = E_n·n − E_{n−1}·(n−1)``。反算出的收盘若与 K 线表吻合，
+        即证实该序列是「上市以来均价」而非固定窗口均线。
+        返回 (参与比对的点数, 是否全部吻合)，无法比对时返回 None。
+        """
+        s = series(name)          # 新 → 旧
+        if len(s) < 2 or not rows:
+            return None
+        table = {r[0]: r[4] for r in rows}
+        hits: list[tuple[float, float]] = []
+        for i in range(len(s) - 1):
+            n, m = n_bars - i, n_bars - i - 1
+            if n <= 0 or m <= 0 or s[i][0] not in table:
+                continue
+            hits.append((s[i][1] * n - s[i + 1][1] * m, table[s[i][0]]))
+        if not hits:
+            return None
+        ok = all(abs(a - b) <= max(0.02, abs(b) * 5e-4) for a, b in hits)
+        return (len(hits), ok)
+
+    _warned: list[str] = []
+    print(f"\nA2. 铁律 24 自检（指标窗口 vs 可用 K 线根数；根数取自 {_bars_src}）")
+    if n_bars is None:
+        # 无法判定可用根数时**保持沉默**，不得用截断后的表长冒充真实根数
+        # （那会把长历史标的一律误报成「指标不存在」）——比不报更危险。
+        print("  ⚠ 跳过：可用 K 线根数不可判定 ⇒ 本次**不做**铁律 24 判定（不猜、不误报）。")
+        print("     ⇒ 若需判定，请用当前版本 `collect.py` 重采（§1 会写 `- bars:` 字段）。")
+    for _name, _win in IND_WINDOW.items():
+        if n_bars is None:
+            break
+        _s = series(_name)
+        _v = IND.get(_name)
+        if _v is None and _s:
+            _v = _s[0][1]
+        if _v is None or n_bars >= _win:
+            continue
+        # 窗口 W 下、B 根 K 线最多能产出 max(0, B−W+1) 个值；B < W 时为 0。
+        # ⇒ 只要取到了值，就**已经**在算术上不可能 ⇒ 直接判真阳性（硬窗口）。
+        _possible = max(0, n_bars - _win + 1)
+        _hard = _name in IND_WINDOW_HARD
+        _lvl = "铁律 24 真阳性" if _hard else "疑似口径漂移（窗口为源默认值，非名字给出）"
+        _warned.append(_name)
+        print(f"  ⛔ [{_lvl}] {_name}：声称窗口 {_win} 根，但可用 K 线仅 **{n_bars}** 根"
+              f" ⇒ 该窗口最多只能产出 {_possible} 个值，**该指标在算术上不存在**。")
+        _cf = _confirm_expanding_mean(_name)
+        if _cf:
+            _n, _ok = _cf
+            print(f"     最新值 {_v:.6f}；expanding-mean 反算校验：{_n} 个点"
+                  + ("**全部与 K 线表吻合** ⇒ 确认为「上市以来累加均值」伪装成固定窗口均线。"
+                     if _ok else "**与 K 线表不符** ⇒ 非累加均值，但窗口本身已不可能，仍不得引用。"))
+        else:
+            print(f"     最新值 {_v:.6f}；包内序列点数不足，无法反算均值（需用探针直取日线复算）。")
+        print(f"     ⇒ 下游**禁止**把它当作「{_win} 日线」用于牛熊分界 / 长线支撑 / "
+              f"机构成本线等任何论证（铁律 24）。")
+    if n_bars is None:
+        pass                       # 已在上面打印「跳过」，此处不再打印任何结论
+    elif _warned:
+        print(f"  ⛔ 自检命中 {len(_warned)} 项：{', '.join(_warned)}（可用 K 线 {n_bars} 根）"
+              f" —— 这些指标必须在下游按「不可用」处理。")
+    else:
+        print(f"  ✓ 未命中：可用 K 线 {n_bars} 根，覆盖全部已声明指标窗口。")
+
     print("\nB. 最近 3 根 K 线")
-    rows = []
-    for line in md.splitlines():
-        mm = re.match(r"^(\d{4}-\d{2}-\d{2})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)$",
-                      line.strip())
-        if mm:
-            rows.append((mm.group(1), *[float(x) for x in mm.groups()[1:]]))
     prev = rows[-4][4] if len(rows) >= 4 else None
     for d, o, h, lo, c, v in rows[-3:]:
         rng = h - lo
@@ -158,7 +282,9 @@ def report(ticker: str, date: str) -> None:
         prev = c
     av = stat("avg_vol_20d")
     if av:
-        print(f"  20 日均量 {av / 1e6:.2f}M")
+        v_latest = rows[-1][5] if rows else None
+        ratio_str = f"（最新日量占 20 日均量 {v_latest / av * 100:.1f}%）" if v_latest else ""
+        print(f"  20 日均量 {av / 1e6:.2f}M {ratio_str}")
 
     print("\nC. 均线斜率 / MACD / RSI")
     for nm in ("close_50_sma", "close_200_sma", "close_10_ema"):
@@ -171,20 +297,6 @@ def report(ticker: str, date: str) -> None:
     for i in range(len(m_) - 1, -1, -1):
         print(f"  {m_[i][0]}  MACD {m_[i][1]:>8.3f}  Signal {s_[i][1]:>8.3f}  Hist {h_[i][1]:>8.3f}")
     if m_:
-        # ⚠️ 2026-10-02 修正：原实现是
-        #     `'已跌破零轴' if m_[0][1] < 0 else '在零轴上方'`
-        #   即用「当期值 < 0」直接判定为「已跌破零轴」，把
-        #   「当前位于零轴下方」与「当日发生向下穿越」混为一谈。
-        #
-        #   实测事故（GOOG 2026-10-01）：macd 窗口序列
-        #     −0.104 → −0.235 → −0.482 → −0.397 → −0.789
-        #   **全程为负**（自 09-25 起就在零轴下方），但该标签输出「已跌破零轴」，
-        #   被情绪分析师原样引用进 `1_analysts/sentiment.md`，与市场分析师按原始序列
-        #   作出的订正（当日是 macd **下穿 macds**、非穿越零轴）直接冲突。
-        #   ⇒ 属于「数据没错、标签说错」的静默误导，且会**跨角色传播**。
-        #
-        #   正确口径：先比较**前一根**的符号判断当日是否真的发生穿越，再给状态描述。
-        #   `series()` 返回的序列以 index 0 为**最新**（见上方打印用的 `s[-1] → s[0]`）。
         cur = m_[0][1]
         prev = m_[1][1] if len(m_) >= 2 else None
         if prev is not None and prev >= 0 > cur:
@@ -199,6 +311,16 @@ def report(ticker: str, date: str) -> None:
     rs = series("rsi")
     if rs:
         print("  RSI: " + " | ".join(f"{d[5:]} {v:.2f}" for d, v in reversed(rs)))
+        # 背离检验：检查价格与 RSI 走势是否同向（严防强行叫底背离）
+        if len(rows) >= 2 and len(rs) >= 2:
+            p_curr, p_prev = rows[-1][4], rows[-2][4]
+            r_curr, r_prev = rs[0][1], rs[1][1]
+            if p_curr < p_prev and r_curr < r_prev:
+                print(f"  ⚠️ 背离检验：价格创低 ({p_curr:.2f} < {p_prev:.2f}) 且 RSI 走低 ({r_curr:.2f} < {r_prev:.2f}) ⇒ **无底背离，属顺势下挫**！严禁误标底背离。")
+            elif p_curr < p_prev and r_curr > r_prev:
+                print(f"  ★ 背离检验：价格创低 ({p_curr:.2f} < {p_prev:.2f}) 但 RSI 抬高 ({r_curr:.2f} > {r_prev:.2f}) ⇒ 出现底背离反弹信号。")
+            elif p_curr > p_prev and r_curr < r_prev:
+                print(f"  ⚠️ 背离检验：价格走高 ({p_curr:.2f} > {p_prev:.2f}) 但 RSI 降低 ({r_curr:.2f} < {r_prev:.2f}) ⇒ 出现顶背离警告。")
 
     # ---------- 基本面快照 ----------
     print("\nD. 估值快照（§3）+ 口径校验")
@@ -237,8 +359,10 @@ def report(ticker: str, date: str) -> None:
         rev0 = g(inc, "Total Revenue", 0)
         gp0, oi0, ni0 = g(inc, "Gross Profit", 0), g(inc, "Operating Income", 0), g(inc, "Net Income", 0)
         if rev0:
-            print(f"    毛利率 {gp0 / rev0 * 100:.2f}%  营业利润率 {oi0 / rev0 * 100:.2f}%  "
-                  f"净利率 {ni0 / rev0 * 100:.2f}%")
+            gp_s = f"{gp0 / rev0 * 100:.2f}%" if gp0 is not None else "n/a"
+            oi_s = f"{oi0 / rev0 * 100:.2f}%" if oi0 is not None else "n/a"
+            ni_s = f"{ni0 / rev0 * 100:.2f}%" if ni0 is not None else "n/a"
+            print(f"    毛利率 {gp_s}  营业利润率 {oi_s}  净利率 {ni_s}")
     if bal:
         print("  资产负债表:")
         ta, tl_c, tl_nc = g(bal, "Total Assets", 0), g(bal, "Current Liabilities", 0), \

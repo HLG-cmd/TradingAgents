@@ -158,6 +158,14 @@ BACKTEST_PROVENANCE = (
     "纳指100 与标普500 两个宇宙结论一致"
 )
 SIGNIFICANT_T = 2.0        # |t| >= 2 才算统计显著
+# ★ 2026-10-10：下面这档**只用于「分档描述」**（把某个 IC 归到「弱/边际」一栏），
+#   **不得**用它下「显著」结论 —— 与 `SIGNIFICANT_T` 语义不同，不可互换。
+#   统一的动机：这些值原本在 `factor_backtest.py` / `fundamental_backtest.py` 里
+#   被硬编码 9 处（`2.0` / `1.5` / `1.0`），调档时需要人工同步多个文件。
+#   ★ 同轮收敛：原 `WEAK_T = 1.0` 已删除 —— 它在 `factor_backtest.py` 印的 `~弱`
+#     与 `MARGINAL_T` 在 `fundamental_backtest.py` 印的 `~ 弱` **是同一个标签**，
+#     1.0 属漂移而非设计差异 ⇒ 统一到 1.5（更贴近「未达常规显著」的通常口径）。
+MARGINAL_T = 1.5           # 次级档：弱/边际偏离（仅描述，非「显著」）
 
 FACTOR_VALIDATION = {
     "quality": {

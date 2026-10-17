@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # ★ 2026-10-08：契约常量改为**唯一来源** import（见 `_contract.py` 抬头的漂移史）。
 sys.path.insert(0, str(ROOT))
-from wb_analysis._contract import FIVE_TITLE_RE  # noqa: E402
+from wb_analysis._contract import FINAL_PROPOSAL, FIVE_TITLE_RE  # noqa: E402
 
 # 顺序重要：先长后短，避免 "Overweight/Buy" 被拆坏
 RULES = [
@@ -48,7 +48,7 @@ RULES = [
 
 KEEP_LINE_PATTERNS = [
     re.compile(r"^\*\*(Recommendation|Rating)\*\*:"),      # 结论块
-    re.compile(r"^FINAL TRANSACTION PROPOSAL:"),
+    re.compile(rf"^{FINAL_PROPOSAL}:"),
     re.compile(r"^\*\*Action\*\*:"),
 ]
 

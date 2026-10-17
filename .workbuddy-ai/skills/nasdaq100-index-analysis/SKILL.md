@@ -15,7 +15,7 @@ agent_created: true
 | 个股 | `wb_analysis/collect.py <TICKERS> --date <D>` | `wb_analysis/_derive_stock.py <T> <D>` |
 
 > `--index` 默认 `NDX`，故原有 NDX 调用方式完全不变。
-> **两个指数的实质差异**（成分池 / 去重 / 集中度 / 分红率）见 `.workbuddy/memory/DOMAINS.md` → 「NDX vs SPX 不可串」。
+> **两个指数的实质差异**（成分池 / 去重 / 集中度 / 分红率）见 `.workbuddy-ai/memory/DOMAINS.md` → 「NDX vs SPX 不可串」。
 > ⚠️ `get_latest_sp500()` 若回退到 99 只精选核心，**报告中必须声明** —— 否则广度与集中度结论严重失真。
 
 **个股路径的额外注意点**：
@@ -275,8 +275,8 @@ PY
 ## 陷阱与口径 → 一律看 `MEMORY.md` / `DOMAINS.md`，本文件不重复
 
 本 skill 只管**怎么做**（步骤、命令、顺序、检查点）。
-**该记住什么**（口径、判据、阈值、陷阱）在 `.workbuddy/memory/IRONLAWS.md`（铁律 1–48 全文 + 索引）与
-`.workbuddy/memory/MEMORY.md`（每次都要遵守的硬约束）与
+**该记住什么**（口径、判据、阈值、陷阱）在 `.workbuddy-ai/memory/IRONLAWS.md`（铁律 1–51 全文 + 索引）与
+`.workbuddy-ai/memory/MEMORY.md`（每次都要遵守的硬约束）与
 `DOMAINS.md`（按标的 / 子系统查阅）。**不在本文件重复** —— 两处各写一遍的结果是两边会漂移，
 而漂移的工具比没有工具更危险。
 

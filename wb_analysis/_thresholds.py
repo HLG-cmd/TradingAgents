@@ -53,6 +53,76 @@ MAX_QUOTE_AGE_DAYS: float = 5.0
 #: （同族教训见本项目铁律 34：缓存按本机时区判「当日」⇒ 跨时区分析时永不刷新。）
 MARKET_TZ_NAME: str = "America/New_York"
 
+#: 常规交易时段边界（美东小时，**含起点不含终点**）：09:30 – 16:00。
+#:
+#: ⚠️ 为什么这条边界是**全局判据**而不是采集器的局部逻辑：
+#: 它同时决定「期权走哪个源」（`option_source_decision`）与「报价算不算新鲜」。
+#: 两处若各写一份，改一处忘一处就会出现「切了源但仍按旧口径过滤」这类静默错配。
+REGULAR_SESSION_OPEN_HOUR: float = 9.5      # 09:30 美东
+REGULAR_SESSION_CLOSE_HOUR: float = 16.0    # 16:00 美东
+
+
+def market_session_phase(now: "datetime.datetime | None" = None) -> str:
+    """返回美股当前所处时段：`in_session` / `pre_market` / `after_hours` / `closed_day`。
+
+    `now` 为 `None` 时取当前美东时间；**传入 aware datetime 可注入任意时点做测试**
+    （期权时点分支此前无法被测试，正是因为它把 `datetime.now()` 写死在函数体里）。
+    """
+    import datetime as _dt
+    import zoneinfo
+
+    if now is None:
+        now = _dt.datetime.now(zoneinfo.ZoneInfo(MARKET_TZ_NAME))
+    elif now.tzinfo is None:
+        # 裸 datetime 一律按美东解释，不做静默的 UTC 假设
+        now = now.replace(tzinfo=zoneinfo.ZoneInfo(MARKET_TZ_NAME))
+    else:
+        now = now.astimezone(zoneinfo.ZoneInfo(MARKET_TZ_NAME))
+
+    if now.weekday() >= 5:
+        return "closed_day"
+    h = now.hour + now.minute / 60.0
+    if h < REGULAR_SESSION_OPEN_HOUR:
+        return "pre_market"
+    if h < REGULAR_SESSION_CLOSE_HOUR:
+        return "in_session"
+    return "after_hours"
+
+
+def option_source_decision(now: "datetime.datetime | None" = None) -> tuple[bool, str]:
+    """判定期权该走哪个源：返回 `(是否切 CBOE 官方延迟报价, 人读说明)`。
+
+    **盘中走 yfinance 主源**（实时、已验证新鲜，零回归）；
+    **非盘中走 CBOE 官方延迟报价**（拿的是**上一时段收盘快照**，非实时报价）。
+
+    为什么非盘中也要给数据而不是判缺口：yfinance 在盘前/盘后只返回**残留挂单**
+    （`bid`/`ask` 格式合法但 `lastTradeDate` 陈旧数周），而 CBOE 是**做市商报价链**，
+    不依赖「该合约当天有没有成交」⇒ 盘前仍能重建完整期限结构。
+
+    ⚠️ 但**不是「解除时间限制」**：CBOE 的延长时段（GTH 20:15–09:25）仅覆盖
+    SPX / SPXW / XSP，**不含股票与 ETF 期权** ⇒ 盘前拿到的成交**必然止于上一交易日**。
+    这是市场本身没有成交，不是接口缺陷。
+    """
+    phase = market_session_phase(now)
+    import datetime as _dt
+    import zoneinfo
+
+    if now is None:
+        now = _dt.datetime.now(zoneinfo.ZoneInfo(MARKET_TZ_NAME))
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=zoneinfo.ZoneInfo(MARKET_TZ_NAME))
+    else:
+        now = now.astimezone(zoneinfo.ZoneInfo(MARKET_TZ_NAME))
+
+    stamp = f"{now:%Y-%m-%d %H:%M}"
+    if phase == "in_session":
+        return False, f"{stamp} 美东（常规交易时段）⇒ 用 yfinance 主源"
+    label = {"pre_market": "盘前", "after_hours": "盘后", "closed_day": "非交易日"}[phase]
+    return True, (
+        f"{stamp} 美东（{label}）⇒ 切 CBOE 官方延迟报价"
+        f"（拿的是**上一时段收盘快照**，非实时报价）"
+    )
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 期权期限结构
 # ─────────────────────────────────────────────────────────────────────────────

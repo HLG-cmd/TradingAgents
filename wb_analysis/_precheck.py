@@ -104,7 +104,14 @@ def main() -> int:
     # ★ 前置自检：工具缺失必须**显式失败**。
     #   否则 `python 缺失的脚本.py` 只会往 stderr 打一行「can't open file」并返回 2，
     #   可能被误读成「检出了问题」—— 又是一种坏检测器伪装成好检测器。
-    needed = ["_verify_ratings.py", "_audit_values.py", "_lint_drafts.py", "_check_freshness.py"]
+    needed = [
+        "_verify_ratings.py",
+        "_audit_values.py",
+        "_lint_drafts.py",
+        "_check_freshness.py",
+        "_verify_snapshot_consistency.py",
+        "_verify_earnings_quality.py",
+    ]
     if args.report:
         needed.append("_verify_report.py")
     missing = [t for t in needed if not (HERE / t).exists()]
@@ -142,10 +149,10 @@ def main() -> int:
     #   判据（客观、可复算）：证据包通道健康度 → 缺口台账（wb_analysis/_gap_ledger.py）→
     #   凡 `decisive=True` 的缺口，其关键词必须出现在 `0_brief.md` 里。
     m = re.match(r"^(.+?)_(\d{4}-\d{2}-\d{2})$", draft.name)
+    tk, dt_ = (m.group(1), m.group(2)) if m else ("", "")
     if not m:
         add("数据缺口台账", "WARN", f"草稿目录名不形如 <标的>_<日期>（{draft.name}），跳过")
     else:
-        tk, dt_ = m.group(1), m.group(2)
         if not (HERE / "_gap_ledger.py").exists():
             add("数据缺口台账", "WARN", "缺少 _gap_ledger.py，跳过")
         else:
@@ -201,6 +208,51 @@ def main() -> int:
     else:
         add("小节正文审计", "WARN", "未提供 --evidence，跳过")
 
+    # ---- 0d. 快照内部自洽性检测（抓 Forward EPS 异常翻倍）----
+    # 2026-10-10 接入：严防 Forward PE / Forward EPS 与 TTM 矛盾却未声明。
+    if tk and dt_:
+        snap_cmd = [PY, str(HERE / "_verify_snapshot_consistency.py"), tk, dt_,
+                    "--draft-dir", str(draft)]
+        if _ev:
+            snap_cmd += ["--evidence", str(_ev)]
+        rc, out = run(snap_cmd)
+        if crashed(out):
+            add("快照自洽性", "FAIL", "自洽性检测器自身报错")
+        elif rc == 0:
+            add("快照自洽性", "PASS", "快照派生比率自洽（或异常项已在简报中归因）")
+        else:
+            add("快照自洽性", "WARN", "快照存在可疑前瞻派生（未在简报中声明），需人工核验")
+    else:
+        add("快照自洽性", "WARN", "草稿目录未包含标的代码与日期，跳过")
+
+    # ---- 0e. 收益质量硬闸门（Q3 负税 / Q4 正常化偏差 / Q5 非经营重估浮盈）----
+    # 2026-10-10 接入：彻底杜绝「低 PE 陷阱」（GOOG 浮盈占 61%、WDC 分立利得 69%、DUOL 负税）。
+    # 判据：若命中 FAIL，检查简报中是否已改用经营性口径/扣非/剥离非经常性利得。
+    is_etf_or_index = any(x in tk.upper() for x in ("SPX", "NDX", "HSTECH", "512", "515", "159", "^"))
+    if tk and not is_etf_or_index:
+        rc, out = run([PY, str(HERE / "_verify_earnings_quality.py"), "--tickers", tk, "--exit-on-fail"])
+        if crashed(out):
+            add("收益质量硬闸门", "FAIL", "收益质量验证器自身报错")
+        elif rc == 0:
+            add("收益质量硬闸门", "PASS", "报表净利无负税/正常化偏差/非经营性重估扭曲")
+        else:
+            # 命中 FAIL：检查 0_brief.md 是否已穿透声明并改用经营性口径
+            brief_p = draft / "0_brief.md"
+            declared_eq = False
+            if brief_p.exists():
+                b_text = brief_p.read_text(encoding="utf-8")
+                keywords = ("经营性", "扣非", "剥离", "公允价值", "非经营", "非常规", "一次性", "正常化PE")
+                if any(kw in b_text for kw in keywords):
+                    declared_eq = True
+            if declared_eq:
+                add("收益质量硬闸门", "PASS", "报表净利虽含非经常项，但简报已穿透并改用经营性/扣非口径")
+            else:
+                fail_lines = [l.strip() for l in out.splitlines() if "FAIL:" in l]
+                summary_err = fail_lines[0] if fail_lines else "报表净利失真"
+                add("收益质量硬闸门", "FAIL", f"命中硬闸门未在简报穿透声明：{summary_err[:60]}")
+    elif tk:
+        add("收益质量硬闸门", "PASS", f"标的 {tk} 为指数/ETF，无单一个股财务收益质量闸门")
+
     # ---- 1. 评级词与契约字段 ----
     rc, out = run([PY, str(HERE / "_verify_ratings.py"), str(draft)])
     if crashed(out):
@@ -227,7 +279,17 @@ def main() -> int:
     # ---- 3. 数字溯源 + 契约违规（lint）----
     # 退出码语义：0 = 无契约违规；2 = 有契约违规（阻断）；非零其它 = 工具出错。
     if evidence:
-        rc, out = run([PY, str(HERE / "_lint_drafts.py"), str(draft)] + [str(e) for e in evidence])
+        # ★ 2026-10-15：自动将传入证据包同目录的 `.derived.md` 与 `.supplement.md` 纳入合法来源，
+        #   消除 `_precheck.py` 只传 `--evidence <T>_<date>.md` 时把机算派生值/补充快照值误报为未溯源数字的断层。
+        expanded_ev = list(evidence)
+        for ev_p in evidence:
+            if ev_p.name.endswith(".md") and not ev_p.name.endswith((".derived.md", ".supplement.md")):
+                stem = ev_p.name[:-3]
+                for suf in (".derived.md", ".supplement.md"):
+                    cand = ev_p.parent / f"{stem}{suf}"
+                    if cand.exists() and cand not in expanded_ev:
+                        expanded_ev.append(cand)
+        rc, out = run([PY, str(HERE / "_lint_drafts.py"), str(draft)] + [str(e) for e in expanded_ev])
         viol = [l.strip() for l in out.splitlines() if l.strip().startswith("✗")]
         untraced = [l.strip() for l in out.splitlines() if "未溯源数字" in l]
         if crashed(out):

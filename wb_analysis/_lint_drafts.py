@@ -39,9 +39,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from wb_analysis._contract import (  # noqa: E402
     DOC_FILES as _DOC_ALL,
     FINAL_ALLOWED_FILES,
+    FINAL_PROPOSAL,
     RATING_ALLOWED_FILES,
     FIVE_RE as RATING_RE,
+    PROPOSAL_STRICT_RE,
 )
+# ★ 2026-10-10：归档跳过表由 `wb_analysis/_paths.py` 提供单一来源
+#   （此前本文件与 `_check_residuals` / `_audit_values` / `_check_role_files` 各写一份）。
+from wb_analysis._paths import SKIP_ARCHIVE_DIRS  # noqa: E402
 
 NUM_RE = re.compile(r"\d[\d,]*\.?\d*")
 
@@ -113,7 +118,7 @@ def _split_excludes(argv: list[str]) -> tuple[list[str], list[str]]:
 def main() -> int:
     excludes, positional = _split_excludes(sys.argv[1:])
     if not excludes:
-        excludes = ["_stale", "_archive"]
+        excludes = list(SKIP_ARCHIVE_DIRS)
     if len(positional) < 2:
         print(__doc__)
         return 1
@@ -122,8 +127,18 @@ def main() -> int:
     # 统一简报与派生指标一并作为「允许来源」
     for extra in ("0_brief.md", "0_derived.md"):
         p = draft_dir / extra
-        if p.exists():
+        if p.exists() and p not in sources:
             sources.append(p)
+
+    # ★ 2026-10-15：自动将传入证据包同目录的 `.derived.md` 与 `.supplement.md` 纳入合法来源，
+    #   消除 `_precheck.py` 只传 `--evidence <T>_<date>.md` 时把机算派生值/补充快照值误报为未溯源数字的断层。
+    for s in list(sources):
+        if s.name.endswith(".md") and not s.name.endswith((".derived.md", ".supplement.md")):
+            stem = s.name[:-3]
+            for suf in (".derived.md", ".supplement.md"):
+                cand = s.parent / f"{stem}{suf}"
+                if cand.exists() and cand not in sources:
+                    sources.append(cand)
 
     allowed_raw: set[str] = set()
     for p in sources:
@@ -169,11 +184,16 @@ def main() -> int:
         # ⚠️ 必须区分「真的写了这行」与「只是提到这个短语」。
         # 实测（2026-09-17）：各角色在文末常写「本稿未写 FINAL TRANSACTION PROPOSAL 行」
         # 以示遵守契约，若用朴素子串匹配会把这类**合规声明**误判为违规。
+        # ⚠️ 契约前缀字符串也取自 `_contract.FINAL_PROPOSAL`（2026-10-10 收敛）——
+        #    此前 4 处各自手写这个长字符串，改一处即 4 处不同步。
+        #    下面的正则**故意比 `PROPOSAL_STRICT_RE` 宽松**（容忍全角冒号与反引号），
+        #    因为它是「越界行检测器」：宁可宽一点抓出来，也不要漏掉。
+        #    故只把**前缀字符串**换成常量，不动它的宽松量词。
         real_fin, mentions = [], []
         for i, l in enumerate(text.splitlines(), 1):
-            if "FINAL TRANSACTION PROPOSAL" not in l:
+            if FINAL_PROPOSAL not in l:
                 continue
-            if re.search(r"FINAL TRANSACTION PROPOSAL\s*[:：]\s*[\*`\s]*(BUY|HOLD|SELL)", l, re.I):
+            if re.search(rf"{FINAL_PROPOSAL}\s*[:：]\s*[\*`\s]*(BUY|HOLD|SELL)", l, re.I):
                 real_fin.append(i)
             else:
                 mentions.append(i)
@@ -202,9 +222,15 @@ def main() -> int:
         #    注：检查的是「块**外**出现」；块内缺失（head is None 且 hits 非空）同样落入 bad。
         if f.name not in RATING_ALLOWED_FILES and hits:
             issues.append(f"  ✗ 正文出现五档英文词 {len(hits)} 处：{hits[:3]}")
-        elif f.name in {"manager.md", "portfolio_manager.md",
-                        "aggressive.md", "conservative.md", "neutral.md",
-                        "trader.md"}:
+        elif f.name in RATING_ALLOWED_FILES:
+            # ⚠️ 2026-10-10：此处原先**硬列了 6 个文件名**，与 `_contract.RATING_ALLOWED_FILES`
+            #    值相同却各写一遍 ⇒ 往 contract 里新增一个允许表态的席位时，
+            #    上面的 if 分支会跳过它（因为它「在白名单里」），而这个写死的集合又不含它
+            #    ⇒ 两个分支都进不去、**该席位的正文五档词永不被检查** ——
+            #    这正是本条注释下面记录的 2026-10-01 / 2026-10-02 两次门禁盲区的**同一入口**。
+            #    改为直接引用同名常量。
+            # ⚠️ 不能用 `else:` 代替：if 分支还带 `and hits`，改成 else 会让
+            #    「白名单外且零命中」也掉进本分支（行为改变）。
             # ⚠️ 2026-10-02 二次补漏：2026-10-02 早些时候把三个风险席位加进了本分支，
             #    但**漏了 trader.md** —— 它同样同时满足「在白名单里」与「不在原 {manager, PM} 集合里」，
             #    于是它的正文五档词也从未被本检查覆盖。
@@ -227,11 +253,40 @@ def main() -> int:
             issues.append("  ✗ 缺少 'Overall Sentiment' 结构化头部")
         if f.name == "manager.md" and "**Recommendation**" not in text:
             issues.append("  ✗ 缺少 **Recommendation** 结论块")
-        if f.name == "portfolio_manager.md" and "**Rating**" not in text:
-            issues.append("  ✗ 缺少 **Rating** 结论块")
+        # ★ 2026-10-15 对齐：组合经理与三个风控席位均须包含 `**Rating**` 结论块，
+        #   与 _check_role_files 契约保持一致，避免各自要求不同
+        if f.name in {"portfolio_manager.md", "aggressive.md", "conservative.md", "neutral.md"} and "**Rating**" not in text:
+            issues.append(f"  ✗ {f.name} 缺少 **Rating** 结论块")
         if f.name == "trader.md":
-            if not re.search(r"FINAL TRANSACTION PROPOSAL:\s*\*\*(BUY|HOLD|SELL)\*\*", text, re.I):
+            # 交易员末行正则同样是 `_contract` 单一来源（2026-10-10 收敛，此前此处内联一份）。
+            if not PROPOSAL_STRICT_RE.search(text):
                 issues.append("  ✗ trader.md 缺少 FINAL TRANSACTION PROPOSAL 收尾行")
+            # 铁律 #46：买入操作必须具备止损与目标位，且盈亏比必须 >= 2.0
+            act_m = re.search(r"\*\*Action\*\*\s*[:：]\s*(Buy|Long)", text, re.I)
+            if act_m:
+                entry_m = re.search(r"\*\*(?:Entry Price|Entry)\*\*\s*[:：]\s*(\d+(?:\.\d+)?)", text, re.I)
+                stop_m = re.search(r"\*\*(?:Stop Loss|Stop)\*\*\s*[:：]\s*(\d+(?:\.\d+)?)", text, re.I)
+                tgt_m = re.search(r"(?:第一目标(?:位)?|Target\s*1?|Take\s*Profit)\D{0,15}(\d+(?:\.\d+)?)", text, re.I)
+                if not entry_m or not stop_m:
+                    issues.append("  ✗ 铁律 #46 违规：Buy 操作未明确声明 Entry Price 或 Stop Loss")
+                elif entry_m and stop_m:
+                    entry_val = float(entry_m.group(1))
+                    stop_val = float(stop_m.group(1))
+                    if stop_val >= entry_val:
+                        issues.append(f"  ✗ 铁律 #46 违规：做多止损价 ({stop_val}) 大于或等于入场价 ({entry_val})")
+                    elif tgt_m:
+                        tgt_val = float(tgt_m.group(1))
+                        if tgt_val > entry_val:
+                            rr = (tgt_val - entry_val) / (entry_val - stop_val)
+                            if rr < 1.99:
+                                issues.append(f"  ✗ 铁律 #46 违规：第一目标真实盈亏比仅为 {rr:.2f}:1，低于 2.0:1 的风控红线")
+
+        # 铁律 #45：顺势下挫跌破支撑时严禁臆造“底背离”逆势抄底
+        if f.name in ("market.md", "technical.md", "trader.md"):
+            if re.search(r"跌破.{0,15}(?:支撑|均线|下轨|前低)", text) and re.search(r"(?:底背离|左侧抄底|反转确认)", text):
+                negations = ("无底背离", "并无底背离", "并非底背离", "严禁", "不构成底背离", "未出现底背离", "不可盲目抄底", "防守", "观望")
+                if not any(neg in text for neg in negations):
+                    issues.append("  ✗ 铁律 #45 违规：跌破支撑下行趋势中出现底背离/左侧抄底表述且无警示否定词")
 
         # --- 5. 篇幅 ---
         n = len(text)

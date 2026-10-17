@@ -10,7 +10,7 @@
 | 层 | 谁写的 | 在哪 | 要不要动 |
 |---|---|---|---|
 | **上游本体**（TauricResearch 的 TradingAgents） | 开源作者 | `tradingagents/`、`cli/`、`tests/`、`assets/`、大部分根目录配置文件 | **尽量不动**（要能跟上游同步） |
-| **我们自建的分析层**（真正干活的部分） | 我们 | `wb_analysis/`、`scripts/`、`reports/`、根目录那 9 个 `.py` | 随便改 |
+| **我们自建的分析层**（真正干活的部分） | 我们 | `wb_analysis/`、`scripts/`、`reports/`、`quant/` | 随便改 |
 
 **一句话记忆**：`tradingagents/` 里是"别人的引擎"，`wb_analysis/` 里是"我们的流水线"。
 
@@ -29,19 +29,19 @@
 | `tests/` | 上游的单元测试 | 不动 |
 | `assets/` | 上游文档用的插图（10 张 png） | 不动 |
 | `docs/` | **说明文档**（运行手册、选股手册、本文件） | 不动 |
-| `.workbuddy/` | **记忆 + 回滚包**（`memory/` 是经验，`backup/` 是删东西前的回滚包） | 可能新增回滚包 |
+| `.workbuddy-ai/` | **记忆 + 回滚包**（`memory/` 是经验，`backup/` 是删东西前的回滚包） | 可能新增回滚包 |
 
 ### 自建代码都在 `quant/`（2026-09-23 起）
 以前 9 个 `.py` 散在**项目根目录**，看不出哪些是上游自带的、哪些是我们写的；现已收进 `quant/` 包。
 
 | 类型 | 文件 | 说明 |
 |---|---|---|
-| **库**（被别人 import） | `screener_engine.py`（11 处引用）· `stock_pools.py`（13 处）· `edgar_fundamentals.py`（8 处）· `price_history.py`（5 处） | 导入方式 `from quant.xxx import yyy` |
+| **库**（被别人 import） | `screener_engine.py` · `stock_pools.py` · `edgar_fundamentals.py` · `price_history.py` | 导入方式 `from quant.xxx import yyy`。⚠️ **引用次数刻意不写** —— 它会漂移且没人记得回来改（见下方 §2.5 的告诫） |
 | **入口脚本**（直接运行） | `smart_screener.py` · `wb_deep_dive.py` · `factor_backtest.py` · `fundamental_backtest.py` · `cleanup_cache.py` | `python quant/xxx.py` |
 
 > **项目根目录现在没有任何 `.py` 文件** —— 看到 `.py` 就知道它在某个包里，不在根目录瞎放。
 
-### 三个启动器
+### 两个启动器（每条链 = `.bat` → `.ps1` → 目标）
 | 文件 | 作用 |
 |---|---|
 | `screen.bat` → `run_screener.ps1` → `quant/smart_screener.py` | 启动量化选股漏斗 |
@@ -79,8 +79,15 @@
 
 | 子目录/文件 | 是什么 | 生命周期 |
 |---|---|---|
-| `collect.py` / `collect_index.py` | **采集器**：抓 35 项免费数据（个股 / 指数） | 代码，长期 |
-| `_derive_stock.py` / `_derive_ndx.py` | **派生指标**：均线、ATR、分位等 | 代码，长期 |
+| `collect.py` | **采集器**：美股个股 / ETF，抓 35~37 个免费通道 | 代码，长期 |
+| `collect_index.py` | **采集器**：美股指数（`NDX` / `SPX`） | 代码，长期 |
+| `collect_a_etf.py` | **采集器**：A 股 ETF（`--mode industry\|strategy\|commodity`，走 westock CLI） | 代码，长期 |
+| `collect_hk_index.py` | **采集器**：港股指数（走 westock CLI） | 代码，长期 |
+| `collect_treasury.py` | **采集器**：美债专题（宏观曲线，不服务单一标的） | 代码，长期 |
+| `_option_source.py` | **期权数据源适配器**：把 CBOE 官方延迟报价适配成 yfinance 同形接口。**盘前/盘后自动启用**（见下方 §3.1） | 代码，长期 |
+| `_derive_stock.py` / `_derive_ndx.py` / `_derive_a_etf.py` | **派生指标**：均线、ATR、分位等（分别对个股 / 指数 / A股ETF） | 代码，长期 |
+| `_gen_derived_stock.py` / `_gen_derived_ndx.py` | **派生指标落盘器**（把上一步的 stdout 写成 `0_derived.md`；`_derive_a_etf.py` 自行落盘，无需此步） | 代码，长期 |
+| `_gen_meta.py` | **运行清单生成**（缺 `meta.json` ⇒ 渲染退出码 2） | 代码，长期 |
 | `assemble.py` | **渲染器**：把 12 个角色的 md 拼成报告树 | 代码，长期 |
 | `_precheck.py` | **交付门禁**（7 项检查，唯一入口） | 代码，长期 |
 | `_selftest.py` | **门禁自检**（双向夹具，确认门禁本身没坏；项数以脚本自报为准） | 代码，长期 |
@@ -97,6 +104,45 @@
 > **"瞬态"的意思**：跑一轮时它们会有内容，`_seal_run.py` 封存后它们就空了。
 > **看到它们空着是正常的，不是坏了。**
 
+### 3.1 ★ 期权数据源随时点自动切换（2026-10-17 起）
+
+**一句话**：盘中用 yfinance（实时）；**盘前 / 盘后 / 非交易日自动切 CBOE 官方延迟报价**。
+
+| 采集时点（美东） | 走哪个源 | 拿到的是什么 |
+|---|---|---|
+| 09:30–16:00 | yfinance 主源 | 实时（`lastTradeDate` 距今 0.0 天） |
+| 盘前 / 盘后 / 非交易日 | **CBOE 官方延迟报价** | **上一时段收盘快照**（15 分钟延迟） |
+
+> ⚠️ 声明的是**实际用上的源**：若盘前 CBOE 取数失败（如指数 / A 股 ETF 返回 403），
+> 会自动退回 yfinance 并在 `source_note` 里写明「回退 yfinance 主源」。
+> 证据包里的「数据来源」行必须与这里的实际值一致。
+
+**为什么需要它**：yfinance 的期权链只在常规时段实时刷新；盘前/盘后它只返回**上一交易日的
+残留挂单** —— `bid`/`ask` 格式完全合法，只有 `lastTradeDate` 陈旧（实测 NDX 轮盘前：
+扫 29 个到期日、387 个有双边报价合约、**合格样本 0**）。CBOE 是**做市商报价链**，
+不依赖「该合约当天有没有成交」⇒ 盘前仍能重建完整期限结构。
+
+⚠️ **这不是「解除时间限制」，是「降级可用」** —— 三条边界必须记住：
+
+1. **拿的是上一时段快照，不是实时报价**。CBOE 延长时段（GTH 20:15–09:25）**只覆盖
+   SPX / SPXW / XSP**，**不含股票与 ETF 期权** ⇒ 盘前拿到的成交**必然止于上一交易日**。
+   这是市场本身没成交，**不是 bug**。
+2. **不可用于「此刻 / 盘中」类论断**，也不得与盘中口径的 IV **跨轮直接比较**。
+3. **两个源的 IV / 偏斜口径不同，数值不可混用**（CBOE 是交易所模型直出，与项目自建
+   BSM 反解差异可达数 pp）⇒ 采用时全线统一口径并在证据包声明来源。
+
+**覆盖范围（实测）**：
+
+| 类型 | 可用 | 说明 |
+|---|---|---|
+| 美股个股 / 主要 ETF | ✅ | NFLX / GOOG / AVGO / NVDA / ORCL / SOFI / QQQ / SPY… |
+| **指数符号**（NDX / ^NDX） | ❌ | 指数本身没有期权（**符合预期**，仍用 ETF 代理） |
+| **A 股 ETF** | ❌ | 非美股；且 A 股行业/策略/商品型 ETF 本就无场内期权（**结构性缺失**，换源解决不了） |
+
+**落地位置**：判据 = `_thresholds.option_source_decision()`（**唯一来源**，消费方只许转发）；
+取数 = `_option_source.py`；台账 = `RULES["CBOE_fallback_used"]`（B 类 / 决定性）；
+自检 = `_selftest.py`；回归 = `tests/test_option_source.py`。
+
 ---
 
 ## 4. `reports/` 里面
@@ -109,8 +155,10 @@ reports/
 │       ├── 1_analysts/           4 位分析师
 │       ├── 2_research/           多空辩论 + 研究经理裁定
 │       ├── 3_trading/            交易员的执行方案
-│       ├── 4_risk/               3 位风险席 + 组合经理终审
-│       ├── 5_portfolio/          最终决策
+│       ├── 4_risk/               3 位风险席（激进/保守/中性）
+│       └── 5_portfolio/          组合经理终审 ⇒ `decision.md`
+│                                 ⚠️ **草稿名与渲染名不同**：草稿是 `4_risk/portfolio_manager.md`，
+│                                    渲染后落到 `5_portfolio/decision.md`（刻意的，别当 bug 修）
 │       ├── complete_report.md    ★ 想读报告只看这一个文件
 │       ├── RUN.json              运行清单：数据基准日 / 来源草稿 / 证据文件 / 评级
 │       └── _source.zip           审计包：证据包 + 草稿 + 分析 JSON（报告里每个数字都能在里面溯源）
@@ -146,6 +194,38 @@ reports/
 ./.venv/Scripts/python.exe wb_analysis/_seal_run.py --plan     # 看有哪些待封存
 ./.venv/Scripts/python.exe wb_analysis/_seal_run.py --all --apply
 ```
+
+---
+
+## 5.5 ★ 四条链路怎么跑（先认标的，再选采集器）
+
+**判据：标的属于哪一类 → 用哪个采集器。选错采集器是新手最常见的错。**
+
+| 标的类型 | 采集器 | 下一步 |
+|---|---|---|
+| **美股个股 / ETF** | `wb_analysis/collect.py <TICKER>` | `_gen_derived_stock.py <TICKER> <日期>` |
+| **美股指数**（NDX/SPX） | `wb_analysis/collect_index.py --index NDX` | `_gen_derived_ndx.py <IDX> <日期>` |
+| **A 股 ETF** | `wb_analysis/collect_a_etf.py --ticker <代码>` | `_derive_a_etf.py <TICKER> <日期>`（自落盘） |
+| **港股指数** | `wb_analysis/collect_hk_index.py --index <指数> --date <日期>` | 无专属派生（采集器内部聚合估值） |
+
+```bash
+# 美股个股
+./.venv/Scripts/python.exe wb_analysis/collect.py AMD --date <美东当日>
+# 美股指数
+./.venv/Scripts/python.exe wb_analysis/collect_index.py --date <美东当日> --index NDX
+# A 股 ETF（行业/策略/商品三模式自动判定）
+./.venv/Scripts/python.exe wb_analysis/collect_a_etf.py --ticker 512400.SS --date <A股交易日>
+# 港股指数
+./.venv/Scripts/python.exe wb_analysis/collect_hk_index.py --index hkHSTECH --date <港股交易日>
+```
+
+**⚠️ 日期口径各不相同**：美股链路 `--date` ＝ **美东当日**；A 股 / 港股链路取**该市场交易日**。
+
+采集完之后的四步（写简报 → 写 12 角色 → `_gen_meta.py` → `assemble.py --from-dir`）
+与交付前五道校验（`_lint_drafts` → `_verify_ratings` → `_precheck` → `_verify_report` → `_seal_run`），
+**完整配方见 [`../README.md`](../README.md) 的「怎么在这台机器上跑」一节**（含每步的判据与常见错法）。
+
+**一句话自检**：跑完后 `wb_analysis/{evidence,drafts,analysis}` 应当是**空的**（产物已收进 `_source.zip`）。
 
 ---
 

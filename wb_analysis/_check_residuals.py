@@ -51,7 +51,14 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_DIRS = ("_stale", "_archive")
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+# ★ 2026-10-10：归档跳过表原为本地字面量，与 `_lint_drafts` / `_audit_values` /
+#   `_check_role_files` 各持一份 ⇒ 单一来源 `wb_analysis/_paths.py`。
+from wb_analysis._paths import SKIP_ARCHIVE_DIRS  # noqa: E402
+
+SKIP_DIRS = SKIP_ARCHIVE_DIRS
 SKIP_NAMES = ("_constraints.md", "_corrections.json")
 
 # ⚠️ 2026-10-02 二次修正（判别力）：首版只看「哪个文件命中」，于是把
@@ -94,7 +101,10 @@ def check(draft: Path) -> int:
             rel = f.relative_to(draft).as_posix()
             for ln, line in enumerate(io.open(f, encoding="utf-8").read().split("\n"), 1):
                 if old and old in line:
-                    kind = "引用" if (rel in fixed_in or _classify(line)) else "疑似残留"
+                    # ★ 2026-10-15 修：原写 `if (rel in fixed_in or _classify(line))`，
+                    #   而 `_classify(line)` 返回非空字符串 `"疑似残留"`，在布尔上下文中恒为 True，
+                    #   导致任何残留都被判为「引用」（100% 假阴性空转）。改为显式比对 `== "引用"`。
+                    kind = "引用" if (rel in fixed_in or _classify(line) == "引用") else "疑似残留"
                     (quoted if kind == "引用" else residual).append(
                         (rel, ln, line.strip()[:96]))
         if residual:

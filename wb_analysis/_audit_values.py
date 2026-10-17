@@ -113,7 +113,13 @@ EXPR_RE = re.compile(
     r"(?<![\d.\-−–—])"
     r"([\d,]+(?:\.\d+)?\s*%?"
     r"(?:\s*[+\-−–—＋]\s*[\d,]+(?:\.\d+)?\s*%?){1,39})"
-    r"\s*[=＝]\s*\*{0,2}\s*([\d,]+(?:\.\d+)?)\s*%?"
+    r"\s*[=＝]\s*\*{0,2}\s*"
+    # ★ 2026-10-16 修（**剩余 34% 漏检**）：右侧原要求「纯数字」，而本项目真实写法
+    #   大量是 `= +2.463` / `= −3.40`（带显式正负号）⇒ 整条算式不匹配。
+    #   实测全库 272 处「数% op 数% = ±数」中有 93 处因此漏检（`check_sums` 从未校验它们，
+    #   与铁律 16「分项之和必须等于自写合计」的守门职责直接相关）。
+    #   ⇒ 右侧允许可选符号（含 Unicode 减号/全角加号），`check_sums` 侧归一化后取值。
+    r"([+\-−–—＋]?\s*[\d,]+(?:\.\d+)?)\s*%?"
 )
 
 #: 从算式左侧逐项提取 (符号, 数值)。
@@ -130,31 +136,56 @@ SUM_RE = EXPR_RE
 
 
 
-def check_sums(path: Path):
-    """校验「A + B − C … = 合计」自洽。
+def parse_sums(line: str) -> list[tuple[int, float, float]]:
+    """解析一行里的「A + B − C … = 合计」算式，返回 [(项数, 分项和, 所写合计)]。
 
-    返回 [(行号, 分项数, 分项和, 所写合计, 行内容)]，**不限分项个数、支持加减混合**。
-    ★ 2026-10-16：原实现用 `m.groups()[:4]` 只取前 4 项，10 项算式会被静默截断；
-      且旧正则本就恒不命中（只认 `+`、要求每项带 `%`）。
-      现改为逐项提取并**按自带符号累加**，同时支持全角/Unicode 减号，
-      并跳过日期/年份区间形态（否则 `1982-1984=100` 会被误判成算式）。
+    ★★ 2026-10-16 抽出为**纯函数**（无副作用、不读文件）—— 这是本文件的**唯一解析口径**。
+
+    为什么必须抽出：原 `check_sums()` 把解析**内联**在自己的循环里，而测试文件
+    `tests/test_audit_values_sumregex.py` 又**复制了一份**（`_sums()`）⇒
+    产品侧改了口径（右侧允许显式符号），测试侧那份副本没跟上 ⇒ 3 项 FAIL，
+    报 ValueError（无法把带 Unicode 减号的右侧字符串转成 float）。
+    ⇒ 与 `_contract.py` 同一动机：**同一口径写两遍必然漂移**。
+    现在测试改为 `from wb_analysis._audit_values import parse_sums`，
+    「改产品 = 改测试口径」，物理上不可能再分叉。
+
+    规则：不限分项个数、支持加减混合、每项 `%` 可省、支持千分位与全角/Unicode 减号；
+    右侧允许**显式正负号**（`= +2.463` / `= −3.40`）；
+    日期/年份区间（`1982-1984=100`、`09-16=7.0bp`）整段跳过。
+    """
+    out: list[tuple[int, float, float]] = []
+    for m in EXPR_RE.finditer(line):
+        lhs = m.group(1)
+        if DATELIKE_RE.search(lhs):  # 日期/年份区间，不是算式
+            continue
+        terms = []
+        for sign, val in _TERM_RE.findall(lhs):
+            v = float(val.replace(",", ""))
+            terms.append(-v if sign in _MINUS else v)
+        if len(terms) < 2:
+            continue
+        # 右侧可能带显式符号（`= +2.463` / `= −3.40`）
+        #   ⇒ 去空白 + Unicode 减号归一化后再转 float。
+        _rhs = m.group(2).replace(",", "").replace(" ", "")
+        for _ch in _MINUS:
+            _rhs = _rhs.replace(_ch, "-")
+        _rhs = _rhs.replace("＋", "+")
+        out.append((len(terms), round(sum(terms), 2), float(_rhs)))
+    return out
+
+
+def check_sums(path: Path):
+    """校验「A + B − C … = 合计」自洽（**解析走 `parse_sums()`，本函数只管比对**）。
+
+    返回 [(行号, 分项数, 分项和, 所写合计, 行内容)]。
+    ★ 2026-10-16：解析已抽到 `parse_sums()` —— 本函数只做「取数 → 比对 → 记录行号」，
+      避免与测试各写一份口径（见 `parse_sums` 的 docstring）。
     """
     bad = []
     for ln, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        for m in EXPR_RE.finditer(line):
-            lhs = m.group(1)
-            if DATELIKE_RE.search(lhs):  # 日期/年份区间，不是算式
-                continue
-            terms = []
-            for sign, val in _TERM_RE.findall(lhs):
-                v = float(val.replace(",", ""))
-                terms.append(-v if sign in _MINUS else v)
-            if len(terms) < 2:
-                continue
-            total = float(m.group(2).replace(",", ""))
-            s = sum(terms)
+        for n_terms, s, total in parse_sums(line):
             if abs(s - total) > 0.015:  # 容忍四舍五入
-                bad.append((ln, len(terms), round(s, 2), total, line.strip()))
+                bad.append((ln, n_terms, s, total, line.strip()))
     return bad
 
 

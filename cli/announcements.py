@@ -1,4 +1,5 @@
 import getpass
+import os
 
 import requests
 from rich.console import Console
@@ -9,9 +10,15 @@ from cli.config import CLI_CONFIG
 
 def fetch_announcements(url: str = None, timeout: float = None) -> dict:
     """Fetch announcements from endpoint. Returns dict with announcements and settings."""
-    endpoint = url or CLI_CONFIG["announcements_url"]
-    timeout = timeout or CLI_CONFIG["announcements_timeout"]
+    endpoint = url or CLI_CONFIG.get("announcements_url")
+    timeout = timeout or CLI_CONFIG.get("announcements_timeout", 0.5)
     fallback = CLI_CONFIG["announcements_fallback"]
+
+    if not endpoint or os.environ.get("TRADINGAGENTS_SKIP_ANNOUNCEMENTS", "").lower() in ("1", "true", "yes"):
+        return {
+            "announcements": [fallback],
+            "require_attention": False,
+        }
 
     try:
         response = requests.get(endpoint, timeout=timeout)

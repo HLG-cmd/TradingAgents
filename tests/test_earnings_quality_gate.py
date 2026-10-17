@@ -110,3 +110,54 @@ class TestExistingGatesNotBroken:
     def test_gain_gate_constants_present(self):
         for name in ("GAIN_SECURITY_FAIL", "GAIN_SECURITY_WARN"):
             assert hasattr(veq, name), f"缺常量 {name}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ★ 2026-10-15 新增：季度序列与年报对账（SKHY 事件的双边夹具）
+#
+# 起因：SKHY（SK 海力士美股 ADR，外国私人发行人）的 `quarterly_income_stmt`
+#   返回累计/错标期间的数据 —— 单季营收 79.319T 竟是 FY2025 全年 97.147T 的 81.6%。
+#   据此合计 4 季会算出「非经营/净利 +30.0%」的**假 FAIL**
+#   （年报口径实为 −19.8%，方向相反，按「只挡抬高方向」本不该触发）。
+# 修法：`_quarterly_unreliable()` 对账失败即强制降级到 FY 口径。
+# 按铁律 20，必须双边自测：坏夹具必命中、好夹具必不误报。
+# ─────────────────────────────────────────────────────────────────────────────
+class TestQuarterlyReconciliation:
+    """季度序列 vs 年报 的对账判据（纯逻辑，不联网）。"""
+
+    @staticmethod
+    def _mk(annual_rev: float, quarters: list[float]):
+        import pandas as pd
+
+        q = pd.DataFrame(
+            [quarters],
+            index=["Total Revenue"],
+            columns=["2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30"],
+        )
+        inc = pd.DataFrame([[annual_rev]], index=["Total Revenue"], columns=["2025-12-31"])
+        return q, inc
+
+    def test_true_positive_skhy_actual(self):
+        """坏夹具（SKHY 实况）：单季 79.319 / 全年 97.147 = 81.6% ⇒ 必须判不可用。"""
+        q, inc = self._mk(97.147, [79.319, 52.576, 32.827, 24.449])
+        assert veq._quarterly_unreliable(q, inc) is True
+
+    def test_true_negative_normal_quarters(self):
+        """好夹具（正常离散季度）：各季约 25% 全年 ⇒ 必须不误报。"""
+        q, inc = self._mk(100.0, [26.0, 24.5, 25.5, 24.0])
+        assert veq._quarterly_unreliable(q, inc) is False
+
+    def test_true_negative_seasonal_peak(self):
+        """好夹具（强季节性）：单季 42% 全年 ⇒ 仍在容差内，不得误报。"""
+        q, inc = self._mk(100.0, [42.0, 20.0, 19.0, 19.0])
+        assert veq._quarterly_unreliable(q, inc) is False
+
+    def test_true_positive_sum_inflated(self):
+        """坏夹具：单季均不高（46% < 50%）但 4 季合计 1.84× 全年 ⇒ 兜底判据必须命中。"""
+        q, inc = self._mk(100.0, [46.0, 46.0, 46.0, 46.0])
+        assert veq._quarterly_unreliable(q, inc) is True
+
+    def test_missing_annual_does_not_trigger(self):
+        """无年报营收时不得误判（缺数据 ≠ 不可用）。"""
+        q, inc = self._mk(0.0, [79.0, 52.0, 32.0, 24.0])
+        assert veq._quarterly_unreliable(q, inc) is False

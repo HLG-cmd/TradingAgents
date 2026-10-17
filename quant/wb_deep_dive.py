@@ -12,10 +12,11 @@
     渲染层  wb_analysis/assemble.py 生成与上游同构的报告树
 
 用法：
-    python wb_deep_dive.py --pool nasdaq --top 3
-    python wb_deep_dive.py --pool sp500 --top 5
-    python wb_deep_dive.py --tickers NVDA,AMD,GOOG      # 跳过初筛，直接采证
-    python wb_deep_dive.py --pool nasdaq --top 3 --no-social   # 更快
+    python quant/wb_deep_dive.py --pool nasdaq --top 3
+    python quant/wb_deep_dive.py --pool sp500 --top 5
+    python quant/wb_deep_dive.py --pool sp500_core --top 5
+    python quant/wb_deep_dive.py --tickers NVDA,AMD,GOOG      # 跳过初筛，直接采证
+    python quant/wb_deep_dive.py --pool nasdaq --top 3 --no-social   # 更快
 """
 
 from __future__ import annotations
@@ -34,12 +35,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]  # quant/ 的上一级才是�
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from quant.stock_pools import NASDAQ_100, SP_500_CORE, get_latest_nasdaq_100
+from quant.stock_pools import (
+    NASDAQ_100,
+    SP_500_CORE,
+    get_latest_nasdaq_100,
+    get_latest_sp500,
+)
 from quant.screener_engine import run_quant_screening, export_radar_csv
 from wb_analysis.collect import collect_one  # noqa: E402
 
-# sp500 保持人工精选核心（99 只）—— 全量 503 只可另行用 get_latest_sp500()。
-POOLS = {"nasdaq": NASDAQ_100, "sp500": SP_500_CORE}
+# ★ 2026-10-15：`sp500` 接入动态全量池 `get_latest_sp500()`（约 503 只），
+#   原 99 只静态核心子集独立为 `sp500_core`，消除「池名 sp500 却只筛 99 只」的口径歧义。
+POOLS = {"nasdaq": NASDAQ_100, "sp500": SP_500_CORE, "sp500_core": SP_500_CORE}
 
 
 def _stage_one(pool_key: str | None, tickers: list[str], top: int):
@@ -47,9 +54,15 @@ def _stage_one(pool_key: str | None, tickers: list[str], top: int):
     if pool_key == "nasdaq":
         # 动态同步（当日缓存 -> Wikipedia -> 静态快照），失败会打印原因后降级
         universe = get_latest_nasdaq_100()
+    elif pool_key == "sp500":
+        universe = get_latest_sp500()
     else:
         universe = POOLS[pool_key] if pool_key else tickers
-    label = {"nasdaq": "纳斯达克100", "sp500": "标普500核心"}.get(pool_key or "", "自定义")
+    label = {
+        "nasdaq": "纳斯达克100",
+        "sp500": "标普500全量",
+        "sp500_core": "标普500核心(99只)",
+    }.get(pool_key or "", "自定义")
 
     print(f"\n{'=' * 62}")
     print(f"阶段一：{label} 量化多因子初筛（{len(universe)} 只，零 LLM 成本）")
@@ -78,10 +91,10 @@ def _stage_one(pool_key: str | None, tickers: list[str], top: int):
         print(f"\n⚠️ 共有 {len(failed)} 只标的因数据缺失/退市被安全剔除 (如 {', '.join([f['ticker'] for f in failed[:5]])})")
 
     # 导出全量量化明细为 CSV —— 必须带 UTF-8 BOM，否则中文表头在中文 Windows 的
-    # Excel 里会被按 GBK 解析，显示成「20鏃ユ定骞�%」这类乱码。
+    # Excel 里会被按 GBK 解析，显示成「20鏃ユ定骞%」这类乱码。
     try:
-        reports = PROJECT_ROOT / "reports"
-        reports.mkdir(exist_ok=True)
+        reports = PROJECT_ROOT / "reports" / "_datasets"
+        reports.mkdir(parents=True, exist_ok=True)
         csv_path = reports / f"radar_{pool_key or 'custom'}_{dt.date.today().isoformat()}.csv"
         export_radar_csv(df, str(csv_path))
         print(f"\n量化明细已导出（UTF-8 BOM，Excel 可直接打开）: {csv_path}")
@@ -96,7 +109,7 @@ def _stage_one(pool_key: str | None, tickers: list[str], top: int):
 def main() -> int:
     ap = argparse.ArgumentParser(description="WorkBuddy 深度投研流水线（零 LLM 成本）")
     src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--pool", choices=sorted(POOLS), help="从股票池初筛")
+    src.add_argument("--pool", choices=sorted(POOLS), help="从股票池初筛（nasdaq / sp500 / sp500_core）")
     src.add_argument("--tickers", help="直接指定标的，逗号分隔，跳过初筛")
     ap.add_argument("--top", type=int, default=3, help="深度分析的标的数量（默认 3）")
     ap.add_argument("--date", default=dt.date.today().isoformat(), help="基准日期 YYYY-MM-DD")
@@ -154,8 +167,8 @@ def main() -> int:
     print(
         "\n下一步（由 WorkBuddy 顶层模型执行，无需任何付费 API）：\n"
         "  1. 读取上述证据包\n"
-        "  2. 按 wb_analysis/FRAMEWORK.md 的 12 角色框架填写分析 JSON\n"
-        "  3. 运行 python wb_analysis/assemble.py <TICKER> 渲染报告树"
+        "  2. 按 wb_analysis/FRAMEWORK.md 的 12 角色框架填写草稿目录\n"
+        "  3. 运行 python wb_analysis/assemble.py --from-dir <草稿目录> 渲染报告树"
     )
     return 0
 

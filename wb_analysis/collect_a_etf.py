@@ -31,8 +31,6 @@ import argparse
 import datetime as dt
 import json
 import pathlib
-import re
-import subprocess
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -42,7 +40,10 @@ if hasattr(sys.stderr, "reconfigure"):
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 EVID_DIR = ROOT / "wb_analysis" / "evidence"
-WESTOCK = pathlib.Path(r"C:\Users\HLJ\.local\bin\westock.exe")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+# westock CLI 的统一接入层（路径解析 + 调用 + 表格解析），与 collect_hk_index.py 共用。
+from wb_analysis._westock import WESTOCK, parse_md_table, run_westock  # noqa: E402
 
 # ── 标的档案表：名称 / 模式 / 行业板块 / 跟踪指数 显式登记 ──
 #    未登记的标的也能跑（--mode 由参数决定），但名称会标为 [未登记]，
@@ -52,36 +53,19 @@ KNOWN: dict[str, dict] = {
                   "sector": "pt01801050", "sector_name": "有色金属"},
     "515100": {"wcode": "sh515100", "name": "红利低波100ETF景顺", "mode": "strategy",
                "track_index": "cs930955", "track_name": "中证红利低波动100"},
+    # ★ 2026-10-16 新增：与 515100 **不是同一只**（勿混）——
+    #   515100 景顺长城，跟踪 cs930955 中证红利低波动100（100 只成分股）；
+    #   563020 易方达，  跟踪 csH30269 中证红利低波动（50 只成分股）。
+    #   两者费率也不同（563020 管理费 0.15% 为同指数最低档）。
+    "563020": {"wcode": "sh563020", "name": "红利低波ETF易方达", "mode": "strategy",
+               "track_index": "csH30269", "track_name": "中证红利低波动"},
 }
 UNKNOWN_NAME = "[未登记标的]"
 
-
-def run_westock(args: list[str], timeout: int = 180) -> str:
-    """调用 westock CLI，返回 stdout 原文。"""
-    try:
-        p = subprocess.run(
-            [str(WESTOCK), *args], capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout,
-        )
-        if p.returncode != 0:
-            return f"<westock 退出码 {p.returncode}>\n{p.stdout}\n{p.stderr}"
-        return p.stdout
-    except Exception as e:
-        return f"<westock 调用失败 {type(e).__name__}: {e}>"
-
-
-def parse_md_table(text: str) -> tuple[list[str], list[list[str]]]:
-    """解析 CLI 输出的 markdown 表格 → (表头, 数据行)。"""
-    rows = [l.strip() for l in text.splitlines() if l.strip().startswith("|")]
-    if len(rows) < 2:
-        return [], []
-
-    def cells(line: str) -> list[str]:
-        return [c.strip() for c in line.strip().strip("|").split("|")]
-
-    header = cells(rows[0])
-    body = [cells(r) for r in rows[1:] if not re.match(r"^\|[\s\-:|]+\|$", r)]
-    return header, body
+# `run_westock` / `parse_md_table` / `WESTOCK` 已抽到 `wb_analysis/_westock.py`
+# （2026-10-10）：本文件与 `collect_hk_index.py` 曾**逐字各存一份**，而 westock 路径
+# 还被硬编码成 `C:\Users\HLJ\.local\bin\westock.exe`（机器特定）。现由该模块统一解析：
+# 环境变量 `WESTOCK_BIN` → `PATH` → 本机约定路径。三者已在文件顶部 import。
 
 
 def fnum(v, default=None):
@@ -282,15 +266,83 @@ def _freshness_gaps(raw: dict, date: str, mode: str) -> list:
     return out
 
 
+def _sector_fin_gaps(raw: dict, mode: str) -> list:
+    """申万行业聚合财务闸门：返回 ``[(登记名, 状态)]``。
+
+    为什么要它（2026-10-13 实测）：``sector finance pt01801050``（申万一级有色金属）回传
+    ``stockCnt = 1``，且行业级 TTM 毛利率 **−9.22%**、净利率 **−56.74%**、ROE **−103.27%**、
+    经营现金流/收入 **−37.12%**，而同一行的 ``netProfitYoY`` 却是 **+30.14%**。
+    ⇒ 「净利同比 +30%」与「毛利率为负」在逻辑上互斥，且申万一级行业绝无仅 1 家成分股之理。
+    这是**上游聚合退化**（不是本标的经营真的差），若不拦它，下游会把
+    「行业毛利率为负」当作基本面证据，得出完全错误的方向（铁律 3 的静默失败）。
+
+    判据（客观、可复算，写死在这里不靠人记）：
+    1. ``stockCnt <= 1`` 而 ``swLevel == sw1`` ⇒ 成分股数与一级行业体量不符；
+    2. 或 ``grossProfitRatioTTM < 0`` 且 ``netProfitYoY > 0`` ⇒ 方向互斥（互斥即可判退化，
+       不需判断谁对谁错）。
+    """
+    out: list = []
+    if mode != "industry":
+        return out
+    h, b = parse_md_table(raw.get("sector_fin", ""))
+    if not h or not b:
+        return out
+    row = dict(zip(h, b[0]))
+    cnt = fnum(row.get("stockCnt"))
+    lvl = (row.get("swLevel") or "").strip()
+    gm = fnum(row.get("grossProfitRatioTTM"))
+    npy = fnum(row.get("netProfitYoY"))
+    if cnt is not None and cnt <= 1 and lvl == "sw1":
+        out.append(("sector_fin_degenerate", f"stockCnt={cnt}"))
+    elif gm is not None and npy is not None and gm < 0 < npy:
+        out.append(("sector_fin_degenerate", f"grossM={gm}<0 & npYoY={npy}>0"))
+    return out
+
+
+def _structural_gaps(mode: str) -> list:
+    """**载体级结构性缺口**：把 §0 只用散文声明的那几条，提升为机器可检的通道登记项。
+
+    为什么必须发射（2026-10-13 实测发现）：A 股 ETF 的「无场内期权」「无海外社媒」
+    此前只写在证据包 §0 的散文里，而 `_gap_ledger.py` 是靠正则抓「非全绿通道」行来登记的
+    ⇒ 这两条**从来没有进过台账**，也就从来没有被任何门禁检查过、没有触发过「简报必须声明」。
+    这正是本项目最反对的失败形态（铁律 3：静默降级 —— 外观正常、没人发现）。
+
+    注意：这里**不参与** `成功 N/M` 的分子分母（那两个只数真实采集通道），
+    只往「非全绿通道」行追加登记项，供台账登记与简报声明校验用。
+    """
+    return [
+        ("option_structure", "A股商品型ETF无场内期权" if mode == "commodity"
+         else "A股行业/策略ETF无场内期权"),
+        ("social:StockTwits", "海外社媒对A股标的不适用"),
+    ]
+
+
 def build_tasks(mode: str, wcode: str, track_index: str | None,
                 sector_code: str | None, date: str) -> list[tuple[str, list[str]]]:
-    """按模式给出采集任务表。"""
+    """按模式给出采集任务表。
+
+    ★ 2026-10-16 修复（**静默失败**，铁律 3/5）：`quote` / `technical` / `chip` / `kline`
+    原先**不传日期** ⇒ 无论 `--date` 传哪一天，这四个通道都返回**采集当刻的实时快照**。
+    盘中（或盘中未收盘时）按历史基准日复盘时，证据包标题写着基准日 D，而
+    §1 行情 / §2 技术 / §2.3 筹码实际全是「今天」的半日数据 —— 外观完全正常，
+    还会被硬写成「{date} 15:00 CST 已正常收盘」。一个未收盘 bar 足以把
+    「中性偏弱」改写成「中性偏强」（实测 RSI 44.02→52.30），结论方向会被整体改写。
+
+    ⇒ 判据：**这四个通道的 CLI 都支持 `--date` / `--end`**（已实测：
+    `quote --date`、`technical --date`、`chip --date`、`kline --end` 均返回该日收盘口径，
+    `quote --date 2026-10-15` 的 volume 与 `kline` 的 10-15 bar 逐字一致）。
+    故一律透传基准日；`--end` 用于 kline，使其**不含基准日之后**的 bar。
+    """
     base = [
-        ("quote", ["quote", wcode]),
-        ("kline", ["kline", wcode, "--period", "day", "--limit", "30"]),
-        ("technical", ["technical", wcode]),
-        ("chip", ["chip", wcode]),
-        ("fund_flow", ["fund", "flow", wcode]),
+        ("quote", ["quote", wcode, "--date", date]),
+        # ★ 2026-10-13：limit 30 → **260**。原先只取 30 根，而 `technical` 端点却回报
+        #   MA_120 / MA_250 —— **窗口 120/250 > 手边 30 根**，铁律 24 自检无从做起
+        #   （无法区分「真 250 日均线」与「上市以来累加均值」）。
+        #   260 根刚好覆盖年线 ⇒ 下游可自行复算校验，不必凭信任采用。
+        ("kline", ["kline", wcode, "--period", "day", "--end", date, "--limit", "260"]),
+        ("technical", ["technical", wcode, "--date", date]),
+        ("chip", ["chip", wcode, "--date", date]),
+        ("fund_flow", ["fund", "flow", wcode, "--date", date]),
         ("news", ["news", "list", wcode, "--limit", "10"]),
         # 日频无风险利率与期限利差
         ("macro_term_spread", ["macro", "indicator", "cn_term_spread", "--date", date]),
@@ -302,8 +354,8 @@ def build_tasks(mode: str, wcode: str, track_index: str | None,
     if mode == "industry":
         sec = sector_code or "pt01801050"
         base += [
-            ("etf_overview", ["etf", "overview", wcode]),
-            ("etf_holdings", ["etf", "holdings", wcode]),
+            ("etf_overview", ["etf", "overview", wcode, "--date", date]),
+            ("etf_holdings", ["etf", "holdings", wcode, "--date", date]),
             ("sector_val", ["sector", "valuation", sec]),
             ("sector_fin", ["sector", "finance", sec]),
             ("sector_fore", ["sector", "forecast", sec]),
@@ -312,9 +364,9 @@ def build_tasks(mode: str, wcode: str, track_index: str | None,
         d0 = dt.date.fromisoformat(date)
         nav_start = (d0 - dt.timedelta(days=100)).isoformat()
         base += [
-            ("etf_profile", ["etf", "profile", wcode]),
-            ("etf_overview", ["etf", "overview", wcode]),
-            ("etf_holdings", ["etf", "holdings", wcode]),
+            ("etf_profile", ["etf", "profile", wcode, "--date", date]),
+            ("etf_overview", ["etf", "overview", wcode, "--date", date]),
+            ("etf_holdings", ["etf", "holdings", wcode, "--date", date]),
             ("etf_nav", ["etf", "nav", wcode, "--start", nav_start, "--end", date]),
         ]
         if track_index:
@@ -326,8 +378,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="采集 A 股 ETF 证据（westock）")
     ap.add_argument("--ticker", default="512400.SS", help="ETF 标的代码（如 512400.SS / 515100）")
     ap.add_argument("--date", default="2026-09-30", help="基准日 YYYY-MM-DD")
-    ap.add_argument("--mode", choices=["industry", "strategy"], default=None,
-                    help="industry=行业 ETF（申万行业通道）；strategy=策略/主题 ETF（指数通道）")
+    ap.add_argument("--mode", choices=["industry", "strategy", "commodity"], default=None,
+                    help="industry=行业 ETF（申万行业通道）；strategy=策略/主题 ETF（指数通道）；"
+                         "commodity=商品型 ETF（黄金/白银等，以产品要素+净值折溢价为锚，不适用估值/股息）")
     ap.add_argument("--track-index", default=None,
                     help="策略模式的跟踪指数代码（如 cs930955）")
     ap.add_argument("--sector", default=None,
@@ -348,14 +401,30 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ✗ westock 不存在：{WESTOCK}")
         return 1
 
+    # ★ 2026-10-16 新增：**载体预判定**（必须在 `build_tasks` **之前** —— 模式决定采集哪些通道）。
+    #   起因：`--mode strategy` 的渲染文案是为 **515100 红利低波** 写的（股息率 vs 无风险利率、
+    #   红利溢价率、破净 PB 托底）。硬套到**商品型 ETF**（黄金/白银）上，会输出
+    #   「股息率低于无风险利率 ⇒ 红利策略吸引力不成立」这类**完全不适用**的结论
+    #   —— 黄金 ETF 既无股息也无 PB，属铁律 3 的静默失败（外观正常、结论荒谬）。
+    #   判据：基金名称含 黄金|金ETF|白银|贵金属（一次轻量 quote 调用，成本可忽略）。
+    if args.mode is None and meta.get("mode") is None:
+        _qh0, _qb0 = parse_md_table(run_westock(["quote", wcode]))
+        _nm = str((dict(zip(_qh0, _qb0[0])) if _qh0 and _qb0 else {}).get("name", ""))
+        if any(k in _nm for k in ("黄金", "金ETF", "白银", "贵金属")):
+            mode = "commodity"
+            print(f"  · 载体预判定：**商品型 ETF**（信号：{_nm}）")
+
     # 1. 采集原始数据
     raw: dict[str, str] = {}
     for name, cmd in build_tasks(mode, wcode, track_index, sector_code, date):
         raw[name] = run_westock(cmd)
         print(f"  {'✓' if ok_of(raw[name]) else '✗'} {name:18} {len(raw[name])} 字符")
 
+    _ph, _pb = parse_md_table(raw.get("etf_profile", ""))
+    _prof0 = dict(zip(_ph, _pb[0])) if _ph and _pb else {}
+
     # 2. 解析核心字典与确权校验
-    if mode == "strategy":
+    if mode in ("strategy", "commodity"):
         h_nav, b_nav = parse_md_table(raw.get("etf_nav", ""))
         em_info = fetch_eastmoney_nav(ticker, date)
         if em_info and em_info.get("nav") is not None:
@@ -390,11 +459,14 @@ def main(argv: list[str] | None = None) -> int:
     n_total = len(raw)
     bad_list = [(k, "unavailable") for k in raw if not ok_of(raw[k])]
     bad_list += _freshness_gaps(raw, date, mode)
+    bad_list += _sector_fin_gaps(raw, mode)
+    bad_list += _structural_gaps(mode)
     bad_str = ", ".join(f"{k}={s}" for k, s in sorted(bad_list)) if bad_list else "无"
 
     # 4. 组织证据包
     L: list[str] = []
-    kind = "A股行业指数ETF" if mode == "industry" else "A股策略指数ETF"
+    kind = {"industry": "A股行业指数ETF", "strategy": "A股策略指数ETF",
+            "commodity": "A股商品型ETF（贵金属）"}.get(mode, "A股ETF")
     L.append(f"# 证据包：{ticker}（A股ETF）· 基准日 {date}")
     L.append("")
     L.append(f"- 采集日期: {date}")
@@ -415,12 +487,19 @@ def main(argv: list[str] | None = None) -> int:
     if mode == "industry":
         L.append(f"  本证据包以 **ETF 聚合估值、申万一级{meta.get('sector_name', '')}行业财务报表、十大重仓股穿透** "
                  "作为基本面与估值依据。")
+    elif mode == "commodity":
+        L.append(f"  本证据包以 **ETF 产品档案（费率/规模/跟踪指数/跟踪目标）、跟踪标的"
+                 f"（{meta.get('track_name') or _prof0.get('trackIndexName') or track_index}）"
+                 "现货价格走势、净值与折溢价** 作为「基本面」依据。")
+        L.append("  ⚠️ **商品型 ETF 不适用**：PE / PB / 股息率 / 红利溢价 / ROE 等**权益估值指标**"
+                 "（标的资产是黄金现货合约，不产生盈利与分红）⇒ 本证据包**不输出**这些字段，"
+                 "下游**不得**引用任何权益类估值读数。**其唯一可比较的成本项是费率与跟踪误差**。")
     else:
         L.append(f"  本证据包以 **ETF 产品档案、跟踪指数（{meta.get('track_name', track_index)}）聚合估值（自带历史分位）、"
                  "指数成分股与持仓穿透** 作为基本面与估值依据。**红利低波是跨行业策略指数，无对应申万一级行业，"
                  "行业财务通道不适用**。")
     L.append("- **期权维度（`option_structure` / `option_iv`）**：A 股目前仅有宽基 ETF 期权（50/300/500/1000/科创50），"
-             "**无场内行业/策略 ETF 期权**（Class A/S 缺口）。缺失场内期权隐波与偏斜定价，按框架规则**结论降为条件式**；"
+             "**无场内行业 / 策略 / 商品型 ETF 期权**（Class A/S 缺口）。缺失场内期权隐波与偏斜定价，按框架规则**结论降为条件式**；"
              "下行保护成本参考**上证50ETF/沪深300ETF 期权隐含波动率及本标的历史实现波动率（HV）**作为波动率环境代理"
              "（**口径不同，仅作环境参照**）。")
     L.append("- **散户社交舆情（`social:StockTwits`）**：海外 StockTwits 对 A 股 ETF 无讨论，"
@@ -451,6 +530,14 @@ def main(argv: list[str] | None = None) -> int:
     L.append(f"  - 换手率: {quote.get('turnover_rate', '[未取到]')}%")
     L.append(f"  - 量比: {quote.get('volume_ratio', '[未取到]')}")
     L.append(f"  - ETF规模: {overview.get('etfSize', quote.get('total_market_cap', '[未取到]'))} 元")
+    # ★ 2026-10-16：`etf overview` 的 `etfSize` 是 **T−1 口径**（实测：`--date 2026-10-14` 返回
+    #   123.75 亿 = 10-13 的规模；`--date 2026-10-15` 返回 124.55 亿 = 10-14 的规模；
+    #   而第三方两个独立源（新浪 2026-10-16 / 经济观察网 2026-10-16）对 10-15 给出一致的
+    #   103.02 亿份 × 单位净值 1.1955 = **123.16 亿**）。
+    #   基金规模由管理人**日终结算后**发布 ⇒ 天然滞后一个交易日。不加声明会被下游
+    #   当成「基准日当日规模」直接引用（差额约 1.1%），属铁律 3 那类口径静默失败。
+    L.append("    ⚠️ 口径：`etfSize` 为 **T−1（上一交易日结算后）规模**，非基准日当日规模；")
+    L.append("       当日规模口径见 §6 净值表（最新份额 × 当日单位净值），引用时必须声明取哪一个。")
     L.append(f"  - ETF总资产: {overview.get('totalAsset', '[未取到]')} 元")
     disc = fnum(overview.get("etfDisc"))
     disc_note = ("" if disc is None else
@@ -469,7 +556,8 @@ def main(argv: list[str] | None = None) -> int:
     L.append(f"  - 年初至今最大回撤: {overview.get('ytdMaxDrawdown', '[未取到]')}%")
     L.append("```")
     L.append("")
-    L.append(f"### 日K线历史序列 (近30交易日，含 {date} 收盘)")
+    _kl_bars = len([r for r in parse_md_table(raw.get("kline", ""))[1] if r])
+    L.append(f"### 日K线历史序列 ({_kl_bars} 根，含 {date} 收盘)")
     L.append("")
     L.append(raw.get("kline", "").strip())
     L.append("")
@@ -538,7 +626,7 @@ def main(argv: list[str] | None = None) -> int:
     if mode == "industry":
         _render_industry(L, raw, overview, fund_flow, ticker, date, meta, sector_code)
     else:
-        _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, track_index)
+        _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, track_index, mode=mode)
 
     content_md = "\n".join(L) + "\n"
 
@@ -639,16 +727,34 @@ def _render_industry(L, raw, overview, fund_flow, ticker, date, meta, sector_cod
     L.append(f"PEG:        {overview.get('peg', '[未取到]')} (历史分位数: {overview.get('pegPct', '[未取到]')}%{note_peg(overview.get('peg'))})")
     L.append(f"ROE:        {overview.get('roe', '[未取到]')}% (历史分位数: {overview.get('roePct', '[未取到]')}%{note_roe_pct(overview.get('roePct'))})")
     L.append(f"股息率(TTM):{overview.get('divTtm', '[未取到]')}% (历史分位数: {overview.get('divTtmPct', '[未取到]')}%)")
-    y10, y10_date = parse_yield(raw.get("macro_yield", ""))
+    y10, y10_date = parse_yield(raw.get("macro_term_spread", ""), raw.get("macro_yield", ""))
     if y10 is not None:
-        L.append(f"宏观无风险利率: 中国10年期国债收益率 {y10}% （数据日期 {y10_date}；"
-                 f"**该通道为季度频率、滞后于基准日，作环境参照而非当日值**）")
+        L.append(f"宏观无风险利率: 中国10年期国债收益率 {y10}% （数据日期 {y10_date}）")
         if pe:
             ey = 100.0 / pe
             L.append(f"ETF盈利收益率:  1 / {pe} = {ey:.3f}%")
             L.append(f"股权风险溢价 ERP: {ey:.3f}% - {y10}% = {ey - y10:+.3f} 个百分点{note_erp(ey - y10)}")
     else:
         L.append("宏观无风险利率: [未取到]（该通道不可用，ERP 不计算）")
+    # ★ 2026-10-15：行业模式此前只从 macro_term_spread 解析 10Y 收益率，
+    #   期限利差 / 溢价率两张表被整体丢弃（通道照报 ok ⇒「采了但没渲染」，
+    #   与铁律 3 的「假成功」同族）。键名与 strategy 模式同源，按同款渲染；
+    #   ⚠️ 下面「市场股权风险溢价」是全市场口径，与上面的 ETF 盈利收益率-国债
+    #   口径**不是一回事**，引用时必须分别声明。
+    h_ts, b_ts = parse_md_table(raw.get("macro_term_spread", ""))
+    ts_dict = dict(zip(h_ts, b_ts[-1])) if h_ts and b_ts else {}
+    h_pm, b_pm = parse_md_table(raw.get("macro_premium", ""))
+    pm_dict = dict(zip(h_pm, b_pm[-1])) if h_pm and b_pm else {}
+    if ts_dict.get("TermSpread"):
+        L.append(f"国债期限利差(10Y-2Y): {ts_dict.get('TermSpread')} bps（曲线形态: "
+                 f"{ts_dict.get('CurveFormD', '—')}；10Y {ts_dict.get('Yield10Y', '—')}% / "
+                 f"2Y {ts_dict.get('Yield2Y', '—')}%）")
+    if pm_dict.get("EquityPremium"):
+        L.append(f"市场股权风险溢价（全市场口径）: {pm_dict.get('EquityPremium')}% "
+                 f"(10年历史分位: {pm_dict.get('EprPct10Y', '—')}%)")
+    if pm_dict.get("DividendPremium"):
+        L.append(f"市场红利溢价率: {pm_dict.get('DividendPremium')}% "
+                 f"(10年历史分位: {pm_dict.get('DprPct10Y', '—')}%)")
     L.append("```")
     L.append("")
     L.append("### 3.2 ETF 重仓股持仓明细")
@@ -691,7 +797,8 @@ def _render_industry(L, raw, overview, fund_flow, ticker, date, meta, sector_cod
     _append_flow_and_news(L, fund_flow, raw, date, start=5, news_prefix="行业")
 
 
-def _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, track_index) -> None:
+def _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, track_index,
+                     mode: str = "strategy") -> None:
     """策略 ETF 段：产品档案 + 指数估值分位 + 成分股穿透 + 净值折溢价 + 资金流 + 新闻。"""
     # 3. 产品档案
     L.append("## 3. ETF 产品档案与要素")
@@ -713,23 +820,51 @@ def _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, t
     L.append("---")
     L.append("")
     # 4. 指数估值（自带分位 —— 这是红利类策略 ETF 的核心）
-    L.append("## 4. 跟踪指数估值（聚合，含历史分位）")
-    L.append("")
-    L.append(f"> 口径：ETF 持仓加权聚合估值，来自 westock `etf overview`；**历史分位为区间内百分位**，"
-             f"数值越高代表当前估值在该区间历史中越贵。")
-    L.append("")
-    L.append("```")
-    L.append(f"PE (TTM):   {overview.get('peTtm', '[未取到]')} (历史分位: {overview.get('peTtmPct', '[未取到]')}%{note_pe_pct(overview.get('peTtmPct'))})")
-    L.append(f"PB (LF):    {overview.get('pb', '[未取到]')} (历史分位: {overview.get('pbPct', '[未取到]')}%)")
-    L.append(f"PCF (TTM):  {overview.get('pcfTtm', '[未取到]')} (历史分位: {overview.get('pcfTtmPct', '[未取到]')}%)")
-    L.append(f"PS (TTM):   {overview.get('psTtm', '[未取到]')} (历史分位: {overview.get('psTtmPct', '[未取到]')}%)")
-    L.append(f"PEG:        {overview.get('peg', '[未取到]')} (历史分位: {overview.get('pegPct', '[未取到]')}%{note_peg(overview.get('peg'))})")
-    L.append(f"ROE:        {overview.get('roe', '[未取到]')}% (历史分位: {overview.get('roePct', '[未取到]')}%{note_roe_pct(overview.get('roePct'))})")
-    L.append(f"股息率(TTM):{overview.get('divTtm', '[未取到]')}% (历史分位: {overview.get('divTtmPct', '[未取到]')}%)")
-    # ⚠️ 刻意不输出 `overview.netValue`：实测该字段回传的是**资产总额量级**（5,525,339,709.5），
-    #    并非单位净值（单位净值应为 1.39 量级，见 §6 `etf nav`）。字段名与语义不符 ⇒ 弃用。
-    L.append("```")
-    L.append("")
+    if mode == "commodity":
+        # ★ 2026-10-16：商品型 ETF **没有**权益估值（标的资产是黄金现货合约，不产生盈利/分红）。
+        #   原先套用策略模式的 PE/PB/股息率渲染，会输出一串 0 或空值，并被下游误当「极低估值」。
+        #   ⇒ 本节改为输出**产品要素与成本**（这是商品 ETF 唯一可比的维度）。
+        L.append("## 4. 产品要素与持有成本（商品型 ETF 的可比维度）")
+        L.append("")
+        L.append("> 口径：商品型 ETF 跟踪**现货合约价格**，各产品底层相同 ⇒ **收益几乎一致**，"
+                 "**唯一实质差异是费率与跟踪精度**。本节即为此而设。")
+        L.append("")
+        L.append("```")
+        L.append(f"管理费(年):   {profile.get('managementFee', '[未取到]')}%")
+        L.append(f"托管费(年):   {profile.get('custodyFee', '[未取到]')}%")
+        L.append(f"销售服务费:   {profile.get('serviceFee', '[未取到]')}%")
+        _mf, _cf, _sf = (fnum(profile.get(k)) for k in ("managementFee", "custodyFee", "serviceFee"))
+        if None not in (_mf, _cf, _sf):
+            L.append(f"运作费合计:   {_mf + _cf + _sf:.2f}% / 年   ← **跨产品比较的核心读数**")
+        L.append(f"跟踪指数:     {profile.get('trackIndexName', '[未取到]')} ({profile.get('trackIndexCode', '—')})")
+        L.append(f"成立日期:     {str(profile.get('establishDate', '[未取到]'))[:10]}")
+        L.append(f"是否 T+0:     {profile.get('isTPlus0', '[未取到]')}")
+        _ta = fnum(profile.get("totalAsset"))
+        L.append(f"基金规模:     {f'{_ta / 1e8:.2f} 亿元' if _ta else '[未取到]'}")
+        L.append("")
+        L.append("⚠️ **本标的为商品型 ETF**：不输出 PE / PB / PCF / PS / PEG / ROE / 股息率")
+        L.append("   —— 这些是**权益估值指标**，对黄金现货合约**不适用**（无盈利、无分红、无净资产口径）。")
+        L.append("   ⇒ 下游**禁止**引用任何权益类估值读数；估值判断应改为「**费率 + 跟踪误差 + 折溢价**」。")
+        L.append("```")
+        L.append("")
+    else:
+        L.append("## 4. 跟踪指数估值（聚合，含历史分位）")
+        L.append("")
+        L.append(f"> 口径：ETF 持仓加权聚合估值，来自 westock `etf overview`；**历史分位为区间内百分位**，"
+                 f"数值越高代表当前估值在该区间历史中越贵。")
+        L.append("")
+        L.append("```")
+        L.append(f"PE (TTM):   {overview.get('peTtm', '[未取到]')} (历史分位: {overview.get('peTtmPct', '[未取到]')}%{note_pe_pct(overview.get('peTtmPct'))})")
+        L.append(f"PB (LF):    {overview.get('pb', '[未取到]')} (历史分位: {overview.get('pbPct', '[未取到]')}%)")
+        L.append(f"PCF (TTM):  {overview.get('pcfTtm', '[未取到]')} (历史分位: {overview.get('pcfTtmPct', '[未取到]')}%)")
+        L.append(f"PS (TTM):   {overview.get('psTtm', '[未取到]')} (历史分位: {overview.get('psTtmPct', '[未取到]')}%)")
+        L.append(f"PEG:        {overview.get('peg', '[未取到]')} (历史分位: {overview.get('pegPct', '[未取到]')}%{note_peg(overview.get('peg'))})")
+        L.append(f"ROE:        {overview.get('roe', '[未取到]')}% (历史分位: {overview.get('roePct', '[未取到]')}%{note_roe_pct(overview.get('roePct'))})")
+        L.append(f"股息率(TTM):{overview.get('divTtm', '[未取到]')}% (历史分位: {overview.get('divTtmPct', '[未取到]')}%)")
+        # ⚠️ 刻意不输出 `overview.netValue`：实测该字段回传的是**资产总额量级**（5,525,339,709.5），
+        #    并非单位净值（单位净值应为 1.39 量级，见 §6 `etf nav`）。字段名与语义不符 ⇒ 弃用。
+        L.append("```")
+        L.append("")
     # 红利类策略 ETF 的核心读数：股息率 vs 无风险利率
     div = fnum(overview.get("divTtm"))
     y10, y10_date = parse_yield(raw.get("macro_term_spread", ""), raw.get("macro_yield", ""))
@@ -740,32 +875,56 @@ def _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, t
     h_pm, b_pm = parse_md_table(raw.get("macro_premium", ""))
     pm_dict = dict(zip(h_pm, b_pm[-1])) if h_pm and b_pm else {}
 
-    L.append("### 4.1 股息率 vs 无风险利率（红利策略核心读数）")
-    L.append("```")
-    if y10 is not None and div is not None:
-        L.append(f"股息率(TTM):  {div}%")
-        L.append(f"10Y 国债收益率: {y10}% （数据日期 {y10_date}；日频无风险利率基准）")
-        L.append(f"股息率溢价:   {div}% - {y10}% = {div - y10:+.3f} 个百分点")
-        if pm_dict.get("DividendPremium"):
-            L.append(f"市场红利溢价率: {pm_dict.get('DividendPremium')}% (10年历史分位: {pm_dict.get('DprPct10Y', '—')}%)")
-        if pm_dict.get("EquityPremium"):
-            L.append(f"市场股权风险溢价 ERP: {pm_dict.get('EquityPremium')}% (10年历史分位: {pm_dict.get('EprPct10Y', '—')}%)")
+    if mode == "commodity":
+        # ★ 2026-10-16：商品型 ETF **无股息** ⇒ 红利读数（股息率/红利溢价率）不适用。
+        #   但 10Y 无风险利率对黄金有直接意义 —— 它是**持有黄金的机会成本**（金价与实际利率负相关）。
+        L.append("### 4.1 无风险利率（持有黄金的机会成本）")
+        L.append("```")
+        if y10 is not None:
+            L.append(f"10Y 国债收益率: {y10}% （数据日期 {y10_date}；日频无风险利率基准）")
+        else:
+            L.append("10Y 国债收益率 [未取到]")
         if ts_dict.get("TermSpread"):
             L.append(f"国债期限利差(10Y-2Y): {ts_dict.get('TermSpread')} bps (曲线形态: {ts_dict.get('CurveFormD', '—')})")
-        if div > y10:
-            L.append("  ⇒ 股息率显著高于无风险利率，红利策略的「类固收+正Carry」吸引力坚实成立。")
-        else:
-            L.append("  ⇒ 股息率低于无风险利率，红利策略的「类固收」吸引力不成立。")
-    elif div is not None:
-        L.append(f"股息率(TTM): {div}%；10Y 国债收益率 [未取到] ⇒ 溢价不计算")
+        if pm_dict.get("EquityPremium"):
+            L.append(f"市场股权风险溢价 ERP: {pm_dict.get('EquityPremium')}% (10年历史分位: {pm_dict.get('EprPct10Y', '—')}%)")
+        L.append("  ⇒ **黄金不产生利息**：无风险利率即持有黄金的**机会成本**（利率越高，持金越贵）。")
+        L.append("  ⛔ **本标的无股息** ⇒ **不输出**股息率 / 红利溢价率（该读数对商品型 ETF 无意义）。")
+        L.append("```")
+        L.append("")
     else:
-        L.append("股息率 [未取到] ⇒ 溢价不计算")
-    L.append("```")
-    L.append("")
+        L.append("### 4.1 股息率 vs 无风险利率（红利策略核心读数）")
+        L.append("```")
+        if y10 is not None and div is not None:
+            L.append(f"股息率(TTM):  {div}%")
+            L.append(f"10Y 国债收益率: {y10}% （数据日期 {y10_date}；日频无风险利率基准）")
+            L.append(f"股息率溢价:   {div}% - {y10}% = {div - y10:+.3f} 个百分点")
+            if pm_dict.get("DividendPremium"):
+                L.append(f"市场红利溢价率: {pm_dict.get('DividendPremium')}% (10年历史分位: {pm_dict.get('DprPct10Y', '—')}%)")
+            if pm_dict.get("EquityPremium"):
+                L.append(f"市场股权风险溢价 ERP: {pm_dict.get('EquityPremium')}% (10年历史分位: {pm_dict.get('EprPct10Y', '—')}%)")
+            if ts_dict.get("TermSpread"):
+                L.append(f"国债期限利差(10Y-2Y): {ts_dict.get('TermSpread')} bps (曲线形态: {ts_dict.get('CurveFormD', '—')})")
+            if div > y10:
+                L.append("  ⇒ 股息率显著高于无风险利率，红利策略的「类固收+正Carry」吸引力坚实成立。")
+            else:
+                L.append("  ⇒ 股息率低于无风险利率，红利策略的「类固收」吸引力不成立。")
+        elif div is not None:
+            L.append(f"股息率(TTM): {div}%；10Y 国债收益率 [未取到] ⇒ 溢价不计算")
+        else:
+            L.append("股息率 [未取到] ⇒ 溢价不计算")
+        L.append("```")
+        L.append("")
     L.append("### 4.2 ETF 区间表现与规模")
     L.append("```")
     L.append(f"5日涨跌: {overview.get('chgPct5D', '[未取到]')}%  ｜ 20日: {overview.get('chgPct20D', '[未取到]')}%  ｜ 60日: {overview.get('chgPct60D', '[未取到]')}%  ｜ 52周: {overview.get('chgPct52W', '[未取到]')}%  ｜ YTD: {overview.get('chgPctYtd', '[未取到]')}%")
-    L.append(f"ETF规模: {overview.get('etfSize', '[未取到]')} 元  ｜ 规模周变动: {overview.get('etfSizeWChg', '[未取到]')}%  ｜ 月变动: {overview.get('etfSizeMChg', '[未取到]')}%")
+    L.append(f"ETF规模: {overview.get('etfSize', '[未取到]')} 元（**T−1 口径**，见 §1 声明）  ｜ 规模周变动: {overview.get('etfSizeWChg', '[未取到]')}%  ｜ 月变动: {overview.get('etfSizeMChg', '[未取到]')}%")
+    # ★ 2026-10-16：实测 ETF 规模份额日变动字段恒为 0（etfSizeWChg/etfSizeMChg 均为 "0"），
+    #   而第三方披露 10-15 净申购 1400 万份 —— 该字段不可信，须显式标注，
+    #   否则下游会把「0%」当作「规模无变化」的事实（铁律 3 静默失败）。
+    if str(overview.get("etfSizeWChg", "")).strip() in ("0", "0.0", "0%"):
+        L.append("    ⚠️ `etfSizeWChg`/`etfSizeMChg` 恒为 0 ⇒ **这两个字段不可用**（上游未回传真实变动），")
+        L.append("       规模变动一律以 §6 净值表的份额/净值自行复算，或引用第三方披露。")
     L.append(f"折溢价: 当日 {overview.get('etfDisc', '[未取到]')}%  ｜ 周均 {overview.get('etfDiscAvgW', '[未取到]')}%  ｜ 月均 {overview.get('etfDiscAvgM', '[未取到]')}%")
     L.append(f"换手率: {overview.get('turnoverRate', '[未取到]')}%  ｜ 成交额: {overview.get('turnoverValue', '[未取到]')} 元")
     L.append(f"最大回撤: 1月 {overview.get('maxDrawdown1M', '[未取到]')}%  ｜ 3月 {overview.get('maxDrawdown3M', '[未取到]')}%  ｜ 1年 {overview.get('maxDrawdown1Y', '[未取到]')}%  ｜ YTD {overview.get('ytdMaxDrawdown', '[未取到]')}%")
@@ -786,8 +945,10 @@ def _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, t
     L.append("")
     L.append("## 6. 净值与折溢价")
     L.append("")
-    L.append("> 口径：ETF 单位净值（NAV）与二级市场收盘价对比，二者之差即折溢价；"
-             "红利类 ETF 常因分红除息出现净值与价格同步下移，**不可读作下跌**。")
+    _nav_note = ("商品型 ETF **无分红**，净值与价格的偏离仅来自申赎与二级市场供需。"
+                 if mode == "commodity" else
+                 "红利类 ETF 常因分红除息出现净值与价格同步下移，**不可读作下跌**。")
+    L.append("> 口径：ETF 单位净值（NAV）与二级市场收盘价对比，二者之差即折溢价；" + _nav_note)
     L.append("")
     L.append(raw.get("etf_nav", "").strip())
     L.append("")
@@ -821,7 +982,10 @@ def _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, t
     L.append("波动率与下行风险定价基准:")
     L.append(f"  - 20日历史年化实现波动率 (HV20): {hv20_str}")
     L.append(f"  - 布林通道带宽 (Bandwidth):       {bw_pct} (处于极端波动挤压态，变盘在即)")
-    L.append("  - 场内期权结构说明:               A股策略指数ETF无独立场内期权，下行风险由底层资产高股息与破净PB托底")
+    _opt_note = ("A股商品型ETF无独立场内期权，下行风险由**黄金现货价格**本身承担（无股息 / 无 PB 托底）"
+                 if mode == "commodity" else
+                 "A股策略指数ETF无独立场内期权，下行风险由底层资产高股息与破净PB托底")
+    L.append(f"  - 场内期权结构说明:               {_opt_note}")
     L.append("  - 宽基期权参考环境:               上证50ETF期权 / 沪深300ETF期权隐波为大盘宏观波动环境参考")
     L.append("```")
     L.append("")

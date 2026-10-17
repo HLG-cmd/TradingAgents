@@ -29,12 +29,20 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).resolve().parents[1]
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from wb_analysis._contract import PROPOSAL_RE, is_non_tree_artifact  # noqa: E402
+from wb_analysis._paths import ALLOWED_TOP, FUNC_DIRS, TREE_RE  # noqa: E402
+
 REPORTS = ROOT / "reports"
 EVID = ROOT / "wb_analysis" / "evidence"
 DRAFTS = ROOT / "wb_analysis" / "drafts"
 ANALYSIS = ROOT / "wb_analysis" / "analysis"
-TREE_RE = re.compile(r"^([A-Za-z0-9.\-]+)_(\d{8})_(\d{6})$")
-SKIP_DIRS = {"_datasets", "_other", "_archive", "_audit"}
+# ★ 2026-10-10：`TREE_RE` 与「功能目录集」原本在此**逐字定义**，而 `_scorecard.py`、
+#   `_seal_run.py`、`scripts/_reorg_reports.py` 各持一份**完全相同**的拷贝
+#   ⇒ 上提到 `wb_analysis/_paths.py`（`ALLOWED_TOP` 也一并从函数内局部提升为模块常量）。
+SKIP_DIRS = FUNC_DIRS
 
 
 def read_ratings(tree: Path) -> dict:
@@ -46,19 +54,106 @@ def read_ratings(tree: Path) -> dict:
         m = re.search(r"\*\*(?:Recommendation|Rating)\*\*:\s*\**(\w+)", p.read_text(encoding="utf-8"))
         if m:
             return m.group(1)
-        m = re.search(r"FINAL TRANSACTION PROPOSAL:\s*\*\*(\w+)\*\*", p.read_text(encoding="utf-8"))
+        # 交易员末行正则取自 `_contract`（原名内联字面量，2026-10-10 收敛）；
+        # 宽松版抓 `(\w+)`、只用于**取值**，与校验用的严格版语义不同、不可互换。
+        m = PROPOSAL_RE.search(p.read_text(encoding="utf-8"))
         return m.group(1) if m else "—"
     return {"manager": pick("2_research/manager.md"),
             "trader": pick("3_trading/trader.md"),
             "pm": pick("5_portfolio/decision.md")}
 
 
-def evidence_channels(ticker: str, date: str) -> str:
-    p = EVID / f"{ticker}_{date}.md"
-    if not p.exists():
-        return "—"
-    m = re.search(r"成功:\s*(\d+)\s*/\s*(\d+)", p.read_text(encoding="utf-8", errors="replace"))
-    return f"{m.group(1)}/{m.group(2)}" if m else "?"
+def _zip_text(zp: Path, name: str) -> str | None:
+    """从审计包 `_source.zip` 里读一个条目；不存在 / 坏包返回 None。
+
+    ★ 2026-10-10 新增。此前本工具只认**散落目录**，而封存后
+    `{evidence,drafts,analysis}` 被清空**本就是正常终态**（见 `_seal_run.py`），
+    ⇒ 「证据包通道」列退化成 `—`、「有分析JSON」列退化成 `✗`，
+    **看起来像缺数据，其实是判据太窄**（铁律 3 的同类：静默降级、外观正常）。
+    更糟的是 `has_drafts` 早已用 `_sealed_with` 做了 zip 回退
+    ⇒ **同一张表里三列判据不一致**：一列认审计包、两列不认。
+    判据统一为「散落文件存在 **或** 树内审计包包含它」。
+    """
+    if not zp.exists():
+        return None
+    try:
+        with zipfile.ZipFile(zp) as z:
+            for n in z.namelist():
+                if n == name or n.endswith("/" + name):
+                    return z.read(n).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _manifest_has(tree: Path, prefix: str) -> bool:
+    """当轻量导出包剔除了二进制 `_source.zip` 时，回退核对同目录的 `SOURCE_MANIFEST.json`。"""
+    mp = tree / "SOURCE_MANIFEST.json"
+    if not mp.exists():
+        return False
+    try:
+        contents = json.loads(mp.read_text(encoding="utf-8")).get("contents") or []
+        return any(str(n).startswith(prefix) for n in contents)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def evidence_facts(ticker: str, date: str, tree: Path | None = None) -> dict:
+    """从证据包提取三项事实：通道健康度 / **末根 bar 日期** / **K 线根数**。
+
+    ★ 2026-10-11 新增（O2）。`last_bar` + `bars` 构成一棵树的**内容身份**，
+    用于识破「标签不同、底层数据相同」的重复渲染（见 `scan()` 异常一之补）。
+    证据不可得时对应字段为 `None`（**不是 0 / "—"**，以免被当成真实值参与比较）。
+    """
+    name = f"{ticker}_{date}.md"
+    p = EVID / name
+    txt = p.read_text(encoding="utf-8", errors="replace") if p.exists() else None
+    if txt is None and tree is not None:      # 已封存 ⇒ 回退到树内审计包
+        txt = _zip_text(tree / "_source.zip", f"evidence/{name}")
+    if txt is None:
+        ch_fallback = "—"
+        if tree is not None and (tree / "RUN.json").exists():
+            try:
+                notes = json.loads((tree / "RUN.json").read_text(encoding="utf-8")).get("notes") or ""
+                mc = re.search(r"通道\s*(\d+\s*/\s*\d+)", notes)
+                if mc:
+                    ch_fallback = mc.group(1).replace(" ", "")
+            except Exception:  # noqa: BLE001
+                pass
+        return {"channels": ch_fallback, "last_bar": None, "bars": None}
+    m = re.search(r"成功:\s*(\d+)\s*/\s*(\d+)", txt)
+    # ★ 2026-10-12 修：`bars` 行**可能带前导空格**（实测旧包内为 `  - bars: 65`，
+    #   而新包内是行首 `- bars: 65`）⇒ 正则**不得锚定行首**，否则老包一律拿不到根数。
+    #   旁证：`_derive_stock.py::stat()` 用的是**无锚点**的 `-\s*bars:`，所以它一直是对的；
+    #   错的是本函数。此前这条 bug 让 GOOG 旧树报 `bars=None`，我据此误判成
+    #   「旧采集器未写该字段」——**结论错了，根因是缩进**。
+    mb = re.search(r"^[ \t]*-[ \t]*bars:[ \t]*(\d+)", txt, re.M)
+    # ★★ 末根 bar —— **两条路径的排序相反，必须分别取值**（2026-10-12 修）：
+    #    · §1 的 K 线表是**升序**（最旧 → 最新，表头写「最近 20 根 K 线」）
+    #      ⇒ 末根 bar = **最后一条**匹配；
+    #    · `### <指标>` 序列是**降序**（最新 → 最旧）
+    #      ⇒ 末根 bar = **第一条**匹配。
+    #    原实现两条路径都写 `re.search`（= 取第一条），于是 K 线表路径拿到的是
+    #    **20 个交易日之前那一根**，字段名叫 `last_bar` 而值不是末根 —— 典型的
+    #    「看着对、其实错」（该值在「同标的同根数的两棵树」之间恰好仍然一致，
+    #    所以 O2 的重复检测碰巧仍能工作，掩蔽了错误）。实测证据：GOOG_20261010_024253
+    #    的 K 线表首行 2026-09-11、末行 2026-10-08，旧实现返回 2026-09-11。
+    kline = re.findall(
+        r"^(\d{4}-\d{2}-\d{2})\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+\d+\s*$", txt, re.M)
+    ind = re.search(r"^###\s+\S+\n```\n(\d{4}-\d{2}-\d{2}):", txt, re.M)
+    if kline:
+        last_bar = kline[-1]
+    elif ind:
+        last_bar = ind.group(1)
+    else:
+        last_bar = None
+    return {"channels": f"{m.group(1)}/{m.group(2)}" if m else "?",
+            "bars": int(mb.group(1)) if mb else None,
+            "last_bar": last_bar}
+
+
+def evidence_channels(ticker: str, date: str, tree: Path | None = None) -> str:
+    return evidence_facts(ticker, date, tree)["channels"]
 
 
 def read_run(tree: Path) -> dict | None:
@@ -80,9 +175,11 @@ def scan() -> tuple[list[dict], list[str]]:
             if d.is_dir() and d.name not in SKIP_DIRS:
                 for tr in sorted(d.iterdir()):
                     if not tr.is_dir():
+                        issues.append(f"[二级目录散落] {tr.relative_to(REPORTS).as_posix()}：标的目录下不应存放散落文件，应归入 _other/ 或 _archive/")
                         continue
                     m = TREE_RE.match(tr.name)
                     if not m:
+                        issues.append(f"[二级非标准目录] {tr.relative_to(REPORTS).as_posix()}/：不符合报告树命名契约，应归入顶层 _archive/ 或 _other/")
                         continue
                     ticker, ymd = m.group(1), m.group(2)
                     run_date = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"
@@ -105,26 +202,30 @@ def scan() -> tuple[list[dict], list[str]]:
                     #   此时「工作目录里没有 drafts/」是**正常状态**，不是缺草稿。
                     #   判据必须是「散落目录存在 **或** 树内审计包含 drafts」。
                     def _sealed_with(zp: Path, prefix: str) -> bool:
-                        if not zp.exists():
-                            return False
-                        try:
-                            with zipfile.ZipFile(zp) as z:
-                                return any(n.startswith(prefix) for n in z.namelist())
-                        except Exception:  # noqa: BLE001
-                            return False
+                        if zp.exists():
+                            try:
+                                with zipfile.ZipFile(zp) as z:
+                                    return any(n.startswith(prefix) for n in z.namelist())
+                            except Exception:  # noqa: BLE001
+                                return False
+                        return _manifest_has(zp.parent, prefix)
 
                     if run and run.get("source_drafts"):
                         has_drafts = Path(run["source_drafts"]).exists() or _sealed_with(tr / "_source.zip", "drafts/")
                     else:
                         has_drafts = (DRAFTS / f"{ticker}_{date}").exists() or _sealed_with(tr / "_source.zip", "drafts/")
+                    _facts = evidence_facts(ticker, date, tr)
                     rows.append({
                         "ticker": ticker, "date": date, "tree": tr.name,
                         "path": tr.relative_to(ROOT).as_posix(),
                         "n_files": len([p for p in tr.rglob("*") if p.is_file()]),
                         "ratings": ratings,
-                        "channels": evidence_channels(ticker, date),
+                        "channels": _facts["channels"],
+                        "last_bar": _facts["last_bar"],
+                        "bars": _facts["bars"],
                         "has_drafts": has_drafts,
-                        "has_analysis": (ANALYSIS / f"{ticker}_{date}.json").exists(),
+                        "has_analysis": ((ANALYSIS / f"{ticker}_{date}.json").exists()
+                                         or _sealed_with(tr / "_source.zip", f"analysis/{ticker}_{date}.json")),
                         "has_run": run is not None,
                     })
                     trees.setdefault((ticker, date), []).append(rows[-1])
@@ -134,6 +235,25 @@ def scan() -> tuple[list[dict], list[str]]:
         if len(lst) > 1:
             issues.append(f"[历史版本并存] {k[0]} {k[1]}：{len(lst)} 棵报告树 "
                           f"（最新 {sorted(x['tree'] for x in lst)[-1]}）")
+    # ── 异常一之补：**内容身份重复** —— 标签不同、底层数据相同
+    #   起因（2026-10-11 SKHY 实测）：两棵树把 data_date 分别写成 10-10 与 10-11，
+    #   但底层末根 bar 都是 2026-10-09、bars 都是 65 ⇒ **同一份数据的两次渲染**。
+    #   上面按 (ticker, date) 分组的判据**天然漏掉**这种情形 ⇒ 那棵含错误结论
+    #   （把「上市以来均价」当「200 日牛熊分水岭」）的旧树长期并存、无人告警，
+    #   最后靠人工 `ls` 才发现。⇒ 判据必须落在**内容**上，而不是目录名标签上。
+    #   ⚠️ 要求 last_bar **与** bars 同时相同：只同末根 bar 而根数不同（如 1 年窗口
+    #       vs 2 年窗口）是**不同轮次**，不构成重复。
+    ident: dict[tuple, list[dict]] = {}
+    for r in rows:
+        if r["last_bar"] and r["bars"]:
+            ident.setdefault((r["ticker"], r["last_bar"], r["bars"]), []).append(r)
+    for k, lst in sorted(ident.items()):
+        labels = sorted({x["date"] for x in lst})
+        if len(lst) > 1 and len(labels) > 1:
+            issues.append(
+                f"[内容重复] {k[0]}：{len(lst)} 棵树底层数据相同（末根 bar {k[1]}、{k[2]} 根）"
+                f"但基准日标签不同（{'、'.join(labels)}）⇒ 属同一份数据的重复渲染，"
+                f"**建议只保留最新一棵**：{'、'.join(sorted(x['tree'] for x in lst))}")
     # ── 异常二：报告树缺少对应草稿（无法再渲染）
     for r in rows:
         if not r["has_drafts"]:
@@ -142,26 +262,42 @@ def scan() -> tuple[list[dict], list[str]]:
     # ── 异常三：孤儿（有证据/草稿，却没有报告树）
     # 豁免：不属于 12 角色链路、且**不产出报告树**的专用通道/过程产物——
     # 它们本就以 evidence/ 为正规归宿（如 collect_treasury.py 内建的 OUT_DIR），
-    # 「无报告树」是其设计预期而非堆积。新增此类通道时须同步登记到本表。
-    NON_TREE_PREFIXES = ("TREASURY",)          # 非 12 角色专题通道（collect_treasury.py）
+    # 「无报告树」是其设计预期而非堆积。
+    # ★ 2026-10-10：豁免表已上提到 `wb_analysis/_contract.py`（唯一定义源），
+    #   与 `_seal_run.py`、`scripts/_health.py` 共用 —— 此前三处各自为政，
+    #   结果 `--orphans` 会把 TREASURY 当孤儿删掉。
     have = {(r["ticker"], r["date"]) for r in rows}
+
+    def _age(p: Path) -> str:
+        """★ 2026-10-11（O6）：孤儿消息必须带**滞留时长**。
+
+        否则「在跑的轮次」（几分钟前刚写）与「已废弃的轮次」（挂了几小时）在报告里
+        长得一模一样，操作者无从判断该等还是该清 —— 本机多会话并行时尤其致命。
+        """
+        try:
+            hrs = (datetime.now() - datetime.fromtimestamp(p.stat().st_mtime)).total_seconds() / 3600
+        except OSError:
+            return ""
+        return f"（已滞留 {hrs:.1f} 小时）" if hrs >= 1 else f"（{hrs * 60:.0f} 分钟前，可能仍在写入）"
+
     for d in sorted(EVID.glob("*.md")) if EVID.exists() else []:
         if "derived" in d.name or "supplement" in d.name or ".pre_" in d.name:
             continue
-        if d.name.startswith(NON_TREE_PREFIXES):
+        if is_non_tree_artifact(d.name):
             continue
         m = re.match(r"(.+?)_(\d{4}-\d{2}-\d{2})", d.name)
         if m and (m.group(1), m.group(2)) not in have:
-            issues.append(f"[孤儿证据] {d.name}：没有对应报告树")
+            issues.append(f"[孤儿证据] {d.name}：没有对应报告树{_age(d)}"
+                          f" ⇒ 可一键处置 `_seal_run.py --orphans --apply`")
     for d in sorted(DRAFTS.iterdir()) if DRAFTS.exists() else []:
         if not d.is_dir():
             continue
         m = re.match(r"(.+?)_(\d{4}-\d{2}-\d{2})", d.name)
         if m and (m.group(1), m.group(2)) not in have:
-            issues.append(f"[孤儿草稿] {d.name}/：没有对应报告树")
+            issues.append(f"[孤儿草稿] {d.name}/：没有对应报告树{_age(d)}"
+                          f" ⇒ 可一键处置 `_seal_run.py --orphans --apply`")
     # ── 异常四：顶层散落 / 修复前快照 / 无清单的旧报告树
-    # reports/ 顶层允许存在的文件：自动索引与本目录说明（它们本就是"目录的门面"）
-    ALLOWED_TOP = {"INDEX.md", "README.md", "QUALITY.csv"}   # 目录门面：索引 / 说明 / 质量记分卡
+    # `ALLOWED_TOP`（目录门面：索引 / 说明 / 质量记分卡）已上提到 `wb_analysis/_paths.py`。
     for p in sorted(REPORTS.iterdir()):
         if p.is_file() and p.name not in ALLOWED_TOP:
             issues.append(f"[顶层散落] {p.name}：应归入 _datasets/ 或 _other/")
