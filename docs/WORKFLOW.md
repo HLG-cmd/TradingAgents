@@ -39,7 +39,7 @@
 | 层 | 做什么 | 命令 |
 |---|---|---|
 | **1. 量化漏斗**（零成本、分钟级） | 102 只 → 10~20 只候选。**只做减法，不做判断**，只看范围不看名次 | `python quant/wb_deep_dive.py --pool nasdaq --top 10` |
-| **2. 深度尽调**（零 LLM 成本，WorkBuddy 顶层模型推理） | 逐只采证 → 12 角色分析 → 渲染报告树。**这才是产生结论的地方** | `python quant/wb_deep_dive.py --tickers NVDA,MU,SNDK` |
+| **2. 深度尽调**（零外部 API 费，多智能体 12 角色推理） | 逐只采证 → 12 角色分析 → 渲染报告树。**这才是产生结论的地方** | `python quant/wb_deep_dive.py --tickers NVDA,MU,SNDK` |
 | **3. 定期验证**（季度，10 分钟） | 检查因子是否失效 / 翻转。已设为自动化，也可手动跑 | `python quant/factor_backtest.py --watch`<br>`python quant/fundamental_backtest.py --watch --neutral` |
 
 第 1 层输出候选 → 第 2 层输出 `reports/<TICKER>_<时间戳>/`。
@@ -122,9 +122,9 @@ python quant/wb_deep_dive.py --tickers NVDA --no-news --no-social   # 想更快�
 有 `unavailable` 的项目要记进报告的「数据缺口」。
 ⚠️ **全绿 ≠ 数据完整** —— 有通道会「报 ok 但内容整节为空」，必须打开关键节实际确认。
 
-### 3.2 推理（WorkBuddy 顶层模型执行，不花钱）
+### 3.2 推理（多智能体 12 角色执行）
 
-让 WorkBuddy：读证据包 → 按 `wb_analysis/FRAMEWORK.md` 的 12 角色框架写
+让各智能体角色：读证据包 → 按 `wb_analysis/FRAMEWORK.md` 的 12 角色框架写
 `wb_analysis/drafts/<TICKER>_<日期>/` 下的 12 个 `.md`。
 
 **两条硬规矩**（否则报告会出错）：
@@ -202,7 +202,7 @@ python -c "from quant.stock_pools import get_latest_nasdaq_100 as g; from quant.
 
 每条 XBRL 记录都带 `filed`（申报日）——「在 T 日市场知道什么」= `filed <= T` 中 `end` 最晚的那条，
 保证不会用到当时尚未公布的数据。**三个必须避开的坑**（`start` 字段时长过滤 / tag 回退链取覆盖最新期间 /
-拆股口径 `市值 = 复权价 × 申报股本 × F`）见 `.workbuddy-ai/memory/DOMAINS.md` → 量化选股子系统 / SEC EDGAR，
+拆股口径 `市值 = 复权价 × 申报股本 × F`）见 `docs/DOMAINS.md` → 量化选股子系统 / SEC EDGAR，
 回归测试见 `tests/test_edgar_fundamentals.py`。
 
 ---

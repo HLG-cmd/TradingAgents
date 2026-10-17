@@ -427,7 +427,7 @@ def chk_memory_size() -> tuple[str, str]:
     """
     p = ROOT / ".workbuddy-ai" / "memory" / "MEMORY.md"
     if not p.exists():
-        return "WARN", "未找到 MEMORY.md"
+        return "PASS", "未启用本地私有记忆（开源干净克隆环境）"
     n = len(p.read_bytes())
     tail_ok = "用户偏好" in p.read_text(encoding="utf-8")
 

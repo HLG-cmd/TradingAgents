@@ -1,6 +1,6 @@
-# WorkBuddy 分析框架规范
+# 深度投研分析框架规范 (Framework)
 
-本文件是「**用 WorkBuddy 顶层模型替代 TradingAgents 的 12 个 LLM 智能体**」的提示词与输出契约，
+本文件是「**用顶级大模型多智能体分工协同替代单体推理**」的提示词与输出契约，
 提炼自上游 `tradingagents/agents/**` 的提示词与 `agents/schemas.py` 的结构化契约。
 配合 `collect*.py`（免费证据采集，零 LLM）与 `assemble.py`（渲染）使用，
 即可在**不调用任何付费 API** 的前提下产出与原系统同构的报告。

@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-17 01:34
+- 生成时间：2026-10-17 19:42
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -24,7 +24,7 @@
 | `quant/screener_engine.py` | 多因子量化选股雷达引擎 (Multi-Factor GARP Screener Engine) | ./.venv/Scripts/python.exe quant/screener_engine.py |
 | `quant/smart_screener.py` | （无文档字符串） | ./.venv/Scripts/python.exe quant/smart_screener.py |
 | `quant/stock_pools.py` | 美股核心股票池定义与动态获取模块。 | ./.venv/Scripts/python.exe quant/stock_pools.py |
-| `quant/wb_deep_dive.py` | WorkBuddy 深度投研流水线 —— 零 LLM 成本的一站式入口。 | ./.venv/Scripts/python.exe quant/wb_deep_dive.py |
+| `quant/wb_deep_dive.py` | 零成本深度投研流水线 —— 一站式自动化入口。 | ./.venv/Scripts/python.exe quant/wb_deep_dive.py |
 | `scripts/_settlement.py` | 历史决策回溯结算工具（吸收上游 TauricResearch v0.6.0 settlement 思想） | ./.venv/Scripts/python.exe scripts/_settlement.py |
 | `scripts/_verify_pack_tree.py` | 验证「交付树」与「审计包 _source.zip」**逐项内容一致**（通用版）。 | 任意标的 / 任意轮次 |
 | `wb_analysis/_audit_empty_sections.py` | 审计证据包的「**小节正文为空**」—— 抓「通道全绿但内容是空」这类静默失败。 | ./.venv/Scripts/python.exe wb_analysis/_audit_empty_sections.py <evidence.md> [--strict] |
@@ -231,6 +231,7 @@
 | `wb_analysis/_oneoff/_tmp_ndx_trader_calc.py` | （无文档字符串） | NDX 2026-09-29 第 6 环交易员稿的全部算式复算（跳空样本扫描、EMA 精确递推、 |
 | `wb_analysis/_oneoff/_verify_563020_stale_by_content.py` | 按项目铁律 7：用**内容比对**判定 3 个「mtime 早于 0_brief」的角色文件是否需要重跑。 | ./.venv/Scripts/python.exe wb_analysis/_oneoff/_verify_563020_stale_by_content.py |
 | `wb_analysis/_oneoff/_verify_cboe_e2e.py` | 端到端验证：非盘中时段能否用 CBOE 源重建完整期权结构。 | — |
+| `wb_analysis/_oneoff/_verify_cboe_non_us.py` | 边界核实：非美股标的（指数 / A 股 ETF）在**盘前**走期权分支时，行为是否安全。 | — |
 | `wb_analysis/_oneoff/_verify_cboe_pipeline.py` | 端到端验证（完整链）：注入盘前时钟 → `fetch_option_structure` 走 CBOE → 产出 IV/偏斜。 | — |
 | `wb_analysis/_oneoff/_volstats_a_etf.py` | （无文档字符串） | — |
 | `wb_analysis/_oneoff/gen_07552_evidence.py` | 生成 07552（南方两倍做空恒科）2026-10-08 完整证据包。 | — |

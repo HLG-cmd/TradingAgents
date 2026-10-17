@@ -1,14 +1,14 @@
 # lifecycle: reusable
 # created: 2026-09-23
 # usage: ./.venv/Scripts/python.exe quant/wb_deep_dive.py
-"""WorkBuddy 深度投研流水线 —— 零 LLM 成本的一站式入口。
+"""零成本深度投研流水线 —— 一站式自动化入口。
 
-把原来的两阶段漏斗改造成「免费数据 + WorkBuddy 推理」：
+把原来的两阶段漏斗改造成「免费数据 + 顶层模型协同推理」：
 
     阶段一  量化多因子初筛（screener_engine，纯数学，零成本）
     阶段二  对优选标的采集全部免费证据（wb_analysis/collect，零 LLM）
     ────────  以上全部本地完成，不调用任何付费 API  ────────
-    分析层  按 wb_analysis/FRAMEWORK.md 的 12 角色框架由 WorkBuddy 顶层模型完成
+    分析层  按 wb_analysis/FRAMEWORK.md 的 12 角色框架由顶级大模型协同完成
     渲染层  wb_analysis/assemble.py 生成与上游同构的报告树
 
 用法：

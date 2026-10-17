@@ -5,7 +5,7 @@
 
 复用 ``tradingagents.dataflows.interface.route_to_vendor`` 把 TradingAgents
 喂给 12 个智能体的**全部数据通道**独立拉取出来，压成一份结构化证据包。
-数据部分零 API 成本，推理部分交给分析层（WorkBuddy / 顶层模型）完成，
+数据部分零 API 成本，推理部分交给分析层（多智能体 / 顶层模型协同）完成，
 从而把原系统里最贵的 LLM 调用段整段省掉。
 
 用法：

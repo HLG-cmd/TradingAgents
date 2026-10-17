@@ -1,4 +1,4 @@
-"""WorkBuddy 零成本深度投研流水线。
+"""零成本深度投研流水线。
 
 模块：
     collect        个股免费证据采集（复用 TradingAgents 数据层，不调用任何 LLM）

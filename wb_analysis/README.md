@@ -32,6 +32,4 @@
 
 `_cache/` —— 共享参考数据（ERP 历史序列、黄金面板等），不属于任何一轮运行。
 
-## 想改代码前
-
-先读 `.workbuddy-ai/memory/MEMORY.md` 与 `IRONLAWS.md`（铁律全文）；改完跑 `_selftest.py`。
+先读 `docs/RULES.md`（铁律全文）与 `docs/DOMAINS.md`（领域口径）；改完跑 `_selftest.py`。

@@ -298,9 +298,10 @@ def scan() -> tuple[list[dict], list[str]]:
                           f" ⇒ 可一键处置 `_seal_run.py --orphans --apply`")
     # ── 异常四：顶层散落 / 修复前快照 / 无清单的旧报告树
     # `ALLOWED_TOP`（目录门面：索引 / 说明 / 质量记分卡）已上提到 `wb_analysis/_paths.py`。
-    for p in sorted(REPORTS.iterdir()):
-        if p.is_file() and p.name not in ALLOWED_TOP:
-            issues.append(f"[顶层散落] {p.name}：应归入 _datasets/ 或 _other/")
+    if REPORTS.exists():
+        for p in sorted(REPORTS.iterdir()):
+            if p.is_file() and p.name not in ALLOWED_TOP:
+                issues.append(f"[顶层散落] {p.name}：应归入 _datasets/ 或 _other/")
     for p in sorted(EVID.glob("*.pre_*")):
         issues.append(f"[修复前快照] {p.name}：属过程产物，宜清理")
     legacy = [r for r in rows if not r["has_run"]]
@@ -348,6 +349,7 @@ def write_index(rows: list[dict], issues: list[str]) -> Path:
           "| `_archive/` | 归档产物 + 删除/重排清单（可审计） |",
           "| `_audit/` | 审计类文档（数据缺口审计等） |",
           "| `<TICKER>/` | 该标的的 12 角色报告树，按时间戳并列 |", ""]
+    REPORTS.mkdir(parents=True, exist_ok=True)
     out = REPORTS / "INDEX.md"
     out.write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
     return out

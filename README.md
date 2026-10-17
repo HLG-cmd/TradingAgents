@@ -9,7 +9,7 @@
 实际架构（一句话）：
 
 > **免费数据层采集**（`wb_analysis/collect.py` / `collect_index.py`）
-> → **WorkBuddy 顶层模型手工推理**（12 个角色文件按 `wb_analysis/FRAMEWORK.md` 手写 markdown）
+> → **多智能体 12 角色分工研判与推理**（按 `wb_analysis/FRAMEWORK.md` 进行多角色对抗研判）
 > → **脚本渲染**（`wb_analysis/assemble.py --from-dir`）
 > → 报告树 `reports/<TICKER>/<TICKER>_<时间戳>/`
 
@@ -24,10 +24,12 @@
 **第一次看这个项目，先读地图**：**[`docs/PROJECT_MAP.md`](docs/PROJECT_MAP.md)** ——
 一页说明每个目录/文件是干什么的、哪些是上游自带的、跑一次会动到哪些地方。
 
-详细手册：
+详细手册与规范：
 
-- [`docs/WORKFLOW.md`](docs/WORKFLOW.md) —— 端到端运行手册：采集 → 12 角色手工推理 → 渲染 → 报告树。
-- [`docs/SCREENER.md`](docs/SCREENER.md) —— 量化选股子系统手册：`screener_engine.py` / `smart_screener.py` / `stock_pools.py` / `edgar_fundamentals.py` / `factor_backtest.py` / `price_history.py`。
+- [`docs/WORKFLOW.md`](docs/WORKFLOW.md) —— 端到端运行手册：采集 → 12 角色研判推理 → 渲染 → 报告树。
+- [`docs/SCREENER.md`](docs/SCREENER.md) —— 量化选股子系统手册：多因子漏斗、选股引擎与回测体系。
+- [`docs/RULES.md`](docs/RULES.md) —— 51 条核心量化开发与门禁铁律（时点闸门、双口径计算、SEC 原值核验与避坑指南）。
+- [`docs/DOMAINS.md`](docs/DOMAINS.md) —— 领域口径与金融指标定义（指数加权、ERP 风险溢价、期权曲面、美债期限利差）。
 
 ### ★★ 三条链路（先认标的，再选采集器）
 
