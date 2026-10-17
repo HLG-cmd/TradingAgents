@@ -223,7 +223,8 @@ __marimo__/
 reports/
 
 # ── 本项目自建：瞬态产物（跑完会被封存进 reports/**/_source.zip，平时应为空）──
-wb_analysis/evidence/
+wb_analysis/evidence/*
+!wb_analysis/evidence/TREASURY*
 wb_analysis/drafts/
 wb_analysis/analysis/
 wb_analysis/_cache/
