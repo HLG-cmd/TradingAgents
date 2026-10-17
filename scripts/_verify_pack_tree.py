@@ -24,6 +24,11 @@ import sys
 import zipfile
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # 草稿名 → 交付树名（组合经理在渲染时改名为 decision.md）
 MAP: dict[str, str] = {
     "1_analysts/market.md": "1_analysts/market.md",

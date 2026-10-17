@@ -1,7 +1,11 @@
 # lifecycle: maintenance
 # created: 2026-09-23
 # usage: ./.venv/Scripts/python.exe scripts/_prune_backup.py [--apply]
-"""清理 `.workbuddy-ai/backup/` 里的回滚包：**按前缀各留最新 N 个**。
+"""清理本地回滚包目录（`.workbuddy-ai/backup/`）：**按前缀各留最新 N 个**。
+
+> ⚠️ **目标目录不在对外仓库中**：`.workbuddy-ai/` 已被 `.gitignore` 忽略，
+> 克隆本仓库后不存在 ⇒ 本脚本是**本地维护工具**，在公开克隆里运行会报「目录不存在」。
+> （回滚包的用途见 `docs/RULES.md`：删产物前先打包、逐项校验不过即中止。）
 
 ## 为什么不能「全局留最近 N 个」
 2026-09-23 实测踩坑：最初写「保留最近 3 个」，结果把**最大的那个回滚包**

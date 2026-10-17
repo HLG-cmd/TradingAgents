@@ -655,6 +655,9 @@ def _doc_drift_scope() -> list[Path]:
     它是 append-only 的**历史记录**（写"当时实测是 L686"是如实留痕，改了反而失真）。
     """
     out: list[Path] = list((ROOT / "docs").glob("*.md"))
+    sk_docs = ROOT / "docs" / "skills"
+    if sk_docs.exists():
+        out += list(sk_docs.glob("*/SKILL.md"))
     mem = ROOT / ".workbuddy-ai" / "memory"
     if mem.exists():
         out += [p for p in mem.glob("*.md")

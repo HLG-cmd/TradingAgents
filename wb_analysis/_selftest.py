@@ -388,8 +388,9 @@ def main() -> int:
             check("doc_drift: 告诫语境与 quant/ 正路径不误报",
                   hit_good == [], f"命中 {len(hit_good)}：{str(hit_good)[:60]}")
             scope = {p.name for p in h2._doc_drift_scope()}
-            check("doc_drift: 扫描面已含 memory/ 与 SKILL.md",
-                  {"IRONLAWS.md", "DOMAINS.md", "MEMORY.md", "SKILL.md"} <= scope,
+            check("doc_drift: 扫描面已含规范与 SKILL.md",
+                  ({"RULES.md", "DOMAINS.md", "SKILL.md"} <= scope)
+                  or ({"IRONLAWS.md", "DOMAINS.md", "MEMORY.md", "SKILL.md"} <= scope),
                   f"{len(scope)} 份：{sorted(scope)[:6]}")
         except Exception as e:                                   # noqa: BLE001
             check("doc_drift: 双边夹具", False, f"加载失败 {e}")

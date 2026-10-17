@@ -265,10 +265,10 @@ df = run_quant_screening(tickers, weights={
 | `edgar_fundamentals.py` | SEC EDGAR 时点基本面（历史 PE/ROE/净利率/增速） |
 | `price_history.py` | 长周期价格（自 2000 年）—— 长周期回测的前提 |
 | `stock_pools.py` | 成分股 + ICB 行业（Wikipedia 动态同步 + 静态兜底） |
-| `tests/test_screener_engine.py` | 锁定打分与缓存契约 |
+| `tests/quant/test_screener_engine.py` | 锁定打分与缓存契约 |
 | `wb_analysis/_verify_earnings_quality.py` | **收益质量验证器**：负税闸门 + 正常化一致性闸门。`--from-radar <csv> --top N` 或 `--tickers A,B,C`；`--exit-on-fail` 存在 FAIL 时退出码 2，可接 CI |
 | `wb_analysis/_verify_growth_edgar.py` | 成长性核验（EDGAR 多年 CAGR vs yfinance 单季同比，输出 A/B/C/D 裁定） |
-| `tests/test_edgar_fundamentals.py` | 锁定 EDGAR 三个坑 |
+| `tests/quant/test_edgar_fundamentals.py` | 锁定 EDGAR 三个坑 |
 | `wb_analysis/FRAMEWORK.md` | 12 角色深度分析框架 |
 
 ### 回归测试

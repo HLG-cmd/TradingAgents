@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-17 19:42
+- 生成时间：2026-10-17 20:00
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -74,9 +74,9 @@
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|
 | `scripts/_health.py` | 项目健康检查：**一条命令看整个项目状态**（把散落的各处门禁汇总成一个入口）。 | ./.venv/Scripts/python.exe scripts/_health.py [--quiet] |
-| `scripts/_memory_index.py` | 为 `.workbuddy-ai/memory/` 生成**主题索引**（`_INDEX.md`）。 | ./.venv/Scripts/python.exe scripts/_memory_index.py [--check] |
+| `scripts/_memory_index.py` | 为本地运行痕迹目录（`.workbuddy-ai/memory/`）生成**主题索引**（`_INDEX.md`）。 | ./.venv/Scripts/python.exe scripts/_memory_index.py [--check] |
 | `scripts/_probe_baseline.py` | （无文档字符串） | — |
-| `scripts/_prune_backup.py` | 清理 `.workbuddy-ai/backup/` 里的回滚包：**按前缀各留最新 N 个**。 | ./.venv/Scripts/python.exe scripts/_prune_backup.py [--apply] |
+| `scripts/_prune_backup.py` | 清理本地回滚包目录（`.workbuddy-ai/backup/`）：**按前缀各留最新 N 个**。 | ./.venv/Scripts/python.exe scripts/_prune_backup.py [--apply] |
 | `scripts/_scan_project.py` | 只读扫描整个项目的「产物堆积」情况（不修改任何文件）。 | ./.venv/Scripts/python.exe scripts/_scan_project.py |
 | `scripts/_scan_reports.py` | 只读扫描 `reports/` 与 `wb_analysis/` 的产物堆积情况，输出分类清单（不修改任何文件）。 | ./.venv/Scripts/python.exe scripts/_scan_reports.py |
 | `scripts/smoke_structured_output.py` | End-to-end smoke for structured-output agents against a real LLM pro | ./.venv/Scripts/python.exe scripts/smoke_structured_output.py |

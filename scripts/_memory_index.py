@@ -1,7 +1,11 @@
 # lifecycle: maintenance
 # created: 2026-10-16
 # usage: ./.venv/Scripts/python.exe scripts/_memory_index.py [--check]
-"""为 `.workbuddy-ai/memory/` 生成**主题索引**（`_INDEX.md`）。
+"""为本地运行痕迹目录（`.workbuddy-ai/memory/`）生成**主题索引**（`_INDEX.md`）。
+
+> ⚠️ **目标目录不在对外仓库中**：`.workbuddy-ai/` 已被 `.gitignore` 忽略，
+> 克隆本仓库后不存在 ⇒ 本脚本是**本地维护工具**，在公开克隆里运行会报「目录不存在」。
+> 需要长期留存的判据已落在 `docs/RULES.md`（铁律全文）与 `docs/DOMAINS.md`（领域口径）。
 
 ## 为什么需要它
 `memory/` 里的按天日志（`YYYY-MM-DD.md`）是**判例原始记录** —— 想知道
@@ -12,6 +16,8 @@
   · `MEMORY.md`      —— 「何时读哪个文件」的体例表（不列具体主题）
   · `IRONLAWS.md`    —— 铁律全文 + 单行索引（只收已被提炼成铁律的；条数以该文件自报为准）
   ⇒ 缺口：**还没被提炼成铁律、但已经发生过的判例**，散落在日志里无从检索。
+  （★ 这两份已于 2026-10-17 对外化为 `docs/RULES.md` / `docs/DOMAINS.md`；
+    `memory/` 内的同名文件转为本地运行副本。）
 
 ## 它做什么
 扫描 `memory/*.md`（**跳过 `_backup/`** —— 那里是历史快照，与正本重复），

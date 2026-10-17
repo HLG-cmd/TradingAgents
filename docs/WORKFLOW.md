@@ -203,7 +203,7 @@ python -c "from quant.stock_pools import get_latest_nasdaq_100 as g; from quant.
 每条 XBRL 记录都带 `filed`（申报日）——「在 T 日市场知道什么」= `filed <= T` 中 `end` 最晚的那条，
 保证不会用到当时尚未公布的数据。**三个必须避开的坑**（`start` 字段时长过滤 / tag 回退链取覆盖最新期间 /
 拆股口径 `市值 = 复权价 × 申报股本 × F`）见 `docs/DOMAINS.md` → 量化选股子系统 / SEC EDGAR，
-回归测试见 `tests/test_edgar_fundamentals.py`。
+回归测试见 `tests/quant/test_edgar_fundamentals.py`。
 
 ---
 
