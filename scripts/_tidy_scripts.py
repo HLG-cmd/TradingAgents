@@ -31,8 +31,14 @@ import argparse
 import ast
 import re
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).resolve().parents[1]
 # 三个代码目录都参与生命周期管理（原先只覆盖 scripts/ ⇒ 那是"半套机制"）

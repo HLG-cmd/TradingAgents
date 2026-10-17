@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-17 20:00
+- 生成时间：2026-10-17 22:55
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -27,6 +27,7 @@
 | `quant/wb_deep_dive.py` | 零成本深度投研流水线 —— 一站式自动化入口。 | ./.venv/Scripts/python.exe quant/wb_deep_dive.py |
 | `scripts/_settlement.py` | 历史决策回溯结算工具（吸收上游 TauricResearch v0.6.0 settlement 思想） | ./.venv/Scripts/python.exe scripts/_settlement.py |
 | `scripts/_verify_pack_tree.py` | 验证「交付树」与「审计包 _source.zip」**逐项内容一致**（通用版）。 | 任意标的 / 任意轮次 |
+| `scripts/run_nasdaq_premarket_task.py` | 纳指100（NDX）盘前利好利空情报汇总与开盘走势预判自动化任务。 | ./.venv/Scripts/python.exe scripts/run_nasdaq_premarket_task.py [--date YYYY-MM-DD] |
 | `wb_analysis/_audit_empty_sections.py` | 审计证据包的「**小节正文为空**」—— 抓「通道全绿但内容是空」这类静默失败。 | ./.venv/Scripts/python.exe wb_analysis/_audit_empty_sections.py <evidence.md> [--strict] |
 | `wb_analysis/_check_residuals.py` | 订正残留检查：防止「改了上游、忘了回头清下游」。 | ./.venv/Scripts/python.exe wb_analysis/_check_residuals.py <草稿目录> |
 | `wb_analysis/_check_role_files.py` | 角色文件体检：篇幅 / 裸五档英文词 / 越界 PROPOSAL / 合规声明 / 必需小节。 | ./.venv/Scripts/python.exe wb_analysis/_check_role_files.py |

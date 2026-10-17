@@ -257,3 +257,7 @@ _r5_logs*.txt
 *~
 *.artifact.json
 .*.artifact.json
+
+# 本地私有自动化任务脚本（仅本地运行，不入对外仓库）
+scripts/run_nasdaq_premarket*
+
