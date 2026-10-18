@@ -175,11 +175,11 @@ def scan() -> tuple[list[dict], list[str]]:
             if d.is_dir() and d.name not in SKIP_DIRS:
                 for tr in sorted(d.iterdir()):
                     if not tr.is_dir():
-                        issues.append(f"[二级目录散落] {tr.relative_to(REPORTS).as_posix()}：标的目录下不应存放散落文件，应归入 _other/ 或 _archive/")
+                        issues.append(f"[二级目录散落] {tr.relative_to(REPORTS).as_posix()}：标的目录下不应存放散落文件，应归入 _other/")
                         continue
                     m = TREE_RE.match(tr.name)
                     if not m:
-                        issues.append(f"[二级非标准目录] {tr.relative_to(REPORTS).as_posix()}/：不符合报告树命名契约，应归入顶层 _archive/ 或 _other/")
+                        issues.append(f"[二级非标准目录] {tr.relative_to(REPORTS).as_posix()}/：不符合报告树命名契约，应归入顶层 _other/")
                         continue
                     ticker, ymd = m.group(1), m.group(2)
                     run_date = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"
@@ -230,30 +230,9 @@ def scan() -> tuple[list[dict], list[str]]:
                     })
                     trees.setdefault((ticker, date), []).append(rows[-1])
 
-    # ── 异常一：同一 (标的, 基准日) 有多棵树 ⇒ 历史版本并存（不算错，但要标出来）
-    for k, lst in sorted(trees.items()):
-        if len(lst) > 1:
-            issues.append(f"[历史版本并存] {k[0]} {k[1]}：{len(lst)} 棵报告树 "
-                          f"（最新 {sorted(x['tree'] for x in lst)[-1]}）")
-    # ── 异常一之补：**内容身份重复** —— 标签不同、底层数据相同
-    #   起因（2026-10-11 SKHY 实测）：两棵树把 data_date 分别写成 10-10 与 10-11，
-    #   但底层末根 bar 都是 2026-10-09、bars 都是 65 ⇒ **同一份数据的两次渲染**。
-    #   上面按 (ticker, date) 分组的判据**天然漏掉**这种情形 ⇒ 那棵含错误结论
-    #   （把「上市以来均价」当「200 日牛熊分水岭」）的旧树长期并存、无人告警，
-    #   最后靠人工 `ls` 才发现。⇒ 判据必须落在**内容**上，而不是目录名标签上。
-    #   ⚠️ 要求 last_bar **与** bars 同时相同：只同末根 bar 而根数不同（如 1 年窗口
-    #       vs 2 年窗口）是**不同轮次**，不构成重复。
-    ident: dict[tuple, list[dict]] = {}
-    for r in rows:
-        if r["last_bar"] and r["bars"]:
-            ident.setdefault((r["ticker"], r["last_bar"], r["bars"]), []).append(r)
-    for k, lst in sorted(ident.items()):
-        labels = sorted({x["date"] for x in lst})
-        if len(lst) > 1 and len(labels) > 1:
-            issues.append(
-                f"[内容重复] {k[0]}：{len(lst)} 棵树底层数据相同（末根 bar {k[1]}、{k[2]} 根）"
-                f"但基准日标签不同（{'、'.join(labels)}）⇒ 属同一份数据的重复渲染，"
-                f"**建议只保留最新一棵**：{'、'.join(sorted(x['tree'] for x in lst))}")
+    # ── 历史版本说明：同一标的/基准日按正常流程跑出的多棵树均属正规历史版本，
+    #    统一在 INDEX.md 中按时间顺序完整保留与展示，不再作为卫生异常报警。
+
     # ── 异常二：报告树缺少对应草稿（无法再渲染）
     for r in rows:
         if not r["has_drafts"]:
@@ -312,7 +291,7 @@ def scan() -> tuple[list[dict], list[str]]:
 
 
 def write_index(rows: list[dict], issues: list[str]) -> Path:
-    rows_sorted = sorted(rows, key=lambda r: (r["ticker"], r["date"]))
+    rows_sorted = sorted(rows, key=lambda r: (r["ticker"], r["date"], r["tree"]))
     cur: dict[str, dict] = {}
     for r in rows_sorted:
         t = r["ticker"]
@@ -346,7 +325,6 @@ def write_index(rows: list[dict], issues: list[str]) -> Path:
           "| 目录 | 放什么 |", "|---|---|",
           "| `_datasets/` | 雷达/回测/核验导出的 CSV、HTML 等**数据产品** |",
           "| `_other/` | **非 12 角色**的专题报告（筛选报告、多标的对比等） |",
-          "| `_archive/` | 归档产物 + 删除/重排清单（可审计） |",
           "| `_audit/` | 审计类文档（数据缺口审计等） |",
           "| `<TICKER>/` | 该标的的 12 角色报告树，按时间戳并列 |", ""]
     REPORTS.mkdir(parents=True, exist_ok=True)

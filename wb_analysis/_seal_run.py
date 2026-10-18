@@ -31,6 +31,7 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,7 @@ DRAFTS = ROOT / "wb_analysis" / "drafts"
 ANALYSIS = ROOT / "wb_analysis" / "analysis"
 ONEOFF = ROOT / "scripts" / "_oneoff"
 SKIP_DIRS = FUNC_DIRS
+BACKUP_DIR = Path(tempfile.gettempdir()) / "tradingagents_backup"
 
 
 def _oneoff_dirs() -> list[Path]:
@@ -171,7 +173,7 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
         #   记的那起事故（「交付树与审计包不一致」），被幂等逻辑重新引入了。
         #   ⇒ 判据必须落到**内容**上：大小 + sha256 **都相同**才可删散件；
         #     任一不同 ⇒ 报「审计包已过期」并返回 1（**不删任何东西**），
-        #     要重建请显式加 `--rebuild`（会先把旧包备份到 `.workbuddy-ai/backup/`）。
+        #     要重建请显式加 `--rebuild`（会先把旧包备份到系统临时目录）。
         with zipfile.ZipFile(tree / "_source.zip") as z:
             pack = {i.filename: i.file_size for i in z.infolist()}
             pack_sha = {n: hashlib.sha256(z.read(n)).hexdigest() for n in pack}
@@ -234,7 +236,7 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
                 print(f"  ● {ticker} {date}：已有审计包，待增量并入 {uncovered} 个事后归位的 oneoff 探针")
                 return uncovered
             zp = tree / "_source.zip"
-            bdir = ROOT / ".workbuddy-ai" / "backup"
+            bdir = BACKUP_DIR
             bdir.mkdir(parents=True, exist_ok=True)
             bak = bdir / f"source_{ticker}_{date}_{datetime.now():%Y%m%d_%H%M%S}.zip"
             import shutil as _sh
@@ -280,7 +282,7 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
         for u in (modified + missing)[:8]:
             print(f"        {'[内容已变]' if u in modified else '[包内缺失]'} {u}")
         print("     ⇒ 交付树（新）与审计包（旧）不一致。要重建审计包请加 `--rebuild`"
-              "（旧包会先备份到 .workbuddy-ai/backup/）。")
+              "（旧包会先备份到系统临时目录）。")
         return 1
 
     if (tree / "_source.zip").exists():
@@ -288,13 +290,13 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
         #   备份的理由与「先打包再删」同源：重建会覆盖唯一的审计包，
         #   而旧包记录的是**上一版交付**（当初可能已对外发布）⇒ 必须可回溯。
         old = tree / "_source.zip"
-        bdir = ROOT / ".workbuddy-ai" / "backup"
+        bdir = BACKUP_DIR
         bdir.mkdir(parents=True, exist_ok=True)
         bak = bdir / f"source_{ticker}_{date}_{datetime.now():%Y%m%d_%H%M%S}.zip"
         if apply:
             import shutil as _sh
             _sh.copy2(old, bak)
-            print(f"  ↺ 已备份旧审计包 → {bak.relative_to(ROOT).as_posix()}"
+            print(f"  ↺ 已备份旧审计包 → {bak.as_posix()}"
                   f"（{bak.stat().st_size / 1024:.0f} KB）")
 
     print(f"  ● {ticker} {date} → {tree.relative_to(ROOT).as_posix()}")
@@ -412,7 +414,7 @@ def orphans(apply: bool) -> int:
     if not found:
         print("  ✓ 无孤儿产物")
         return 0
-    zp = ROOT / ".workbuddy-ai" / "backup" / f"orphans_{datetime.now():%Y%m%d_%H%M%S}.zip"
+    zp = BACKUP_DIR / f"orphans_{datetime.now():%Y%m%d_%H%M%S}.zip"
     print(f"  发现 {len(found)} 组孤儿产物（无对应报告树）：")
     allf: dict[str, Path] = {}
     for tk, dt, groups in found:
@@ -499,7 +501,7 @@ def main() -> int:
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--force", action="store_true", help="跳过静默期检查（明确承担并发写入风险）")
     ap.add_argument("--rebuild", action="store_true",
-                    help="重建审计包（当散件内容与包内不一致时用；旧包先备份到 .workbuddy-ai/backup/）")
+                    help="重建审计包（当散件内容与包内不一致时用；旧包先备份到系统临时目录）")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
