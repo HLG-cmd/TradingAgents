@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from datetime import date
 
-CACHE = Path(r"C:\Users\HLJ\.tradingagents\edgar_raw\NFLX_companyfacts.json")
+CACHE = Path.home() / ".tradingagents" / "edgar_raw" / "NFLX_companyfacts.json"
 d = json.loads(CACHE.read_text(encoding="utf-8"))
 gaap = d["facts"].get("us-gaap", {})
 

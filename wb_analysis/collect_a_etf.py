@@ -64,7 +64,7 @@ UNKNOWN_NAME = "[未登记标的]"
 
 # `run_westock` / `parse_md_table` / `WESTOCK` 已抽到 `wb_analysis/_westock.py`
 # （2026-10-10）：本文件与 `collect_hk_index.py` 曾**逐字各存一份**，而 westock 路径
-# 还被硬编码成 `C:\Users\HLJ\.local\bin\westock.exe`（机器特定）。现由该模块统一解析：
+# 还被硬编码成 `<用户主目录>\.local\bin\westock.exe`（机器特定）。现由该模块统一解析：
 # 环境变量 `WESTOCK_BIN` → `PATH` → 本机约定路径。三者已在文件顶部 import。
 
 

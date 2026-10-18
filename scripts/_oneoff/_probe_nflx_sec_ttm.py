@@ -1,11 +1,11 @@
 # lifecycle: oneoff
 """探针：从 SEC companyfacts 直取 NFLX 分季营收/营业利润/净利，独立复算 TTM。
-只读本地缓存 C:\\Users\\HLJ\\.tradingagents\\edgar_raw\\NFLX_companyfacts.json。"""
+只读本地缓存 `<用户主目录>/.tradingagents/edgar_raw/NFLX_companyfacts.json`。"""
 import json
 from pathlib import Path
 from datetime import date
 
-CACHE = Path(r"C:\Users\HLJ\.tradingagents\edgar_raw\NFLX_companyfacts.json")
+CACHE = Path.home() / ".tradingagents" / "edgar_raw" / "NFLX_companyfacts.json"
 d = json.loads(CACHE.read_text(encoding="utf-8"))
 facts = d["facts"]
 

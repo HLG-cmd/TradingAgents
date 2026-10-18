@@ -2,7 +2,7 @@
 # created: 2026-10-14
 """探针：分解 NFLX TTM 净利，查是否含一次性/非经营项目（铁律 40/43 复核）。
 
-只读本地缓存 C:\\Users\\HLJ\\.tradingagents\\edgar_raw\\NFLX_companyfacts.json，
+只读本地缓存 `<用户主目录>/.tradingagents/edgar_raw/NFLX_companyfacts.json`，
 不联网。输出：季度净利序列 + TTM 求和 + 非常规项目标签扫描。
 """
 import json

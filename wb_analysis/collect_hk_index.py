@@ -57,7 +57,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 # westock CLI 的统一接入层（路径解析 + 调用 + 表格解析）。
 # ★ 2026-10-10：本文件与 `collect_a_etf.py` 曾**逐字各存一份** run_westock/parse_md_table，
-#   且各自硬编码 `C:\Users\HLJ\.local\bin\westock.exe`（机器特定）⇒ 抽出共享模块。
+#   且各自硬编码 `<用户主目录>\.local\bin\westock.exe`（机器特定）⇒ 抽出共享模块。
 from wb_analysis._westock import WESTOCK, parse_md_table, run_westock  # noqa: E402
 
 
