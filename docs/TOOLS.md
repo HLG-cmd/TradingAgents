@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-17 22:55
+- 生成时间：2026-10-18 23:11
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -65,6 +65,7 @@
 | `wb_analysis/assemble.py` | 报告树组装器 —— 把分析层产出的 JSON 渲染成与上游同构的报告树。 | ./.venv/Scripts/python.exe wb_analysis/assemble.py |
 | `wb_analysis/collect.py` | 免费证据采集器 —— 全程不调用任何 LLM。 | ./.venv/Scripts/python.exe wb_analysis/collect.py |
 | `wb_analysis/collect_a_etf.py` | A股 ETF 证据采集器（westock CLI） | #   行业 ETF： ./.venv/Scripts/python.exe wb_analysis/collect_a_etf.py --ticker 512400.SS --date 2026-09-30 |
+| `wb_analysis/collect_a_stock.py` | A股个股证据采集器 —— 整合 westock CLI (腾讯官方接口) 与 TradingAgents 内置层。 | ./.venv/Scripts/python.exe wb_analysis/collect_a_stock.py --ticker 601899.SS --date 2026-10-16 |
 | `wb_analysis/collect_hk_index.py` | 采集**港股指数**证据（westock CLI）—— 项目首个港股链路。 | ./.venv/Scripts/python.exe wb_analysis/collect_hk_index.py --index hkHSTECH |
 | `wb_analysis/collect_index.py` | 指数证据采集器（多指数，默认 NDX）—— 全程不调用任何 LLM。 | ./.venv/Scripts/python.exe wb_analysis/collect_index.py |
 | `wb_analysis/collect_treasury.py` | 采集**美债收益率曲线**（FRED）—— 项目首个宏观专题采集器（非 12 角色标的链路）。 | ./.venv/Scripts/python.exe wb_analysis/collect_treasury.py --date 2026-09-28 |
@@ -101,7 +102,6 @@
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|
 | `scripts/_oneoff/_append_oss_assessment.py` | 把开源准备度评估追加进当日记忆（避免 heredoc 转义问题）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_append_oss_assessment.py |
-| `scripts/_oneoff/_archive_dup_skhy_tree.py` | （无文档字符串） | SKHY 2026-10-10（旧树归档） |
 | `scripts/_oneoff/_audit_evidence_sections.py` | （无文档字符串） | 通用（argv 传入 evidence.md） |
 | `scripts/_oneoff/_avgo_edgar_tagprobe.py` | 核查 AVGO FY2025（期末 2025-11-02）的：回购标签、净利标签、权益标签、债务标签。 | — |
 | `scripts/_oneoff/_avgo_fy_end.py` | 列出 AVGO 缓存的 companyfacts 里所有 10-K 的期末日，确定真实财年末。 | — |
@@ -128,7 +128,6 @@
 | `scripts/_oneoff/_diag_nflx_specificity.py` | （无文档字符串） | — |
 | `scripts/_oneoff/_diag_role_files_empty.py` | 甄别：`_check_role_files.py` 在「目录存在但无角色文件」时 rc=0 是否**真 bug**。 | ./.venv/Scripts/python.exe scripts/_oneoff/_diag_role_files_empty.py |
 | `scripts/_oneoff/_diag_search_news.py` | （无文档字符串） | — |
-| `scripts/_oneoff/_diag_skhy_derived_drift.py` | 诊断：O1 改了 `_derive_stock.py` 后，SKHY 封存包里的 `derived.md` 快照是否还能复现。 | SKHY 2026-10-10 |
 | `scripts/_oneoff/_drop_superseded_avgo_tree.py` | 打包并移除被取代的 AVGO 报告树（183033）：先打包、逐项校验，通过再逐文件删除。 | — |
 | `scripts/_oneoff/_extract_parse_sums.py` | 把算式解析逻辑抽成**纯函数** `parse_sums()`，消除「实现与测试各写一份」。 | ./.venv/Scripts/python.exe scripts/_oneoff/_extract_parse_sums.py |
 | `scripts/_oneoff/_fix_checker_blindspots.py` | 修 `scripts/_health.py` 中两处**同族**判据缺陷（本日第 5、6 例）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_checker_blindspots.py |
@@ -173,8 +172,6 @@
 | `scripts/_oneoff/_probe_nul_file.py` | 核实根目录 `nul` 残留是否真实存在（评估报告说"已删"、正文说"未处置"，需实测裁定）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_probe_nul_file.py |
 | `scripts/_oneoff/_probe_quote_refresh.py` | GOOG / ^NDX 报价刷新探测（只读，不写证据包）。 | — |
 | `scripts/_oneoff/_probe_risk_rating_scope.py` | （无文档字符串） | 评估「风险席位（aggressive/conservative/neutral）结论块之外出现五档英文词」 |
-| `scripts/_oneoff/_probe_skhy_earnings.py` | 复算 SKHY 的 Q5 非经营收益闸门（铁律 42：验证断言必须自行复算）。 | SKHY 2026-10-10 |
-| `scripts/_oneoff/_probe_skhy_history.py` | 铁律 24 探针：核实 SKHY 的 K 线根数与「200 日均线」的真伪。 | SKHY 2026-10-10 |
 | `scripts/_oneoff/_probe_skhy_identity.py` | Probe yfinance identity for SK Hynix related tickers (SKHY / HXSCF / | — |
 | `scripts/_oneoff/_probe_skhy_iv_incremental.py` | （无文档字符串） | — |
 | `scripts/_oneoff/_probe_skhy_unusual.py` | 探针：查 SKHY 季度利润表的 Total Unusual Items / Net Income，判断收益质量闸门报的 | — |

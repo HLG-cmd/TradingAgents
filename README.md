@@ -31,7 +31,7 @@
 - [`docs/RULES.md`](docs/RULES.md) —— 51 条核心量化开发与门禁铁律（时点闸门、双口径计算、SEC 原值核验与避坑指南）。
 - [`docs/DOMAINS.md`](docs/DOMAINS.md) —— 领域口径与金融指标定义（指数加权、ERP 风险溢价、期权曲面、美债期限利差）。
 
-### ★★ 三条链路（先认标的，再选采集器）
+### ★★ 五条链路（先认标的，再选采集器）
 
 **判据：这条标的属于哪一类 → 用哪个采集器。选错采集器是新手最常见的错。**
 
@@ -40,6 +40,7 @@
 | **美股个股 / ETF**（`NVDA`、`AVGO`…） | `wb_analysis/collect.py <TICKER>`（35~37 通道） | `_gen_derived_stock.py <TICKER> <日期>` |
 | **美股指数**（`NDX` / `SPX`） | `wb_analysis/collect_index.py --index NDX` | `_gen_derived_ndx.py <IDX> <日期>` |
 | **A 股 ETF**（`512400.SS`、`515100`…） | `wb_analysis/collect_a_etf.py --ticker <代码>`（westock CLI） | `_derive_a_etf.py <TICKER> <日期>`（**自行落盘**） |
+| **A 股个股**（`601899.SS` 紫金矿业…） | `wb_analysis/collect_a_stock.py --ticker <代码>`（westock CLI，23 通道） | `_gen_derived_stock.py <TICKER> <日期>` |
 | **港股指数**（`hkHSTECH`…） | `wb_analysis/collect_hk_index.py --index hkHSTECH --date <日期>` | **无专属派生脚本**（估值由采集器内部聚合） |
 
 ```bash
@@ -56,11 +57,16 @@
 ./.venv/Scripts/python.exe wb_analysis/collect_a_etf.py --ticker 512400.SS --date <A股交易日>
 ./.venv/Scripts/python.exe wb_analysis/_derive_a_etf.py 512400.SS <日期>   # 直接写 drafts 的 0_derived.md
 
-# ── 链路 D：港股指数 ──
+# ── 链路 D：A 股个股（23 通道；行情/K线/技术指标/筹码/资金流/两融/北向/股东/公告/三大报表/大宗联动）──
+#   ★ 与 A 股 ETF 是**两个不同采集器**：个股走 collect_a_stock.py，ETF 走 collect_a_etf.py
+./.venv/Scripts/python.exe wb_analysis/collect_a_stock.py --ticker 601899.SS --date <A股交易日>
+./.venv/Scripts/python.exe wb_analysis/_gen_derived_stock.py 601899.SS <日期>
+
+# ── 链路 E：港股指数 ──
 ./.venv/Scripts/python.exe wb_analysis/collect_hk_index.py --index hkHSTECH --date <港股交易日>
 ```
 
-**⚠️ 三条日期口径各不相同，别混用**：
+**⚠️ 日期口径各不相同，别混用**：
 - 美股链路的 `--date` ＝ **美东当日**（不是本机日期、也不是末根 bar 日期）；
 - A 股 / 港股链路的 `--date` 取**该市场的交易日**；盘中采集会拿到半日快照 ⇒
   **复盘历史基准日时务必确认采集器已透传日期**（`collect_a_etf.py` 已修）。

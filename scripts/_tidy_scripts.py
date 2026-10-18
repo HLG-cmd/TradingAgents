@@ -32,6 +32,7 @@ import ast
 import re
 import shutil
 import sys
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -47,6 +48,7 @@ SELF = Path(__file__).name
 VALID = {"reusable", "maintenance", "oneoff"}
 EXEMPT = {"__init__.py", "conftest.py"}
 INDEX = ROOT / "docs" / "TOOLS.md"
+REPORTS = ROOT / "reports"
 
 TEMPLATE = '''"""__PURPOSE__
 
@@ -151,6 +153,57 @@ def write_index(tagged: list[tuple[Path, dict]], exempt: list[Path]) -> Path:
     return INDEX
 
 
+def sealed_oneoff_names() -> set[str]:
+    """收集已随案卷封存进 `_source.zip` 的 oneoff 探针名。
+
+    ★ 设计行为：探针服务的那一轮交付并封存后，会**随案卷进报告树的 `_source.zip`**，
+    `scripts/_oneoff/` 于是删掉该文件（见 `write_index` 里 oneoff 段的说明）。
+    ⇒ 这类脚本「磁盘上没有、但索引里还留着」是**正常的审计留痕**，不是索引过期。
+    """
+    names: set[str] = set()
+    for zp in REPORTS.glob("*/*/_source.zip"):
+        try:
+            with zipfile.ZipFile(zp) as z:
+                for n in z.namelist():
+                    if n.startswith("oneoff/") and n.endswith(".py"):
+                        names.add(n.split("/", 1)[1])
+        except Exception:  # noqa: BLE001
+            continue
+    return names
+
+
+def index_drift(tagged: list[tuple[Path, dict]], exempt: list[Path]) -> dict:
+    """比对 `docs/TOOLS.md` 与受管脚本集合，返回 {'missing': [...], 'extra': [...]}。
+
+    ★ 2026-10-18 立：此前 `--check` 只验「每个 .py 有 lifecycle 声明」，
+    **不验「每个 .py 都进了索引」** ⇒ `collect_a_stock.py`（2026-10-18 新增）写了声明、
+    门禁全绿，却在 `TOOLS.md` 里查不到 ⇒ 读文档的人以为没这个工具。本函数补该盲区。
+
+    - `missing`：受管脚本未出现在索引中（新脚本忘了重生成索引）
+    - `extra` ：索引里有、但磁盘上已不存在，**且未被封存**（脚本被删/改名后索引未更新）
+
+    两类**不算** extra（否则全是假阳性）：
+      1. 豁免文件（`__init__.py` / `conftest.py`）—— 在索引里单列「豁免」表；
+      2. 已封存进 `_source.zip` 的 oneoff 探针 —— 按设计就该从 `_oneoff/` 消失。
+    """
+    if not INDEX.exists():
+        return {"missing": ["<docs/TOOLS.md 不存在>"], "extra": []}
+    text = INDEX.read_text(encoding="utf-8", errors="replace")
+    # 索引里每行形如 | `wb_analysis/xxx.py` | 用途 | 用法 |
+    indexed = set(re.findall(r"^\|\s*`([^`]+\.py)`", text, re.M))
+    exempt_names = {p.relative_to(ROOT).as_posix() for p in exempt}
+    sealed = {f"scripts/_oneoff/{n}" for n in sealed_oneoff_names()}
+    expected = {p.relative_to(ROOT).as_posix() for p, _h in tagged}
+    return {
+        "missing": sorted(expected - indexed),
+        "extra": sorted((indexed - expected) - exempt_names - sealed),
+    }
+
+
+def out_name() -> str:
+    return INDEX.relative_to(ROOT).as_posix()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
@@ -191,8 +244,22 @@ def main() -> int:
                 print(f"    {p.relative_to(ROOT).as_posix()}")
             print("  ⇒ 跑 `scripts/_tidy_scripts.py --apply` 归位。")
             return 1
+        # ★ 2026-10-18 新增：索引覆盖度检查（此前是盲区）
+        #   原 --check 只验「每个 .py 有 lifecycle 声明」，不验「每个 .py 都进了 docs/TOOLS.md」
+        #   ⇒ 新脚本只要写了声明就能过门禁，但在索引里查不到，读文档的人以为没有这个工具，
+        #     下次重复造轮子。现补上：索引必须覆盖全部受管脚本。
+        drift = index_drift(tagged, exempt)
+        if drift["missing"] or drift["extra"]:
+            print(f"✗ docs/TOOLS.md 与受管脚本不一致（{out_name()} 过期）：")
+            for miss in drift["missing"]:
+                print(f"    缺 {miss}")
+            for extra in drift["extra"]:
+                print(f"    多（已不存在且未封存）{extra}")
+            print("  ⇒ 跑 `scripts/_tidy_scripts.py --apply` 重生成索引。")
+            return 1
         print(f"✓ 全部 {len(tagged)} 个脚本均已声明生命周期"
               f"（豁免 {len(exempt)}：{', '.join(p.name for p in exempt)}）")
+        print(f"✓ 索引覆盖度：{out_name()} 与 {len(tagged)} 个受管脚本一致")
         return 0
 
     by_dir: dict[str, dict[str, int]] = {}

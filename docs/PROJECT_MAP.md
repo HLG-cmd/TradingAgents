@@ -80,6 +80,7 @@
 | `collect.py` | **采集器**：美股个股 / ETF，抓 35~37 个免费通道 | 代码，长期 |
 | `collect_index.py` | **采集器**：美股指数（`NDX` / `SPX`） | 代码，长期 |
 | `collect_a_etf.py` | **采集器**：A 股 ETF（`--mode industry\|strategy\|commodity`，走 westock CLI） | 代码，长期 |
+| `collect_a_stock.py` | **采集器**：A 股个股（`--ticker 601899.SS`，走 westock CLI，23 通道） | 代码，长期 |
 | `collect_hk_index.py` | **采集器**：港股指数（走 westock CLI） | 代码，长期 |
 | `collect_treasury.py` | **采集器**：美债专题（宏观曲线，不服务单一标的） | 代码，长期 |
 | `_option_source.py` | **期权数据源适配器**：把 CBOE 官方延迟报价适配成 yfinance 同形接口。**盘前/盘后自动启用**（见下方 §3.1） | 代码，长期 |
@@ -195,7 +196,7 @@ reports/
 
 ---
 
-## 5.5 ★ 四条链路怎么跑（先认标的，再选采集器）
+## 5.5 ★ 五条链路怎么跑（先认标的，再选采集器）
 
 **判据：标的属于哪一类 → 用哪个采集器。选错采集器是新手最常见的错。**
 
@@ -204,6 +205,7 @@ reports/
 | **美股个股 / ETF** | `wb_analysis/collect.py <TICKER>` | `_gen_derived_stock.py <TICKER> <日期>` |
 | **美股指数**（NDX/SPX） | `wb_analysis/collect_index.py --index NDX` | `_gen_derived_ndx.py <IDX> <日期>` |
 | **A 股 ETF** | `wb_analysis/collect_a_etf.py --ticker <代码>` | `_derive_a_etf.py <TICKER> <日期>`（自落盘） |
+| **A 股个股** | `wb_analysis/collect_a_stock.py --ticker <代码>` | `_gen_derived_stock.py <TICKER> <日期>` |
 | **港股指数** | `wb_analysis/collect_hk_index.py --index <指数> --date <日期>` | 无专属派生（采集器内部聚合估值） |
 
 ```bash
@@ -213,6 +215,9 @@ reports/
 ./.venv/Scripts/python.exe wb_analysis/collect_index.py --date <美东当日> --index NDX
 # A 股 ETF（行业/策略/商品三模式自动判定）
 ./.venv/Scripts/python.exe wb_analysis/collect_a_etf.py --ticker 512400.SS --date <A股交易日>
+# A 股个股（★ 与 A 股 ETF 是两个不同采集器，别混用）
+./.venv/Scripts/python.exe wb_analysis/collect_a_stock.py --ticker 601899.SS --date <A股交易日>
+./.venv/Scripts/python.exe wb_analysis/_gen_derived_stock.py 601899.SS <A股交易日>
 # 港股指数
 ./.venv/Scripts/python.exe wb_analysis/collect_hk_index.py --index hkHSTECH --date <港股交易日>
 ```
