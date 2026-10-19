@@ -13,6 +13,27 @@
 > → **脚本渲染**（`wb_analysis/assemble.py --from-dir`）
 > → 报告树 `reports/<TICKER>/<TICKER>_<时间戳>/`
 
+### ⚠️ 与上游的能力差异（**双向**，别只看「更好」的那一半）
+
+**权威版本见 [`wb_analysis/FRAMEWORK.md`](wb_analysis/FRAMEWORK.md) §5.2** —— 本节只放结论。
+
+| 维度 | 结论 |
+|---|---|
+| **同一水平** | 五档评级机制（Buy/Overweight/Hold/Underweight/Sell）—— 同词表、同结构，实测可用**上游原生解析器**逐棵读出，可无缝替代 |
+| **本项目多** | 量化因子回测、因子有效性**诚实标注**、数据缺口台账 + 门禁、报告质量记分卡、**零 LLM API 费** |
+| ⚠️ **本项目少** | **决策记忆 / 反思机制未接入** |
+
+**关于「少」的那一项**（容易被「越用越好」这句话误导）：
+
+- **上游有**：`agents/utils/memory.py` + `graph/reflection.py`，`default_config.py` 里**设了默认路径**
+  ⇒ 上游每轮 `store_decision` 写入决策，并把历史反思经 `get_past_context`
+  **重新注入后续 prompt** —— 这是**真正的跨轮学习回路**。
+- **本项目没有**：`wb_analysis/` 与 `quant/` 全库**零调用** `TradingMemoryLog` / `Reflector`。
+- **替代方案不等价**：本项目用「记分卡 + `RULES.md` / `DOMAINS.md` 沉淀」替代，
+  但记分卡只衡量**报告质量**、**不回流进角色 prompt**；RULES/DOMAINS 靠**人工沉淀**、非自动注入。
+
+⇒ **不要让「越用越好」暗示本项目已具备上游那种自动跨轮学习。**
+
 ## 怎么在这台机器上跑
 
 本机自带隔离 Python，**不要换成别的**：
