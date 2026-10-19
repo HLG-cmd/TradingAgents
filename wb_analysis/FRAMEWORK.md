@@ -58,6 +58,11 @@
    不要写英文评级词。`assemble.py` 的 `crosscheck_with_upstream()` 会自动检出
    这类不一致并告警。
 
+7. **篇幅看信息密度，不看字数。** 单角色 **4,000–4,800 字符**（硬下限 4,000，>6,000 判偏长）。
+   **每句话都要承载信息**：不得复述结论、不得同一句写两遍、不得用「综上所述」凑段。
+   数字不够就写「该项数据缺失」，不要用形容词填长度。
+   检查器：`_lint_drafts.py` 4d 节（重复句）、5 节（篇幅）。
+
 ---
 
 ## 2. 评级词汇表（严格）
@@ -241,6 +246,73 @@ FINAL TRANSACTION PROPOSAL: **<BUY|HOLD|SELL>**
 ⇒ 产物与原系统报告**无缝替代**（目录结构、章节标题、评级词汇全部一致），
 可被任何读取原报告树的下游工具直接消费。
 
+### 5.1 ★ 交叉验证实测（2026-10-18）
+
+上表是**声明**。本节是**实测**：用**上游自己的解析器**逐棵反读本项目全部报告树。
+
+```python
+from tradingagents.agents.utils.rating import extract_rating, RATINGS_5_TIER
+# 对 reports/<标的>/<树>/{2_research/manager.md, 5_portfolio/decision.md} 逐棵抽取
+```
+
+| 结果 | 数值 |
+|---|---|
+| 上游解析器可正确读出评级 | **全部通过（0 失败）** ✅ |
+
+**怎么复算**（**不写死数字** —— 报告树会持续增加，写死必然漂移）：
+
+```python
+from pathlib import Path
+from wb_analysis._paths import iter_report_trees
+from tradingagents.agents.utils.rating import extract_rating, RATINGS_5_TIER
+
+ok = bad = 0
+for _tk, tr in iter_report_trees(Path("reports")):
+    vals = [extract_rating((tr / rel).read_text(encoding="utf-8")) if (tr / rel).exists() else None
+            for rel in ("2_research/manager.md", "5_portfolio/decision.md")]
+    if all(v in RATINGS_5_TIER for v in vals):
+        ok += 1
+    else:
+        bad += 1
+        print("FAIL:", tr)
+print(f"通过 {ok} / 失败 {bad}")
+# 2026-10-18 实测：通过 63 / 失败 0
+# 2026-10-19 复算：通过 65 / 失败 0（报告树持续增加，通过数随之增长 = 正常）
+```
+
+**五档词全部真实出现过**（非只输出 Hold）：`Buy`（601899.SS、TSM）、
+`Overweight`（MU/NFLX/NVDA/WDC）、`Underweight`（AVGO/GOOG/NFLX/NDX/NVDA/WDC）、
+`Hold` 多数；`Sell` 未出现（极端看空罕见，属正常）。
+
+⚠️ **复现提示**：遍历时不要用 `reports/*/*_2*` 这类通配符 —— 会把 `reports/_audit/` 下的
+审计文档误当成报告树（少 1 棵、多 1 个 FAIL）。必须走 `wb_analysis/_paths.py::iter_report_trees`。
+
+### 5.2 ★ 与上游的能力差异（**双向**如实记录）
+
+| 维度 | 上游 | 本项目 |
+|---|---|---|
+| **五档评级机制** | LLM 研判（组合经理读辩论后定档） | **同一机制**，逐字同词表 |
+| **量化因子回测 / IC 验证** | ❌ **无**（全仓库无 IC / backtest / walk-forward） | ✅ 有（311 期月频 + 17 期年度） |
+| **因子有效性诚实标注** | ❌ 无此概念 | ✅ `screener_engine.FACTOR_VALIDATION` |
+| **数据缺口台账 + 门禁** | ❌ 无（仅 prompt 里一句 `DATA_UNAVAILABLE` 前缀） | ✅ 台账 + 未声明即 **FAIL** |
+| **报告质量记分卡** | ❌ 无 | ✅ 逐轮 9 项代理指标 |
+| **LLM 付费** | 需配置 OpenAI / Anthropic / Google 等 provider | ❌ **不付任何 LLM API 费** |
+| **数据时点管控** | 有 `DATA_UNAVAILABLE` 容忍 | ✅ 另加时点闸门（铁律 7）与缺口条件式结论 |
+| **决策记忆 / 反思** | ✅ `agents/utils/memory.py` + `graph/reflection.py`；默认路径 `~/.tradingagents/memory/trading_memory.md`（`default_config.py` 已设默认值，**上游跑一次就会写入**） | ⚠️ **未接入**：`wb_analysis/` 与 `quant/` 全库零调用（`grep TradingMemoryLog\|Reflector` 无命中）；该文件在本机存在但为 **0 字节** |
+
+**结论口径（不许夸大）**：
+
+1. **评级能力与上游同一水平** —— 同词表、同结构、63/63 实测可互换，**不是更强**。
+2. **量化验证层是上游没有的** —— 但它的结论是「**尚未证明有选股能力**」
+   （见 `docs/SCREENER.md` §3.1），是**如实标注局限**，不是「选股更准」。
+3. ⚠️ **记忆/反思机制本项目未接入** —— 上游的 `Reflector` 会把历史决策的反思
+   **重新注入后续 prompt**（真正的跨轮学习回路）；本项目以「记分卡 + RULES/DOMAINS 沉淀」替代。
+   这两者**不等价**：记分卡只衡量报告质量、**不回流进角色 prompt**，
+   而 RULES/DOMAINS 靠人工沉淀、非自动注入。
+   ⇒ **不要让「越用越好」暗示本项目已具备上游那种自动跨轮学习。**
+
+> **一句话**：评级同水平；验证更透明；跨轮学习**不如**上游（未启用）。
+
 
 ---
 
@@ -269,3 +341,36 @@ FINAL TRANSACTION PROPOSAL: **<BUY|HOLD|SELL>**
 
 > 检查工具：`_gap_ledger.py --check <草稿目录>`（退出码 1 = 有决定性缺口未声明）。
 > 已接入 `_precheck.py` 的「数据缺口台账」一项，**FAIL 级**。
+
+---
+
+# 附录二 · 牛熊子智能体拆分协议（2026-10-19 新增）
+
+## 为什么需要它
+
+**子智能体不是另一个模型，而是同一模型的另一个上下文窗口。** 独立性来自「彼此看不到对方写了什么」，
+不来自模型不同。此前 12 个角色由同一上下文一次写完（601899.SS / 0700.HK 两轮实测），
+结果牛熊两派引用的证据高度重合（同一批 PE / ROE / 资金数字），所谓「逐条反驳」只是同一思路的自问自答。
+
+## 执行协议（三轮）
+
+| 轮次 | 执行者 | 输入 | 禁止 |
+|---|---|---|---|
+| R1 | 子智能体 A（牛派） | 证据包 + `0_brief.md` + `0_derived.md` + FRAMEWORK | 不得读熊派稿、不得读研究经理稿 |
+| R1 | 子智能体 B（熊派） | 同上（**与 A 完全相同的输入集**） | 不得读牛派稿 |
+| R2 | 研究经理（主上下文） | A、B 两份独立稿 + 证据 | 不得只读摘要，必须逐条比对分歧点 |
+| R3 | 交易员 / 风控 / 组合经理 | R2 的裁定 + 全部前置稿 | 沿用原有契约 |
+
+## 落地要点
+
+1. **两个子智能体必须并行启动**，且 prompt 中**不得出现对方的存在**（避免「预判对方」导致同质化）。
+2. 输出契约不变（仍写 `2_research/bull.md` / `bear.md`，≥4,000 字符，禁裸评级词）。
+3. 研究经理必须显式列出「双方在哪些事实上一致、在哪些解释上分歧」——若发现两稿引用证据重合率 >70%，
+   应判定本轮拆分失败，重跑 R1。
+4. 子智能体只能读文件，不得改写证据包；落盘由主上下文统一执行（避免并发写冲突）。
+
+## 与篇幅下限的关系
+
+单角色下限 **4,000 字符**（建议 4,000–4,800）。拆成子智能体后，两个上下文各自只写一份稿，
+**不需要**用重复论述凑长度 —— 超过 6,000 字符会触发 `_lint_drafts.py` 的「篇幅偏长」提示。
+
