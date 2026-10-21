@@ -115,8 +115,8 @@ def main() -> int:
                 body_wo_contract = PROPOSAL_RE.sub("", t)
                 lines = body_wo_contract.split("\n")
                 action_lines = [i for i, l in enumerate(lines) if LABEL_PATTERNS["Action"].search(l)]
-                stray = [w for w in RATING.findall(
-                    "\n".join(l for i, l in enumerate(lines) if i not in action_lines))]
+                stray = list(RATING.findall(
+                    "\n".join(l for i, l in enumerate(lines) if i not in action_lines)))
                 if not action_lines and not PROPOSAL_RE.search(t):
                     flags.append("缺结论档位（交易员应在结论块首行或末行表态）")
                 if len(action_lines) > 1:

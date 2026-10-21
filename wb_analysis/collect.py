@@ -43,6 +43,7 @@ if str(PROJECT_ROOT) not in sys.path:
 # ★ 2026-10-15：移除模块级 os.chdir(PROJECT_ROOT)，改为在 main() 入口执行，消除 import 副作用
 
 from dotenv import load_dotenv
+
 from wb_analysis import _clock
 
 load_dotenv(PROJECT_ROOT / ".env")
@@ -661,7 +662,7 @@ def _extended_hours_block(ticker: str, as_of: str) -> tuple[str, dict]:
         pass
 
     rows: list[dict] = []
-    for day in sorted({d for d in df.index.date}, reverse=True)[:4]:
+    for day in sorted(set(df.index.date), reverse=True)[:4]:
         g = df[df.index.date == day]
         segs = (
             ("盘前", g[(g.index.time >= dt.time(4, 0)) & (g.index.time < dt.time(9, 30))]),
@@ -932,7 +933,7 @@ def _render_option_block(ticker: str, opts: dict) -> str:
     #   两个源的 IV/偏斜口径不同、数值不可混用，故必须显式标注。
     _src = (opts.get("source") or "").strip()
     _is_cboe = not _src.startswith("yfinance")
-    from wb_analysis.collect_index import _source_label, _iv_method_label
+    from wb_analysis.collect_index import _iv_method_label, _source_label
     lines.append(f"- **数据来源：{_source_label(_src)}**")
     lines.append(f"  - {opts.get('source_note') or '（未记录时点说明）'}")
     if _is_cboe:
@@ -1424,7 +1425,7 @@ def collect_one(
     ok = sum(1 for v in health.values() if v == "ok")
     bad = [k for k, v in health.items() if v != "ok"]
     summary = [
-        f"## 通道健康度\n",
+        "## 通道健康度\n",
         f"- 成功: {ok} / {len(health)}",
     ]
     if bad:

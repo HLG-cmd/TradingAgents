@@ -34,6 +34,8 @@ import pathlib
 import re
 import sys
 
+from wb_analysis._log import log_gap
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -45,7 +47,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 # westock CLI 的统一接入层（路径解析 + 调用 + 表格解析），与 collect_hk_index.py 共用。
 from wb_analysis._westock import (  # noqa: E402
-    WESTOCK, filter_news_asof, parse_md_table, run_westock,
+    WESTOCK,
+    filter_news_asof,
+    parse_md_table,
+    run_westock,
 )
 
 # ── 标的档案表：名称 / 模式 / 行业板块 / 跟踪指数 显式登记 ──
@@ -262,7 +267,8 @@ def parse_yield(raw_term_spread: str = "", raw_curve: str = "") -> tuple:
 def fetch_eastmoney_nav(ticker: str, date: str) -> dict | None:
     """从东方财富开放 API 提取官方确权的当日基金净值。"""
     code = ticker.split(".")[0]
-    import urllib.request, json
+    import json
+    import urllib.request
     url = f"http://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex=1&pageSize=5&startDate={date}&endDate={date}"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Referer": "http://fundf10.eastmoney.com/"})
     try:
@@ -272,7 +278,8 @@ def fetch_eastmoney_nav(ticker: str, date: str) -> dict | None:
             for it in items:
                 if it.get("FSRQ") == date:
                     return {"nav": fnum(it.get("DWJZ")), "acc_nav": fnum(it.get("LJJZ")), "chg_pct": fnum(it.get("JZZZL"))}
-    except Exception:
+    except Exception as _gap_exc:  # noqa: BLE001
+        log_gap("collect_a_etf.fetch_eastmoney_nav", _gap_exc)
         pass
     return None
 
@@ -514,7 +521,7 @@ def main(argv: list[str] | None = None) -> int:
     L.append(f"- 采集日期: {date}")
     L.append(f"- 标的代码: {ticker} (westock: {wcode})")
     L.append(f"- 标的名称: {ticker_name}")
-    L.append(f"- 数据来源: westock CLI (腾讯官方接口) + TradingAgents 内置层")
+    L.append("- 数据来源: westock CLI (腾讯官方接口) + TradingAgents 内置层")
     L.append(f"- 通道健康度: 成功: {n_ok} / {n_total}")
     L.append(f"- **非全绿通道**: {bad_str}")
     L.append(f"- 市场状态: A股市场 {date} 15:00 CST **已正常收盘**（所有指标均基于当日收盘价）")
@@ -610,7 +617,8 @@ def main(argv: list[str] | None = None) -> int:
     ma5, ma10, ma20 = fnum(technical.get("MA_5")), fnum(technical.get("MA_10")), fnum(technical.get("MA_20"))
     ma60, ma120, ma250 = fnum(technical.get("MA_60")), fnum(technical.get("MA_120")), fnum(technical.get("MA_250"))
     bu, bm, bl = fnum(technical.get("BOLL_UPPER")), fnum(technical.get("BOLL_MID")), fnum(technical.get("BOLL_LOWER"))
-    dev = lambda m: (f"{100*(close-m)/m:+.2f}%" if (close and m) else "—")
+    def dev(m):
+        return (f"{100*(close-m)/m:+.2f}%" if (close and m) else "—")
     bw = (bu - bl) if (bu is not None and bl is not None) else None
     bw_pct = f"{100*bw/bm:.2f}%" if (bw is not None and bm) else "—"
     L.append("## 2. 技术指标与筹码结构")
@@ -892,8 +900,8 @@ def _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, t
     else:
         L.append("## 4. 跟踪指数估值（聚合，含历史分位）")
         L.append("")
-        L.append(f"> 口径：ETF 持仓加权聚合估值，来自 westock `etf overview`；**历史分位为区间内百分位**，"
-                 f"数值越高代表当前估值在该区间历史中越贵。")
+        L.append("> 口径：ETF 持仓加权聚合估值，来自 westock `etf overview`；**历史分位为区间内百分位**，"
+                 "数值越高代表当前估值在该区间历史中越贵。")
         L.append("")
         L.append("```")
         L.append(f"PE (TTM):   {overview.get('peTtm', '[未取到]')} (历史分位: {overview.get('peTtmPct', '[未取到]')}%{note_pe_pct(overview.get('peTtmPct'))})")
@@ -910,7 +918,7 @@ def _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, t
     # 红利类策略 ETF 的核心读数：股息率 vs 无风险利率
     div = fnum(overview.get("divTtm"))
     y10, y10_date = parse_yield(raw.get("macro_term_spread", ""), raw.get("macro_yield", ""))
-    
+
     # 解析期限利差与溢价率
     h_ts, b_ts = parse_md_table(raw.get("macro_term_spread", ""))
     ts_dict = dict(zip(h_ts, b_ts[-1])) if h_ts and b_ts else {}
@@ -999,7 +1007,8 @@ def _render_strategy(L, raw, overview, profile, fund_flow, ticker, date, meta, t
     _append_flow_and_news(L, fund_flow, raw, date, start=7)
 
     # 8. 波动率与风险定价结构（HV 与期权代理环境）
-    import math, statistics
+    import math
+    import statistics
     h_kl, b_kl = parse_md_table(raw.get("kline", ""))
     hv20_str = "[未计算]"
     if h_kl and b_kl and "last" in h_kl:

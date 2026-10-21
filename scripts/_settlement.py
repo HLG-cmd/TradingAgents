@@ -26,10 +26,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import logging
+
 from wb_analysis._contract import LABEL_PATTERNS, PROPOSAL_RE  # noqa: E402
 from wb_analysis._paths import TREE_RE, is_archived_path, iter_report_trees  # noqa: E402
 
-import logging
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 try:

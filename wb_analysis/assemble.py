@@ -44,12 +44,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 #    项目侧统一以 `_contract` 为准；「项目侧 == 上游」由 `_selftest.py` 的断言锁住。
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+from wb_analysis import _clock  # noqa: E402
 from wb_analysis._contract import (  # noqa: E402
     FIVE_LEVELS as RATINGS_5_TIER,
     PROPOSAL_STRICT_RE as _TRADER_STOP_LINE,
     THREE_LEVELS as TRADER_ACTIONS,
 )
-from wb_analysis import _clock  # noqa: E402
 
 ANALYSIS_DIR = PROJECT_ROOT / "wb_analysis" / "analysis"
 

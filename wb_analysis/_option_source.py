@@ -181,7 +181,7 @@ class CboeChain:
                 continue
             calls, puts = self._by_exp.setdefault(p["expiry"], ([], []))
             (calls if p["cp"] == "C" else puts).append(row)
-        for exp, (c, p) in self._by_exp.items():
+        for _exp, (c, p) in self._by_exp.items():
             c.sort(key=lambda r: r["strike"])
             p.sort(key=lambda r: r["strike"])
 

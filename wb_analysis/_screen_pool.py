@@ -64,7 +64,7 @@ import datetime as dt  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from quant.screener_engine import export_radar_csv, run_quant_screening
-from quant.stock_pools import get_latest_nasdaq_100, get_latest_sp1500, get_latest_sp500
+from quant.stock_pools import get_latest_nasdaq_100, get_latest_sp500, get_latest_sp1500
 from wb_analysis import _clock
 
 # ── 交叉筛选门槛（均为 0~100 的截面百分位得分）────────────────────────────

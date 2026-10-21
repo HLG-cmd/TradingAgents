@@ -23,7 +23,17 @@ except Exception:  # noqa: BLE001
     pass
 
 ROOT = Path(__file__).resolve().parent.parent
-BASELINE_PASSED = 935
+def _baseline() -> int:
+    """从 scripts/_health.py 读回归基线，避免同一数字在多处硬编码。"""
+    try:
+        src = (ROOT / "scripts" / "_health.py").read_text(encoding="utf-8")
+        m = re.search(r"^BASELINE_PASSED\s*=\s*(\d+)", src, re.M)
+        return int(m.group(1)) if m else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+BASELINE_PASSED = _baseline()
 SKIP_PARTS = {"_oneoff", "_archive", "scratch", "__pycache__", ".venv"}
 RESULTS: list[tuple[str, str, str]] = []
 

@@ -92,7 +92,7 @@ def render(rows) -> str:
         "# 记忆索引（自动生成，勿手改）",
         "",
         f"- 生成时间：{datetime.now():%Y-%m-%d %H:%M:%S}",
-        f"- 生成方式：`./.venv/Scripts/python.exe scripts/_memory_index.py`",
+        "- 生成方式：`./.venv/Scripts/python.exe scripts/_memory_index.py`",
         "- 范围：`memory/*.md`（**不含 `_backup/`** —— 那里是历史快照，与正本重复）",
         "",
         "> 本文件只回答「**有哪些主题、在哪个文件**」。语义检索请直接 `grep` ——",

@@ -110,10 +110,8 @@ INDEX_CONFIGS = {
 }
 DEFAULT_INDEX = "NDX"
 
-# 向后兼容：保留这两个模块级常量（其它引用处仍读取它们），
+# 向后兼容：ETF_PROXY / INDEX_TICKER / INFO_FIELDS 由下方 index_valuation 导入提供，此处不再重复定义。
 # 其值由当前选中的指数决定（见 _select_index）。
-INDEX_TICKER = INDEX_CONFIGS[DEFAULT_INDEX]["index_ticker"]
-ETF_PROXY = INDEX_CONFIGS[DEFAULT_INDEX]["etf_proxy"]
 
 # 当前选中的配置（运行时由 _select_index 更新）
 _CURRENT = dict(INDEX_CONFIGS[DEFAULT_INDEX])
@@ -147,26 +145,6 @@ _CURRENT = dict(INDEX_CONFIGS[DEFAULT_INDEX])
 _INDICATOR_LOOKBACK = 10
 
 # 从个股 .info 抽取的字段（用于指数级聚合）
-INFO_FIELDS = (
-    "marketCap",
-    "trailingPE",
-    "forwardPE",
-    "priceToBook",
-    "priceToSalesTrailing12Months",
-    "sector",
-    "industry",
-    "returnOnEquity",
-    "profitMargins",
-    "grossMargins",
-    "operatingMargins",
-    "revenueGrowth",
-    "earningsGrowth",
-    "dividendYield",
-    "trailingEps",
-    "forwardEps",
-    "beta",
-    "currentPrice",
-)
 
 # Alphabet 双股份类别会重复计入市值，聚合成份股时必须去重（保留 GOOGL，其权重更高）。
 # 保留为 NDX 默认去重集；实际使用时由 _select_index 选中的配置决定（见下方 _CURRENT）。
@@ -178,42 +156,42 @@ _UNIVERSE_WORKERS = 8
 # 领域子模块 re-export（解耦后保持 100% 向下兼容）
 # ----------------------------------------------------------------------------
 from wb_analysis._thresholds import option_source_decision
-from wb_analysis.index_math import (
-    _norm_cdf,
-    _bs_price,
-    _bs_delta,
-    _implied_vol,
-)
-from wb_analysis.index_options import (
-    VOL_PROXIES,
-    BOND_PROXIES,
-    probe_option_freshness,
-    _source_label,
-    _iv_method_label,
-    _resolve_source_note,
-    fetch_volatility_proxies,
-)
-from wb_analysis.index_options import fetch_option_structure as _fetch_option_structure_impl
-from wb_analysis.index_options import _should_use_cboe_source as _should_use_cboe_source_impl
 from wb_analysis.index_breadth import (
     _download_close_chunked,
     compute_breadth,
 )
+from wb_analysis.index_math import (
+    _bs_delta,
+    _bs_price,
+    _implied_vol,
+    _norm_cdf,
+)
+from wb_analysis.index_options import (
+    BOND_PROXIES,
+    VOL_PROXIES,
+    _iv_method_label,
+    _resolve_source_note,
+    _should_use_cboe_source as _should_use_cboe_source_impl,
+    _source_label,
+    fetch_option_structure as _fetch_option_structure_impl,
+    fetch_volatility_proxies,
+    probe_option_freshness,
+)
 from wb_analysis.index_valuation import (
-    INDEX_CONFIGS,
-    DEFAULT_INDEX,
-    INFO_FIELDS,
     _CURRENT,
-    INDEX_TICKER,
+    DEFAULT_INDEX,
     ETF_PROXY,
-    _select_index,
+    INDEX_CONFIGS,
+    INDEX_TICKER,
+    INFO_FIELDS,
     _clean_universe,
     _fetch_info,
-    fetch_universe_infos,
-    fetch_top_holdings,
-    fetch_insiders,
     _insider_net,
+    _select_index,
     aggregate_valuation,
+    fetch_insiders,
+    fetch_top_holdings,
+    fetch_universe_infos,
 )
 
 
@@ -584,7 +562,7 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
         elif grade in ("PARTIAL_2SIDE", "PARTIAL"):
             notes.append(
                 "- ⚠️ **降级读数：报价覆盖不足，无法构造 25Δ 偏斜。**\n"
-                f"  有效报价落在远离现价的行权价上"
+                "  有效报价落在远离现价的行权价上"
                 "（深度实值区），无法找到 |Δ| 接近 0.25 的双边样本。\n"
                 "  **这不是闸门设错**，是上游报价的真实分布。")
         else:

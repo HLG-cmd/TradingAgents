@@ -104,7 +104,8 @@ def test_retry_with_custom_retryable_callable(no_sleep):
             raise KeyError("transient_missing_key")
         return "key_ok"
 
-    pred = lambda exc: isinstance(exc, KeyError) and "transient" in str(exc)
+    def pred(exc):
+        return isinstance(exc, KeyError) and "transient" in str(exc)
     assert _net.retry(custom_flaky, retries=2, retryable=pred) == "key_ok"
     assert len(calls) == 2
 

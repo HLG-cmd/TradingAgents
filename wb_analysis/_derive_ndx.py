@@ -137,7 +137,7 @@ for line in md.splitlines():
     if mm:
         rows.append((mm.group(1), *[float(x) for x in mm.groups()[1:]]))
 prev = rows[-4][4] if len(rows) >= 4 else None
-for date, o, h, lo, cl, vol in rows[-3:]:
+for date, _o, h, lo, cl, vol in rows[-3:]:
     rng = h - lo
     chg = f"{(cl / prev - 1) * 100:+.2f}%" if prev else "  n/a"
     print(f"  {date} 收 {cl:>9.2f} 日涨跌 {chg:>7} 振幅 {rng:>7.2f} "

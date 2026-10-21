@@ -274,7 +274,7 @@ def report(ticker: str, date: str) -> None:
 
     print("\nB. 最近 3 根 K 线")
     prev = rows[-4][4] if len(rows) >= 4 else None
-    for d, o, h, lo, c, v in rows[-3:]:
+    for d, _o, h, lo, c, v in rows[-3:]:
         rng = h - lo
         chg = f"{(c / prev - 1) * 100:+.2f}%" if prev else " n/a"
         print(f"  {d} 收 {c:>8.2f} 日涨跌 {chg:>7} 振幅 {rng:>6.2f} "

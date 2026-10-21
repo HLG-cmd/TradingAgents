@@ -26,8 +26,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Iterable, Iterator
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. 报告树目录名

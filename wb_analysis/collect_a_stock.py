@@ -34,6 +34,8 @@ import re
 import sys
 import time
 
+from wb_analysis._log import gap_entries, log_gap
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -45,10 +47,13 @@ EVID_DIR.mkdir(parents=True, exist_ok=True)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from wb_analysis._westock import (  # noqa: E402
-    WESTOCK, filter_news_asof, parse_md_table, run_westock,
-)
 from tradingagents.dataflows.interface import route_to_vendor  # noqa: E402
+from wb_analysis._westock import (  # noqa: E402
+    WESTOCK,
+    filter_news_asof,
+    parse_md_table,
+    run_westock,
+)
 
 TECH_INDICATORS = (
     "close_50_sma",
@@ -79,11 +84,11 @@ def ystr(v: object, scale: float = 1e8, unit: str = "亿元", sign: bool = False
     """把数值安全格式化为「X.XX 亿元」；**缺失时显式输出「（未取到）」而非 None**
     （2026-10-20 新增：去掉紫金硬编码默认值后，缺失须可读且可识别）。"""
     if v is None:
-        return f"（未取到）"
+        return "（未取到）"
     try:
         return f"{float(v) / scale:{'+' if sign else ''}.2f} {unit}"
     except (TypeError, ValueError):
-        return f"（未取到）"
+        return "（未取到）"
 
 
 def ok_of(raw: str) -> bool:
@@ -166,14 +171,16 @@ def collect_a_stock(ticker: str, date: str) -> int:
             "get_stock_data", symbol=ticker, start_date="2025-10-16", end_date="2026-10-17"
         )
         print(f"  ✓ vendor:get_stock_data    {len(str(raw_vendor['get_stock_data']))} 字符")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
+        log_gap("vendor.get_stock_data", e)
         raw_vendor["get_stock_data"] = f"Error: {e}"
         print(f"  ✗ vendor:get_stock_data    {e}")
 
     try:
         raw_vendor["get_fundamentals"] = route_to_vendor("get_fundamentals", ticker=ticker)
         print(f"  ✓ vendor:get_fundamentals  {len(str(raw_vendor['get_fundamentals']))} 字符")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
+        log_gap("vendor.get_fundamentals", e)
         raw_vendor["get_fundamentals"] = f"Error: {e}"
         print(f"  ✗ vendor:get_fundamentals  {e}")
 
@@ -182,7 +189,8 @@ def collect_a_stock(ticker: str, date: str) -> int:
         try:
             raw_vendor[key] = route_to_vendor(key, ticker=ticker, freq="annual")
             print(f"  ✓ vendor:{key:18} {len(str(raw_vendor[key]))} 字符")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            log_gap("collect_a_stock.collect_a_stock", e)
             raw_vendor[key] = f"Error: {e}"
             print(f"  ✗ vendor:{key:18} {e}")
 
@@ -194,7 +202,8 @@ def collect_a_stock(ticker: str, date: str) -> int:
             )
             tech_series[ind] = compact_series(out, keep=5)
             print(f"  ✓ vendor:ind:{ind:14} {len(tech_series[ind])} 字符")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            log_gap("vendor.get_indicators", e)
             tech_series[ind] = f"(指标提取失败: {e})"
             print(f"  ✗ vendor:ind:{ind:14} {e}")
 
@@ -205,7 +214,8 @@ def collect_a_stock(ticker: str, date: str) -> int:
             c_df = route_to_vendor("get_stock_data", symbol=c_sym, start_date="2026-10-01", end_date="2026-10-17")
             commodity_data[c_sym] = c_df
             print(f"  ✓ commodity:{c_sym} ({c_name})")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            log_gap("vendor.get_stock_data", e)
             commodity_data[c_sym] = f"(商品行情提取失败: {e})"
             print(f"  ✗ commodity:{c_sym} ({c_name}): {e}")
 
@@ -313,7 +323,7 @@ def collect_a_stock(ticker: str, date: str) -> int:
     L.append(f"- 采集日期: {date}")
     L.append(f"- 标的代码: {ticker} (westock: {wcode})")
     L.append(f"- 标的名称: {stock_name}")
-    L.append(f"- 数据来源: westock CLI (腾讯官方接口) + TradingAgents 内置层 (yfinance/stockstats)")
+    L.append("- 数据来源: westock CLI (腾讯官方接口) + TradingAgents 内置层 (yfinance/stockstats)")
     L.append(f"- 通道健康度: 成功: {n_ok} / {n_total}")
     L.append(f"- **非全绿通道**: {bad_str}")
     L.append(f"- 市场状态: A股市场 {date} 15:00 CST **已正常收盘**（所有价格与技术指标均基于当日收盘价）")
@@ -337,8 +347,8 @@ def collect_a_stock(ticker: str, date: str) -> int:
         L.append(f"  ⚠️ **次新股口径提示**：本标的上市以来仅 **{len(kb)} 根日K线**（<250），"
                  f"故 high_52w/low_52w 实为「**上市以来**极值」（{low_52w} / {high_52w}），"
                  f"**并非完整 52 周**；下游引用时必须按此口径表述，不得写作「52周区间」。")
-        L.append(f"  ⚠️ **上市初期无涨跌幅限制**（科创板新股上市后前 5 个交易日不设涨跌幅限制，之后为 ±20%）"
-                 f"⇒ 早期价格波动幅度不具可比性。")
+        L.append("  ⚠️ **上市初期无涨跌幅限制**（科创板新股上市后前 5 个交易日不设涨跌幅限制，之后为 ±20%）"
+                 "⇒ 早期价格波动幅度不具可比性。")
     L.append("")
     L.append("---")
     L.append("")
@@ -546,7 +556,7 @@ def collect_a_stock(ticker: str, date: str) -> int:
     L.append("## 8. 中国宏观与利率流动性环境")
     L.append(f"- **中国 10Y-1Y 国债期限利差**: {raw_westock.get('macro_term_spread', '').strip() or '约 78 bps（收益率曲线正常陡峭化）'}")
     L.append(f"- **中国股债风险溢价率 (ERP)**: {raw_westock.get('macro_premium', '').strip() or '约 4.85%（处于历史后 20% 分位，权益资产风险溢价高）'}")
-    L.append(f"- **无风险基准利率**: 10年期国债收益率约 2.12%，央行处于稳健宽松周期。")
+    L.append("- **无风险基准利率**: 10年期国债收益率约 2.12%，央行处于稳健宽松周期。")
     L.append("")
     L.append("---")
     L.append("")
@@ -657,6 +667,12 @@ def collect_a_stock(ticker: str, date: str) -> int:
             },
         ],
     }
+    # ★ 2026-10-22：把本次运行期降级（log_gap 记录）并入台账。
+    #   采集器与 _gap_ledger.py 是不同进程，进程内 _gaps 传不过去 —— 不落盘，
+    #   下游 _gen_meta 的 notes 与 _scorecard 就永远读不到，「记了没人看」等于没记。
+    gaps_record["gaps"].extend(gap_entries())
+    gaps_record["total_gaps"] = len(gaps_record["gaps"])
+
     gaps_path = EVID_DIR / f"{ticker}_{date}.gaps.json"
     gaps_path.write_text(json.dumps(gaps_record, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"  ✓ 缺口台账已写入: {gaps_path}")

@@ -29,7 +29,7 @@
 
 ## 输出
 
-`wb_analysis/evidence/TREASURY_<date>.md`（+ 同名 .json 结构化副本）
+`wb_analysis/fixtures/macro/TREASURY_<date>.md`（+ 同名 .json 结构化副本）
 """
 from __future__ import annotations
 
@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     L.append(f"# 证据包：美债收益率曲线（FRED）· 基准日 {date}")
     L.append("")
     L.append(f"- 采集时刻：{_clock.now(_clock.CN_TZ).strftime('%Y-%m-%d %H:%M')}（北京时间）")
-    L.append(f"- 数据源：**FRED**（St. Louis Fed），`tradingagents.dataflows.fred` 封装，逐 series 原始取数")
+    L.append("- 数据源：**FRED**（St. Louis Fed），`tradingagents.dataflows.fred` 封装，逐 series 原始取数")
     L.append(f"- 回溯窗口：{lookback} 自然日")
     L.append(f"- 通道健康度：**{len(ok)}/{len(rows)}**")
     L.append("")

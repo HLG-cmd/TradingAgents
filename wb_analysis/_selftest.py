@@ -42,6 +42,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
 HERE = Path(__file__).resolve().parent
 PY = sys.executable
 
@@ -597,7 +598,7 @@ def main() -> int:
             for hit in paths_literal_definitions(p.read_text(encoding="utf-8")):
                 p_bad.append(f"{p.name}:{hit}")
         check(f"布局常量：全活跃面（{len(live)} 个 .py）无本地字面量重写", not p_bad,
-              "；".join(p_bad[:4]) if p_bad else f"0 处（已豁免定义处 + 检测器自身）")
+              "；".join(p_bad[:4]) if p_bad else "0 处（已豁免定义处 + 检测器自身）")
 
         p_consumers = [
             HERE / "_reports_index.py", HERE / "_scorecard.py", HERE / "_seal_run.py",

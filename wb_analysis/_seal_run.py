@@ -46,11 +46,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from wb_analysis import _clock
 from wb_analysis._contract import is_non_tree_artifact  # noqa: E402
+
 # ★ 2026-10-10：功能目录集原为本地字面量（与 `_reports_index` / `_scorecard` 逐字重复）
 #   ⇒ 单一来源 `wb_analysis/_paths.py`。
 from wb_analysis._paths import FUNC_DIRS, TREE_RE  # noqa: E402
-from wb_analysis import _clock
 
 REPORTS = ROOT / "reports"
 EVID = ROOT / "wb_analysis" / "evidence"

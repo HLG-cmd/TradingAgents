@@ -23,7 +23,7 @@ import os
 import sys
 from pathlib import Path
 
-__all__ = ["get_logger", "log_gap", "gap_records", "reset_gaps", "attach_file_log"]
+__all__ = ["get_logger", "log_gap", "gap_records", "gap_entries", "reset_gaps", "attach_file_log"]
 
 _LOGGER_NAME = "wb_analysis"
 _FMT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
@@ -75,3 +75,27 @@ def gap_records() -> list[dict[str, str]]:
 def reset_gaps() -> None:
     """清空本次进程内的降级记录（测试用）。"""
     _gaps.clear()
+
+
+def gap_entries() -> list[dict[str, object]]:
+    """把本次进程的降级记录转成**缺口台账**的条目格式，供 `.gaps.json` 合并。
+
+    与 `_gap_ledger.py` 的条目 schema 对齐：``cls="R"`` 表示运行期降级、
+    ``decisive=False``（log_gap 只登记「没取到但不阻断」的块，是否决定性由人判定，
+    不在这里替下游下结论）。
+    """
+    return [
+        {
+            "channel": r["section"],
+            "label": r["section"],
+            "status": "runtime",
+            "cls": "R",
+            "decisive": False,
+            "blocks": "运行期降级：该数据块本次未取到，采集未中断",
+            "remedy": "重跑该通道；持续失败则检查数据源可用性与凭证",
+            "fallback": "该块以占位/缺失呈现，依赖它的结论须写成条件式",
+            "kw": [r["section"]],
+            "note": r["detail"],
+        }
+        for r in gap_records()
+    ]

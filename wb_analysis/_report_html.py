@@ -14,6 +14,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
 from wb_analysis import _clock
 
 if hasattr(sys.stdout, "reconfigure"):

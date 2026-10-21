@@ -189,7 +189,7 @@ def taxonomy_inventory(data: dict) -> dict[str, int]:
         CIK 0002120882 只有 `ffd` 税种，5 个概念，全是**申报费披露**）
         ⇒ 外国私人发行人无 US-GAAP XBRL，**全部财务科目都无法独立核验**。
     """
-    return {k: len(v or {}) for k, v in ((data.get("facts") or {})).items()}
+    return {k: len(v or {}) for k, v in (data.get("facts") or {}).items()}
 
 
 def missing_tag_verdict(fetch_err: str | None, tax: dict, has_fin: bool) -> str:

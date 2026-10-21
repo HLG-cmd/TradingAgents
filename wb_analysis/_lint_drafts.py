@@ -40,10 +40,11 @@ from wb_analysis._contract import (  # noqa: E402
     DOC_FILES as _DOC_ALL,
     FINAL_ALLOWED_FILES,
     FINAL_PROPOSAL,
-    RATING_ALLOWED_FILES,
     FIVE_RE as RATING_RE,
     PROPOSAL_STRICT_RE,
+    RATING_ALLOWED_FILES,
 )
+
 # ★ 2026-10-10：归档跳过表由 `wb_analysis/_paths.py` 提供单一来源
 #   （此前本文件与 `_check_residuals` / `_audit_values` / `_check_role_files` 各写一份）。
 from wb_analysis._paths import SKIP_ARCHIVE_DIRS  # noqa: E402
@@ -66,7 +67,7 @@ DOC_FILES = {f for f in _DOC_ALL if f.startswith("_")}
 # 这些是通用/结构性数字，不参与溯源
 STOP = {
     "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12",
-    "0.0", "1.0", "2.0", "3.0", "100", "50", "200", "20", "60", "120", "5", "10",
+    "0.0", "1.0", "2.0", "3.0", "100", "50", "200", "20", "60", "120",
 }
 YEAR_RE = re.compile(r"^(19|20)\d{2}$")
 
@@ -84,7 +85,7 @@ def expand(nums: set[str]) -> set[str]:
         except ValueError:
             continue
         out.add(s)
-        for scale, suf in ((1e3, ""), (1e6, ""), (1e9, ""), (1e12, "")):
+        for scale, _suf in ((1e3, ""), (1e6, ""), (1e9, ""), (1e12, "")):
             if abs(v) >= scale:
                 out.add(f"{v / scale:.4f}".rstrip("0").rstrip("."))
                 out.add(f"{v / scale:.3f}".rstrip("0").rstrip("."))

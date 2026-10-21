@@ -227,8 +227,8 @@ def main() -> int:
 
     cur = rows[-1]
     vals = [r["erp_pp"] for r in rows]
-    print(f"=== 标普500 股权风险溢价（ERP）历史上下文 ===")
-    print(f"口径: ERP = 盈利收益率(1/PE, TTM) − 10年期美债收益率(DGS10 月度均值)")
+    print("=== 标普500 股权风险溢价（ERP）历史上下文 ===")
+    print("口径: ERP = 盈利收益率(1/PE, TTM) − 10年期美债收益率(DGS10 月度均值)")
     print(f"样本: {len(rows)} 个月度观测，{rows[0]['date']} ~ {cur['date']}")
     print()
     print(f"--- 最新读数（{cur['date']}）---")
@@ -249,7 +249,7 @@ def main() -> int:
         print(f"  第 {p:>2} 百分位     : {round(sv[idx], 2)} pp")
     print()
     neg = sum(1 for v in vals if v < 0)
-    print(f"--- 负 ERP（股票盈利收益率低于无风险利率）出现的月份 ---")
+    print("--- 负 ERP（股票盈利收益率低于无风险利率）出现的月份 ---")
     print(f"  次数: {neg} / {len(vals)}（{round(neg / len(vals) * 100, 1)}%）")
     if neg:
         neg_dates = [r["date"] for r in rows if r["erp_pp"] < 0]

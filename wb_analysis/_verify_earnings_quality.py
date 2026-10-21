@@ -49,6 +49,8 @@ import json
 import sys
 from pathlib import Path
 
+from wb_analysis._log import log_gap
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -94,7 +96,8 @@ def _series(df, *names):
             if str(idx).strip().lower() == n.lower():
                 try:
                     return df.loc[idx].astype(float)
-                except Exception:
+                except Exception as _gap_exc:  # noqa: BLE001
+                    log_gap("_verify_earnings_quality._series", _gap_exc)
                     return None
     return None
 
@@ -137,7 +140,8 @@ def _quarterly_unreliable(q, inc) -> bool:
         if max(vals) > 0.5 * a0:
             return True
         return sum(vals) > 1.8 * a0
-    except Exception:
+    except Exception as _gap_exc:  # noqa: BLE001
+        log_gap("_verify_earnings_quality._quarterly_unreliable", _gap_exc)
         return False
 
 
@@ -185,7 +189,8 @@ def analyze_one(ticker: str, pe_tolerance: float = PE_TOLERANCE) -> dict:
                         gain_ni_share = gain_ttm / ni_ttm_q
                         gain_src = f"TTM({len(n4)}Q)"
                         rec_ni_ttm = ni_ttm_q   # 供 pe_ex_gain 用，与 gain 同口径
-        except Exception:
+        except Exception as _gap_exc:  # noqa: BLE001
+            log_gap("_verify_earnings_quality.analyze_one", _gap_exc)
             pass
         if gain_ttm is None:
             # 降级到年报（不聚合季度时至少能拦住常年性的浮盈）
@@ -240,7 +245,8 @@ def analyze_one(ticker: str, pe_tolerance: float = PE_TOLERANCE) -> dict:
                             and ((rec_ni_ttm or ni) is not None)
                             and ((rec_ni_ttm or ni) - gain_ttm) > 0) else None),
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
+        log_gap("_verify_earnings_quality.analyze_one", e)
         rec["ok"] = False
         rec["note"] = f"抓取失败: {type(e).__name__}"
         return rec

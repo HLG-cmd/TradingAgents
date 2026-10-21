@@ -43,8 +43,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 # ★ 2026-10-10：`TREE_RE` / 功能目录集原为本地字面量，与 `_reports_index.py` 逐字重复
 #   ⇒ 单一来源 `wb_analysis/_paths.py`。
-from wb_analysis._paths import FUNC_DIRS, TREE_RE, iter_report_trees  # noqa: E402
 from wb_analysis import _clock
+from wb_analysis._paths import FUNC_DIRS, TREE_RE, iter_report_trees  # noqa: E402
 
 REPORTS = ROOT / "reports"
 CSV = REPORTS / "QUALITY.csv"

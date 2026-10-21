@@ -24,8 +24,8 @@ import argparse
 import hashlib
 import sys
 import zipfile
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -118,7 +118,7 @@ def main() -> int:
         uniq.append((p, why))
     drop = uniq
 
-    keep = sorted({p for p in BK.glob("*.zip")} - {p for p, _ in drop})
+    keep = sorted(set(BK.glob("*.zip")) - {p for p, _ in drop})
     print("=" * 84)
     print(f".workbuddy-ai/backup 清理（{'APPLY' if args.apply else 'DRY-RUN'}）")
     print("=" * 84)

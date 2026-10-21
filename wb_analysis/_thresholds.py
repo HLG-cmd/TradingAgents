@@ -28,6 +28,12 @@
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # 只为字符串注解提供名字，运行时不导入
+    import datetime
+
 from wb_analysis import _clock
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -63,7 +69,7 @@ REGULAR_SESSION_OPEN_HOUR: float = 9.5      # 09:30 美东
 REGULAR_SESSION_CLOSE_HOUR: float = 16.0    # 16:00 美东
 
 
-def market_session_phase(now: "datetime.datetime | None" = None) -> str:
+def market_session_phase(now: datetime.datetime | None = None) -> str:
     """返回美股当前所处时段：`in_session` / `pre_market` / `after_hours` / `closed_day`。
 
     `now` 为 `None` 时取当前美东时间；**传入 aware datetime 可注入任意时点做测试**
@@ -90,7 +96,7 @@ def market_session_phase(now: "datetime.datetime | None" = None) -> str:
     return "after_hours"
 
 
-def option_source_decision(now: "datetime.datetime | None" = None) -> tuple[bool, str]:
+def option_source_decision(now: datetime.datetime | None = None) -> tuple[bool, str]:
     """判定期权该走哪个源：返回 `(是否切 CBOE 官方延迟报价, 人读说明)`。
 
     **盘中走 yfinance 主源**（实时、已验证新鲜，零回归）；

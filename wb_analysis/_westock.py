@@ -34,6 +34,7 @@ import re
 import shutil
 import subprocess
 
+
 #: westock 可执行文件路径（按「环境变量 → PATH → 本机约定路径」顺序解析一次）。
 def resolve_westock() -> pathlib.Path:
     """按「环境变量 → PATH → 本机约定路径」顺序定位 westock（不含副作用）。"""

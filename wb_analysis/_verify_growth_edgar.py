@@ -174,7 +174,8 @@ def main() -> int:
         print(f"\n=== A 类：成长被 EDGAR 证实（3y CAGR >= {STRONG*100:.0f}%）: {len(ok)} 只 ===")
         print(f"{'代码':<7}{'yf单季%':>9}{'edgar年度%':>11}{'3yCAGR%':>9}{'5yCAGR%':>9}{'净利率%':>9}")
         for _, r in ok.sort_values("edgar_3yCAGR%", ascending=False).iterrows():
-            c = lambda k, w=9: f"{'n/a':>{w}}" if pd.isna(r[k]) else f"{r[k]:>{w}.1f}"
+            def c(k, w=9):
+                return f"{'n/a':>{w}}" if pd.isna(r[k]) else f"{r[k]:>{w}.1f}"
             print(f"{r['Ticker']:<7}{c('yf_单季同比%')}{c('edgar_年度同比%',11)}"
                   f"{c('edgar_3yCAGR%')}{c('edgar_5yCAGR%')}{c('净利率%')}")
 

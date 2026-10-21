@@ -46,7 +46,7 @@ def main() -> int:
             print(f"  {exp}: 拉取失败 {exc!r}")
             continue
         rows = []
-        for side, df in (("C", ch.calls), ("P", ch.puts)):
+        for _side, df in (("C", ch.calls), ("P", ch.puts)):
             if "lastTradeDate" not in df.columns:
                 continue
             for _, r in df.iterrows():

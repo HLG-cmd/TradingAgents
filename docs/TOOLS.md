@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-22 00:44
+- 生成时间：2026-10-22 03:00
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -84,11 +84,15 @@
 
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|
-| `scripts/_apply_governance.py` | 治理落地总执行器（默认干跑）。 | — |
-| `scripts/_codemod_clock.py` | 一次性 codemod：把 wb_analysis 里的裸本地时间改为走 wb_analysis/_clock.py。 | — |
+| `scripts/_apply_round2.py` | 第二轮治理落地（默认干跑）。 | — |
+| `scripts/_apply_round4.py` | 第四轮：A1 log_gap 真实接线 + A4 collect_index 死定义清理 + A2 docstring 漂移。 | — |
+| `scripts/_apply_round5.py` | 第五轮：收尾全部遗留项。 | — |
 | `scripts/_diff_evidence_pack.py` | 证据包等价性比对——用于 collect_index.py 拆分子模块前后的行为回归。 | — |
+| `scripts/_fix_round3.py` | 第三轮收口：修 _thresholds.py 的注解未定义名、修 round2 的 CI 双补丁覆盖 bug、摊开 collect_in | — |
 | `scripts/_health.py` | 项目健康检查：**一条命令看整个项目状态**（把散落的各处门禁汇总成一个入口）。 | ./.venv/Scripts/python.exe scripts/_health.py [--quiet] |
 | `scripts/_memory_index.py` | 为本地运行痕迹目录（`.workbuddy-ai/memory/`）生成**主题索引**（`_INDEX.md`）。 | ./.venv/Scripts/python.exe scripts/_memory_index.py [--check] |
+| `scripts/_oneoff/_apply_governance.py` | 治理落地总执行器（默认干跑）。 | — |
+| `scripts/_oneoff/_codemod_clock.py` | 一次性 codemod：把 wb_analysis 里的裸本地时间改为走 wb_analysis/_clock.py。 | — |
 | `scripts/_probe_baseline.py` | （无文档字符串） | — |
 | `scripts/_prune_backup.py` | 清理本地回滚包目录（`.workbuddy-ai/backup/`）：**按前缀各留最新 N 个**。 | ./.venv/Scripts/python.exe scripts/_prune_backup.py [--apply] |
 | `scripts/_scan_project.py` | 只读扫描整个项目的「产物堆积」情况（不修改任何文件）。 | ./.venv/Scripts/python.exe scripts/_scan_project.py |
@@ -146,10 +150,12 @@
 | `scripts/_oneoff/_fix_checker_blindspots.py` | 修 `scripts/_health.py` 中两处**同族**判据缺陷（本日第 5、6 例）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_checker_blindspots.py |
 | `scripts/_oneoff/_fix_chk_quant_token.py` | 修 `chk_quant` 的**假绿**（本日第 8 例，已精确复现）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_chk_quant_token.py |
 | `scripts/_oneoff/_fix_chk_reports_crash.py` | 修 `chk_reports` 的**崩溃假绿**（本日第 7 例同族缺陷，已实测复现）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_chk_reports_crash.py |
+| `scripts/_oneoff/_fix_ci_lint.py` | 收口：补齐 ci.yml 的 lint 放宽，并修掉 _apply_round2.py 的 CI 双补丁覆盖 bug。 | TradingAgents 治理一次性脚本 2026-10-22 |
 | `scripts/_oneoff/_fix_doc_paths.py` | 把文档里的旧路径改成迁移后的真实路径，每处替换都断言命中数。 | 修复 docs/WORKFLOW.md 与 docs/SCREENER.md 的过时命令路径（quant/ 迁移后遗留） |
 | `scripts/_oneoff/_fix_expr_re_rhs_sign.py` | 修 `EXPR_RE`（原 SUM_RE）未覆盖的形态：**右侧带显式正负号的算式**。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_expr_re_rhs_sign.py |
 | `scripts/_oneoff/_fix_memory_index_check.py` | 修 `scripts/_memory_index.py` 的两处缺陷（本脚本用「读取替换块 → 精确替换」方式）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_memory_index_check.py |
 | `scripts/_oneoff/_fix_nflx_lint.py` | 修正 NFLX 草稿中被 lint 判为契约违规的「裸五档英文词」（共 3 个文件 9 处）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_nflx_lint.py |
+| `scripts/_oneoff/_fix_r4.py` | 修正 _apply_round4.py 的四处缺陷（干跑发现的）。 | TradingAgents 治理一次性脚本 2026-10-22 |
 | `scripts/_oneoff/_fix_rating_words.py` | （无文档字符串） | 2026-09 期若干轮草稿 |
 | `scripts/_oneoff/_fix_reports_layout.py` | 核对并按需修正 `reports/` 的目标布局（幂等；可反复运行）。 | 2026-09-23 一次性布局迁移（8 个标的） |
 | `scripts/_oneoff/_fix_role_files_empty_pass.py` | 修 `_check_role_files.py`：**空草稿目录被判「通过」**（本日第 9 例，已实测复现）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_role_files_empty_pass.py |
@@ -192,6 +198,7 @@
 | `scripts/_oneoff/_quantify_sum_re_gap.py` | 量化「右侧带正负号算式」抓不到的影响面（先测规模再决定是否改正则）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_quantify_sum_re_gap.py |
 | `scripts/_oneoff/_remove_empty_shell_dirs.py` | （无文档字符串） | — |
 | `scripts/_oneoff/_reorg_reports.py` | 把 `reports/` 重排成「按标的分子目录」结构，并把非报告类产物分流到专门子目录。 | 2026-09-23 一次性 reports/ 布局重排 |
+| `scripts/_oneoff/_repair_r4.py` | 修复 _apply_round4.py 误伤的 3 个文件：从 git 恢复，并预置 log_gap 导入。 | TradingAgents 治理一次性脚本 2026-10-22 |
 | `scripts/_oneoff/_scan_untracked_risk.py` | 扫描**未跟踪文件**的安全风险 —— 它们从未被检查过，一旦 `git add` 就会入库。 | ./.venv/Scripts/python.exe scripts/_oneoff/_scan_untracked_risk.py |
 | `scripts/_oneoff/_selftest_dup_content_identity.py` | O2 双侧验证：内容身份重复检测。 | （门禁双侧自检，无标的） |
 | `scripts/_oneoff/_selftest_edgar_gap.py` | O4 + O5 双侧验证。 | （门禁双侧自检，无标的） |
