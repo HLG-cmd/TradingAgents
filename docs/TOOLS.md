@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-21 23:25
+- 生成时间：2026-10-22 00:44
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -84,7 +84,7 @@
 
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|
-| `scripts/_apply_governance.py` | 治理落地脚本：补齐 lifecycle 头 + 收敛 pyproject.toml（默认干跑）。 | — |
+| `scripts/_apply_governance.py` | 治理落地总执行器（默认干跑）。 | — |
 | `scripts/_codemod_clock.py` | 一次性 codemod：把 wb_analysis 里的裸本地时间改为走 wb_analysis/_clock.py。 | — |
 | `scripts/_diff_evidence_pack.py` | 证据包等价性比对——用于 collect_index.py 拆分子模块前后的行为回归。 | — |
 | `scripts/_health.py` | 项目健康检查：**一条命令看整个项目状态**（把散落的各处门禁汇总成一个入口）。 | ./.venv/Scripts/python.exe scripts/_health.py [--quiet] |
@@ -93,6 +93,7 @@
 | `scripts/_prune_backup.py` | 清理本地回滚包目录（`.workbuddy-ai/backup/`）：**按前缀各留最新 N 个**。 | ./.venv/Scripts/python.exe scripts/_prune_backup.py [--apply] |
 | `scripts/_scan_project.py` | 只读扫描整个项目的「产物堆积」情况（不修改任何文件）。 | ./.venv/Scripts/python.exe scripts/_scan_project.py |
 | `scripts/_scan_reports.py` | 只读扫描 `reports/` 与 `wb_analysis/` 的产物堆积情况，输出分类清单（不修改任何文件）。 | ./.venv/Scripts/python.exe scripts/_scan_reports.py |
+| `scripts/_verify_all.py` | 治理落地验收（只读，不修改任何文件）。 | — |
 | `scripts/smoke_structured_output.py` | End-to-end smoke for structured-output agents against a real LLM pro | ./.venv/Scripts/python.exe scripts/smoke_structured_output.py |
 | `wb_analysis/_audit_gaps.py` | 数据缺口审计：把证据包的每个通道逐条分类为「真实缺失 / 阈值误伤 / 采集器 bug」。 | ./.venv/Scripts/python.exe wb_analysis/_audit_gaps.py |
 | `wb_analysis/_audit_values.py` | 简报/草稿「口径一致性」审计器 —— 把已作废的旧值当成黑名单扫全文。 | ./.venv/Scripts/python.exe wb_analysis/_audit_values.py |
