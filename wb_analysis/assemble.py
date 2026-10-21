@@ -49,6 +49,7 @@ from wb_analysis._contract import (  # noqa: E402
     PROPOSAL_STRICT_RE as _TRADER_STOP_LINE,
     THREE_LEVELS as TRADER_ACTIONS,
 )
+from wb_analysis import _clock  # noqa: E402
 
 ANALYSIS_DIR = PROJECT_ROOT / "wb_analysis" / "analysis"
 
@@ -254,6 +255,71 @@ def validate(data: dict) -> list[str]:
     return warns
 
 
+def _field(text: str, label: str) -> str | None:
+    """从角色稿里取 `**Label**: value` 的单行值（只取第一处）。"""
+    m = re.search(rf"\*\*{re.escape(label)}\*\*\s*[:：]\s*([^\n]+)", text or "")
+    return m.group(1).strip() if m else None
+
+
+def _price(text: str, label: str) -> str | None:
+    """取绝对价格：只认行首数字（`28.75` / `1,234.50`），忽略百分比与区间。"""
+    raw = _field(text, label)
+    if not raw:
+        return None
+    m = re.match(r"^([0-9][0-9,]*(?:\.[0-9]+)?)", raw)
+    return m.group(1).replace(",", "") if m else None
+
+
+def build_decision_card(data: dict) -> str:
+    """一屏决策卡：评级链 + 入场/止损/目标/盈亏比/仓位/周期。
+
+    ★ 2026-10-19 新增：完整报告 7 万字符，入场价/止损/目标散落在第 III–V 节，
+      实盘要翻半天。本卡只做**提取**，不新增任何判断 —— 每个数字都来自角色稿原文，
+      取不到就写「—」，绝不推算。
+    """
+    r = data.get("ratings") or {}
+    trader = ((data.get("trading") or {}).get("trader") or "")
+    pm = ((data.get("risk") or {}).get("portfolio_manager") or "")
+    # 入场/止损/目标：**终审优先，交易员兜底**。
+    # ★ 2026-10-20 实测：终审把交易员的单点入场改成两档拆分后，卡片仍显示交易员的 1.4852 与
+    #   由其算出的 4.96:1，而实际方案是加权 1.4931、赔率 3.79:1 ⇒ 首屏把赔率高估了 31%。
+    #   卡片是读者第一眼看到的东西，口径必须跟终审走。
+    entry = _price(pm, "Entry Price") or _price(trader, "Entry Price")
+    stop = _price(pm, "Stop Loss") or _price(trader, "Stop Loss")
+    target = _price(pm, "Price Target")
+    # 仓位：**终审优先**。交易员方案与组合经理裁定可以不一致（PM 有权收紧仓位），
+    # 卡片若取交易员值，就会出现「卡片 3% / 结论 2%」的自相矛盾（实测 512400.SS）。
+    # 取不到 PM 的口径时退回交易员；两者都没有才写「—」。**绝不推算。**
+    pos = _field(pm, "Position Sizing") or _field(trader, "Position Sizing")
+    horizon = _field(pm, "Time Horizon")
+    rr = "—"
+    try:
+        e, s, t = float(entry), float(stop), float(target)
+        if e > s and t > e:
+            rr = f"{(t - e) / (e - s):.2f}:1"
+    except (TypeError, ValueError):
+        pass
+
+    rows = [
+        ("数据基准日", str(data.get("as_of") or "—")),
+        ("研究经理", str(r.get("research_manager") or "—")),
+        ("交易员", str(r.get("trader_action") or "—")),
+        ("组合经理", str(r.get("portfolio_manager") or "—")),
+        ("入场价", entry or "—"),
+        ("止损价", stop or "—"),
+        ("目标价", target or "—"),
+        ("盈亏比", rr),
+        ("仓位", pos or "—"),
+        ("时间跨度", horizon or "—"),
+    ]
+    body = "\n".join(f"| {k} | {v} |" for k, v in rows)
+    return (
+        "## 决策卡（一屏）\n\n"
+        "| 项 | 值 |\n|---|---|\n" + body + "\n\n"
+        "> 本卡为角色稿的**提取**（不新增判断）；论证见下方各节，数字出处见 `_source.zip`。"
+    )
+
+
 def render_report_tree(data: dict, save_path: Path) -> Path:
     """复刻 reporting.py::write_report_tree 的目录结构与章节标题。"""
     ticker = data.get("ticker", "UNKNOWN")
@@ -341,10 +407,11 @@ def render_report_tree(data: dict, save_path: Path) -> Path:
     # 合并报告
     header = (
         f"# Trading Analysis Report: {ticker}\n\n"
-        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"Generated: {_clock.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
     )
     notes = (data.get("notes") or "").strip()
-    body = "\n\n".join(sections)
+    card = build_decision_card(data)
+    body = card + "\n\n" + "\n\n".join(sections)
     if notes:
         body += f"\n\n## 附：数据缺口与说明\n\n{notes}"
     (save_path / "complete_report.md").write_text(header + body, encoding="utf-8")
@@ -359,7 +426,7 @@ def resolve_input(target: str, date: str | None) -> Path:
         return p
     if p.exists() and p.is_file():
         return p
-    day = date or datetime.now().strftime("%Y-%m-%d")
+    day = date or _clock.now().strftime("%Y-%m-%d")
     guess = ANALYSIS_DIR / f"{target.upper()}_{day}.json"
     return guess
 
@@ -470,7 +537,7 @@ def main() -> int:
     else:
         print("[契约校验] 通过：格式与上游解析器兼容，且评级可被正确提取。")
 
-    stamp = args.stamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = args.stamp or _clock.now().strftime("%Y%m%d_%H%M%S")
     # ★ 2026-09-23 起：默认按**标的分子目录**落盘 —— `reports/<TICKER>/<TICKER>_<stamp>/`
     #   旧行为是把所有报告树平铺在 `reports/` 顶层，跑几十次后就分不清哪个是哪个。
     #   需要旧布局时加 `--flat`。
@@ -505,7 +572,7 @@ def main() -> int:
             "ticker": ticker,
             "stamp": stamp,
             "data_date": data.get("as_of", ""),
-            "rendered_at": datetime.now().isoformat(timespec="seconds"),
+            "rendered_at": _clock.now().isoformat(timespec="seconds"),
             "source_drafts": str(Path(_src).resolve()) if _src else "",
             "evidence": ev_files,
             "ratings": data.get("ratings", {}),

@@ -84,6 +84,62 @@ def crashed(out: str) -> bool:
     return "Traceback (most recent call last)" in out
 
 
+#: 口径自动对账字段（2026-10-19 新增）。
+#: 只收「单位一致、可比」的字段：PE / PB / 52 周高低。
+#: ⚠ 市值不纳入：证据包里同时存在「亿元」与「元」两种单位，自动比对会 100 倍误报。
+_CALIBER_FIELDS: dict[str, tuple[str, ...]] = {
+    "PE(TTM)": (r"PE Ratio \(TTM\)\s*[:：]?\s*([\d.]+)",
+                r"\bpe_ratio[^\d\n]{0,6}([\d.]+)",
+                r"PE\(TTM\)[^\d\n]{0,6}([\d.]+)"),
+    "PB": (r"Price to Book\s*[:：]?\s*([\d.]+)",
+           r"\bpb_ratio[^\d\n]{0,6}([\d.]+)",
+           # ★ 2026-10-21 修（NFLX 10-20 轮实测假阳性）：`ROE×(市值/PB) = 14.9B` 里的
+           #   14.9 是「净利 14.9 亿」，却被本条读成 PB 倍数，触发
+           #   「同字段多值 9.48626/14.9」的假 WARN。判据补一条负向先行断言：
+           #   紧跟 B/b（十亿单位）的数字不是倍数。⚠️ 断言必须同时排除 `[\d.]`
+           #   与 `B`：只写 `(?![Bb])` 会被正则回溯绕过（`14.9B` 退成 `14` 再匹配）。
+           r"\bPB\b[^\d\n]{0,6}([\d.]+)(?![\d.Bb])"),
+    "52周高": (r"52 Week High\s*[:：]?\s*([\d.]+)",
+               r"high_52w[^\d\n]{0,6}([\d.]+)",
+               r"52 ?周高[^\d\n]{0,6}([\d.]+)"),
+    "52周低": (r"52 Week Low\s*[:：]?\s*([\d.]+)",
+               r"low_52w[^\d\n]{0,6}([\d.]+)",
+               r"52 ?周低[^\d\n]{0,6}([\d.]+)"),
+}
+
+
+def caliber_conflicts(evidence: list[Path]) -> list[dict]:
+    """同字段多值检测：同一字段在证据源中相差 >1% 即判「口径冲突」。
+
+    返回 ``[{"field": "PE(TTM)", "values": ["14.01", "14.71"]}, ...]``。
+
+    ★ 为什么需要它：`_value_blacklist.json` 全项目从未存在 ⇒ 原「口径一致性」检查
+      恒跳过（死检查）。而实测每轮都有 3–5 处双口径（PE 14.71/14.01、PB 2.823/2.92、
+      52 周 656.35/664），全靠人工在简报里声明 —— 漏一处就会让两个角色用两个分母。
+    """
+    seen: dict[str, list[float]] = {}
+    for ev in evidence:
+        try:
+            t = ev.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for field, pats in _CALIBER_FIELDS.items():
+            for p in pats:
+                for m in re.finditer(p, t, re.I):
+                    try:
+                        v = float(m.group(1).replace(",", ""))
+                    except ValueError:
+                        continue
+                    if v > 0:
+                        seen.setdefault(field, []).append(v)
+    out: list[dict] = []
+    for field, vals in seen.items():
+        lo, hi = min(vals), max(vals)
+        if hi > 0 and (hi - lo) / hi > 0.01:
+            out.append({"field": field, "values": [f"{lo:g}", f"{hi:g}"]})
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="交付前统一门禁")
     ap.add_argument("draft_dir")
@@ -156,7 +212,7 @@ def main() -> int:
         if not (HERE / "_gap_ledger.py").exists():
             add("数据缺口台账", "WARN", "缺少 _gap_ledger.py，跳过")
         else:
-            rc, out = run([PY, str(HERE / "_gap_ledger.py"), tk, dt_, "--check", str(draft)])
+            rc, out = run([PY, str(HERE / "_gap_ledger.py"), tk, dt_, "--check", str(draft), "--no-write"])
             if crashed(out):
                 add("数据缺口台账", "FAIL", "台账工具自身报错")
             elif rc == 1:
@@ -188,8 +244,17 @@ def main() -> int:
                 if _mod.body_len(_b) != 0:
                     continue
                 _nxt = _secs[_i + 1] if _i + 1 < len(_secs) else None
-                if _nxt and not _nxt[0][:1].isdigit() and _mod.body_len(_nxt[1]) > 0:
-                    continue  # 父标题：内容挂在同级通道标题下
+                if _nxt:
+                    # ★ 2026-10-19 修：原豁免只认「非数字开头」的子标题，于是
+                    #   `## 4. 三大财务报表` + `## 4.1 利润表` 会被判「父节正文为空」
+                    #   （601899.SS 实测误报，报表内容全在 4.1/4.2/4.3 的围栏里）。
+                    #   改为按编号前缀认父子：4.1 是 4 的子节。
+                    _pn = re.match(r"^(\d+(?:\.\d+)*)", _t.strip())
+                    _cn = re.match(r"^(\d+(?:\.\d+)*)", _nxt[0].strip())
+                    _is_child = bool(_pn and _cn and _cn.group(1).startswith(_pn.group(1) + "."))
+                    _non_digit_child = not _nxt[0][:1].isdigit()
+                    if (_is_child or _non_digit_child) and _mod.body_len(_nxt[1]) > 0:
+                        continue  # 父标题：内容挂在子节/同级通道标题下
                 _empt.append(_t)
             _health = _mod.channels_health(_text)
             if not _empt:
@@ -263,7 +328,11 @@ def main() -> int:
         bad = [l.strip() for l in out.splitlines() if l.strip().startswith("结论：✗")]
         add("评级词/契约字段", "FAIL", bad[0][:90] if bad else "存在不合规项")
 
-    # ---- 2. 口径一致性（旧值残留 + 分项求和自洽）----
+    # ---- 2. 口径一致性（旧值残留 + 同字段多值冲突）----
+    # ★ 2026-10-19：`_value_blacklist.json` 全项目不存在 ⇒ 原检查恒跳过（死检查）。
+    #   改为「自动检测同字段多值」：PE / PB / 52 周高低，相差 >1% 即冲突；
+    #   若 `0_brief.md` 同时出现这两个值，视为「已声明口径差」⇒ PASS。
+    _blk_done = False
     if blacklist.exists():
         rc, out = run([PY, str(HERE / "_audit_values.py"), str(draft), "--stale", str(blacklist)])
         if crashed(out):
@@ -273,8 +342,20 @@ def main() -> int:
         else:
             n = sum(1 for l in out.splitlines() if l.strip().startswith("L") and "[" in l)
             add("口径一致性", "FAIL", f"存在旧值残留或不自洽（约 {n} 处命中）")
-    else:
-        add("口径一致性", "WARN", f"未找到黑名单 {blacklist.name}，跳过")
+        _blk_done = True
+    if not _blk_done:
+        _conf = caliber_conflicts(evidence) if evidence else []
+        if not _conf:
+            add("口径一致性", "PASS", "未检出同字段多值冲突")
+        else:
+            _bp = draft / "0_brief.md"
+            _bt = _bp.read_text(encoding="utf-8", errors="replace") if _bp.exists() else ""
+            _undecl = [c for c in _conf if not all(v in _bt for v in c["values"])]
+            if _undecl:
+                add("口径一致性", "WARN", f"{len(_undecl)} 处同字段多值未在简报声明：" +
+                    "；".join(f"{c['field']} {c['values'][0]}/{c['values'][1]}" for c in _undecl[:3]))
+            else:
+                add("口径一致性", "PASS", f"{len(_conf)} 处口径差均已在简报声明")
 
     # ---- 3. 数字溯源 + 契约违规（lint）----
     # 退出码语义：0 = 无契约违规；2 = 有契约违规（阻断）；非零其它 = 工具出错。

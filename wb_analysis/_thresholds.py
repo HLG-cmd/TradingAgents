@@ -28,6 +28,7 @@
 """
 
 from __future__ import annotations
+from wb_analysis import _clock
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 期权报价新鲜度
@@ -66,7 +67,7 @@ def market_session_phase(now: "datetime.datetime | None" = None) -> str:
     """返回美股当前所处时段：`in_session` / `pre_market` / `after_hours` / `closed_day`。
 
     `now` 为 `None` 时取当前美东时间；**传入 aware datetime 可注入任意时点做测试**
-    （期权时点分支此前无法被测试，正是因为它把 `datetime.now()` 写死在函数体里）。
+    （期权时点分支此前无法被测试，正是因为它把 `_clock.now()` 写死在函数体里）。
     """
     import datetime as _dt
     import zoneinfo

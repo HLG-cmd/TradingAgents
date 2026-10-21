@@ -88,9 +88,10 @@
 | `_gen_derived_stock.py` / `_gen_derived_ndx.py` | **派生指标落盘器**（把上一步的 stdout 写成 `0_derived.md`；`_derive_a_etf.py` 自行落盘，无需此步） | 代码，长期 |
 | `_gen_meta.py` | **运行清单生成**（缺 `meta.json` ⇒ 渲染退出码 2） | 代码，长期 |
 | `assemble.py` | **渲染器**：把 12 个角色的 md 拼成报告树 | 代码，长期 |
-| `_precheck.py` | **交付门禁**（7 项检查，唯一入口） | 代码，长期 |
+| `_precheck.py` | **交付门禁**（唯一入口；项数以脚本自报为准，含缺口台账/小节正文/快照自洽/收益质量/评级契约/口径对账/数字溯源/时序/报告树反读） | 代码，长期 |
 | `_selftest.py` | **门禁自检**（双向夹具，确认门禁本身没坏；项数以脚本自报为准） | 代码，长期 |
 | `_gap_ledger.py` | **数据缺口台账** | 代码，长期 |
+| `_role_prompt.py` | **单角色提示词生成器**：跨平台拆分 12 个角色（白名单/禁读/契约/篇幅/自验），见 `docs/AGENT_PROTOCOL.md` | 代码，长期 |
 | `_seal_run.py` | **产物封存**：把一轮的中间产物打包进报告树 | 代码，长期 |
 | `_reports_index.py` | **报告索引 + 卫生检查** | 代码，长期 |
 | `FRAMEWORK.md` | **12 角色输出契约**（子智能体读它） | 文档 |
@@ -247,7 +248,7 @@ reports/
 # 看「报告质量」是升还是降（同标的逐轮比较 —— 这是"越用越好"的唯一判据）
 ./.venv/Scripts/python.exe wb_analysis/_scorecard.py --trend
 
-# 交付前门禁（7 项检查，只跑这一条）
+# 交付前门禁（唯一入口；项数以脚本自报为准）
 ./.venv/Scripts/python.exe wb_analysis/_precheck.py wb_analysis/drafts/<P>_<日期> \
     --evidence wb_analysis/evidence/<P>_<日期>.md --report reports/<标的>/<树>/
 

@@ -1,0 +1,65 @@
+name: CI (Windows)
+
+# 为什么单独加这一个 workflow
+# ---------------------------
+# 开发与运行环境是 Windows（start.bat / screen.bat / .venv\Scripts\python.exe /
+# scripts/run_nasdaq_premarket.bat / scripts/_watchdog_shutdown.ps1），
+# 但 ci.yml 只在 ubuntu-latest 上验证 —— 平台相关的代码路径从来没有进过 CI。
+#
+# 这个 workflow 只补平台回归面，不改动 ci.yml。
+# 首次接入建议先 workflow_dispatch 手动触发一次看结果；稳定后再打开 push 触发。
+on:
+  pull_request:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+concurrency:
+  group: ci-win-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-windows:
+    name: tests (windows, py${{ matrix.python-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (with dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Setup CI test environment
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path reports | Out-Null
+          Copy-Item .env.example .env
+          Add-Content .env "SEC_USER_AGENT=CI_Runner ci_runner@example.com"
+      - name: Run test suite
+        run: pytest -q
+
+  lint-whole-repo:
+    name: ruff (含 wb_analysis / scripts)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install "ruff>=0.15"
+      - name: Lint the repository
+        # ci.yml 的 lint job 声称"仓库在严格 select 下完全干净，所以 lint 全部"，
+        # 但 pyproject.toml 的 extend-exclude 排除了 wb_analysis / scripts ——
+        # 也就是自研核心与全部脚本从未被 lint 过。
+        # 这里显式只针对这两个目录跑，先把存量问题暴露出来。
+        # 初次接入必然报很多条：建议先在 pyproject 用 [tool.ruff.lint.per-file-ignores]
+        # 分阶段放宽（先只开 F / E9 / B），清零后删掉 continue-on-error。
+        continue-on-error: true
+        run: ruff check wb_analysis scripts

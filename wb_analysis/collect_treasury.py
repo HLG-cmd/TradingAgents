@@ -50,8 +50,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tradingagents.dataflows import fred  # noqa: E402
+from wb_analysis import _clock
 
-OUT_DIR = ROOT / "wb_analysis" / "evidence"
+OUT_DIR = ROOT / "wb_analysis" / "fixtures" / "macro"
 
 # (FRED series, 中文名, 类别)
 SERIES: list[tuple[str, str, str]] = [
@@ -158,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     L: list[str] = []
     L.append(f"# 证据包：美债收益率曲线（FRED）· 基准日 {date}")
     L.append("")
-    L.append(f"- 采集时刻：{dt.datetime.now().strftime('%Y-%m-%d %H:%M')}（北京时间）")
+    L.append(f"- 采集时刻：{_clock.now(_clock.CN_TZ).strftime('%Y-%m-%d %H:%M')}（北京时间）")
     L.append(f"- 数据源：**FRED**（St. Louis Fed），`tradingagents.dataflows.fred` 封装，逐 series 原始取数")
     L.append(f"- 回溯窗口：{lookback} 自然日")
     L.append(f"- 通道健康度：**{len(ok)}/{len(rows)}**")

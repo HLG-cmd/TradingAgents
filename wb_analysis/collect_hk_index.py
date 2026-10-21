@@ -59,6 +59,7 @@ if str(ROOT) not in sys.path:
 # ★ 2026-10-10：本文件与 `collect_a_etf.py` 曾**逐字各存一份** run_westock/parse_md_table，
 #   且各自硬编码 `<用户主目录>\.local\bin\westock.exe`（机器特定）⇒ 抽出共享模块。
 from wb_analysis._westock import WESTOCK, parse_md_table, run_westock  # noqa: E402
+from wb_analysis import _clock
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -150,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     L: list[str] = []
     L.append(f"# 证据包：{idx}（港股指数）· 基准日 {date}")
     L.append("")
-    L.append(f"- 采集时刻：{dt.datetime.now().strftime('%Y-%m-%d %H:%M')}（北京时间）")
+    L.append(f"- 采集时刻：{_clock.now(_clock.CN_TZ).strftime('%Y-%m-%d %H:%M')}（北京时间）")
     L.append(f"- 数据源：**westock CLI**（腾讯自选股接口），逐通道原始取数")
     L.append(f"- 指数名称：{quote.get('name', '?')}")
     L.append("")

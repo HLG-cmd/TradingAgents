@@ -34,6 +34,7 @@
 0 = 全部生成成功；1 = 有角色文件缺失或标签提取失败（**逐项列出，不静默跳过**）。
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -77,8 +78,21 @@ def _notes_from_gaps(ticker: str, as_of: str) -> str:
     except Exception as e:  # noqa: BLE001
         return f"⚠️ 缺口台账解析失败（{type(e).__name__}）⇒ 缺口状态未知。" + tail
     gaps = g.get("gaps") or []
-    dec = [x for x in gaps if x.get("decisive")]
+    # ★ 2026-10-19：只统计**未解决**的决定性缺口。台账会把 supplement 补全的 §3
+    #   标成 status="resolved"（decisive 仍为 True），若不过滤，notes 会长期
+    #   声明一个已解决的问题（与 _precheck 的「决定性缺口 1 条」口径不一致）。
+    dec = [x for x in gaps if x.get("decisive") and x.get("status") != "resolved"]
     ok, tot = g.get("channels_ok"), g.get("channels_total")
+    # ★ 2026-10-19：部分采集器（collect_a_stock / westock 港股补采）不写 channels_*，
+    #   台账里是 None ⇒ notes 出现「通道 None/None」这种无信息文本。
+    #   回退到证据包正文的「成功: X / Y」行。
+    if ok is None or tot is None:
+        ev = ROOT / "wb_analysis" / "evidence" / f"{ticker}_{as_of}.md"
+        if ev.exists():
+            m = re.search(r"成功:\s*(\d+)\s*/\s*(\d+)",
+                          ev.read_text(encoding="utf-8", errors="replace"))
+            if m:
+                ok, tot = int(m.group(1)), int(m.group(2))
     if not gaps:
         return f"通道 {ok}/{tot}，**无登记缺口**。{tail}"
     names = "、".join((x.get("channel") or x.get("label") or "?") for x in dec) or "无"

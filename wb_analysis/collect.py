@@ -43,6 +43,7 @@ if str(PROJECT_ROOT) not in sys.path:
 # ★ 2026-10-15：移除模块级 os.chdir(PROJECT_ROOT)，改为在 main() 入口执行，消除 import 副作用
 
 from dotenv import load_dotenv
+from wb_analysis import _clock
 
 load_dotenv(PROJECT_ROOT / ".env")
 
@@ -619,6 +620,94 @@ def _price_summary(csv_text: object) -> tuple[str, dict]:
     return "\n".join(lines), stats
 
 
+def _extended_hours_block(ticker: str, as_of: str) -> tuple[str, dict]:
+    """盘前 / 盘后（扩展时段）分钟级汇总 —— 补 §13 未覆盖的 04:00–09:30 与 16:00–20:00 ET。
+
+    ★ 2026-10-21 新增（用户要求：盘前盘后数据必须收集）：
+      事件驱动的价格发现大量发生在扩展时段（尤其**盘后**），而 §13 只覆盖
+      常规时段 09:30–16:00 ⇒ 事件的第一反应被整段漏掉。实测 NFLX 10-20：
+      常规收盘 68.69，盘后成交仍继续，若只报常规收盘，读者会误以为「当天就此定格」。
+
+    口径（必须声明，写进证据包）：
+      - 数据源 = yfinance 1 分钟 bar（``prepost=True``），美东时区；
+      - 盘前 = 04:00–09:30 ET，盘后 = 16:00–20:00 ET；
+      - **扩展时段流动性低、点差宽，成交价不代表常规时段可成交价** ⇒
+        只能作「事件反应 / 情绪」证据，**不得用于止损 / 目标 / 估值锚定**。
+    """
+    import zoneinfo
+
+    import pandas as pd
+    import yfinance as yf
+
+    et = zoneinfo.ZoneInfo("America/New_York")
+    now_et = pd.Timestamp.now(tz=et)
+    df = yf.Ticker(ticker).history(interval="1m", period="5d", prepost=True)
+    if df is None or df.empty:
+        return ("(不可用: 1 分钟 bar 为空 —— 该标的可能无扩展时段成交)", {"sessions": 0})
+    df = df.tz_convert(et)
+
+    # 常规收盘（扩展时段变动的参照）：取日线序列，避免与 1 分钟 bar 的口径混用
+    closes: dict[dt.date, float] = {}
+    try:
+        daily = yf.Ticker(ticker).history(period="10d")
+        if daily is not None and not daily.empty:
+            if getattr(daily.index, "tz", None) is not None:
+                daily = daily.tz_convert(et)
+            for ts, r in daily.iterrows():
+                c = r.get("Close")
+                if c is not None and pd.notna(c):
+                    closes[ts.date()] = float(c)
+    except Exception:  # noqa: BLE001 — 参照收盘取不到不阻断本节
+        pass
+
+    rows: list[dict] = []
+    for day in sorted({d for d in df.index.date}, reverse=True)[:4]:
+        g = df[df.index.date == day]
+        segs = (
+            ("盘前", g[(g.index.time >= dt.time(4, 0)) & (g.index.time < dt.time(9, 30))]),
+            ("盘后", g[(g.index.time >= dt.time(16, 0)) & (g.index.time < dt.time(20, 0))]),
+        )
+        prev_days = sorted(d for d in closes if d < day)
+        for label, seg in segs:
+            if seg.empty:
+                continue
+            o, h, l, c = (float(seg["Open"].iloc[0]), float(seg["High"].max()),
+                          float(seg["Low"].min()), float(seg["Close"].iloc[-1]))
+            vol = float(seg["Volume"].sum()) if "Volume" in seg else 0.0
+            ref = closes.get(day) if label == "盘后" else (closes.get(prev_days[-1]) if prev_days else None)
+            chg = (c / ref - 1.0) * 100.0 if ref else None
+            rows.append({"day": day.isoformat(), "label": label, "open": o, "high": h,
+                         "low": l, "last": c, "volume": vol, "bars": int(len(seg)),
+                         "ref_close": ref, "chg_pct": chg})
+
+    if not rows:
+        return ("(不可用: 窗口内无盘前/盘后成交)", {"sessions": 0})
+
+    lines = [
+        f"- 采集时点：{now_et:%Y-%m-%d %H:%M} 美东（{'常规交易时段内' if dt.time(9, 30) <= now_et.time() < dt.time(16, 0) else '非常规交易时段'}）",
+        "- 数据源：yfinance **1 分钟 bar**（`prepost=True`），美东时区",
+        "- 时段定义：**盘前 = 04:00–09:30 ET**；**盘后 = 16:00–20:00 ET**（盘前参照**前一交易日收盘**，盘后参照**当日常规收盘**）",
+        "- ⚠️ **口径限制**：扩展时段流动性低、点差宽，成交价**不代表常规时段可成交价** ⇒ 只作「事件反应 / 情绪」证据，"
+        "**不得用于止损 / 目标 / 估值锚定**。",
+        "",
+        "| 交易日 | 时段 | 开 | 高 | 低 | 末 | 分钟数 | 成交量 | 参照收盘 | 相对变动 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for r in rows[:8]:
+        chg = f"{r['chg_pct']:+.2f}%" if r["chg_pct"] is not None else "—"
+        ref = f"{r['ref_close']:.2f}" if r["ref_close"] else "—"
+        lines.append(f"| {r['day']} | {r['label']} | {r['open']:.2f} | {r['high']:.2f} | "
+                     f"{r['low']:.2f} | **{r['last']:.2f}** | {r['bars']} | {r['volume']:,.0f} | "
+                     f"{ref} | **{chg}** |")
+    latest = rows[0]
+    lines += ["", f"**最新扩展时段读数**：{latest['day']} {latest['label']}末价 **{latest['last']:.2f}**"
+                  + (f"（相对参照收盘 {latest['ref_close']:.2f} 为 **{latest['chg_pct']:+.2f}%**）"
+                     if latest["chg_pct"] is not None else "") + "。"]
+    stats_out = {"sessions": len(rows), "latest": latest, "rows": rows[:8],
+                 "collected_at_et": f"{now_et:%Y-%m-%d %H:%M}"}
+    return "\n".join(lines), stats_out
+
+
 def _realtime_close_block(ticker: str, as_of: str) -> tuple[str, dict]:
     """补充「最新交易日」的收盘快照 —— 解决 yfinance **日线接口的当日滞后**。
 
@@ -824,11 +913,20 @@ def _render_option_block(ticker: str, opts: dict) -> str:
                  f"{opts.get('n_expiries_total')}** 个未来到期日（全量，非抽样）")
     lines.append(f"- **IV 数据等级：{grade}**（FULL=ATM+偏斜齐 / SKEW_ONLY=仅偏斜 / "
                  "ATM_ONLY=仅 ATM / PARTIAL=降级 / NONE=不可用）")
-    lines.append(f"- **报价新鲜度闸门**：只接受 ``lastTradeDate`` ≤ "
-                 f"{opts.get('quote_age_filter_days')} 天的合约；"
-                 f"本次最新成交距今 **{fresh.get('min_age_days')} 天**，"
-                 f"合格样本 **{fresh.get('n_fresh')}** 个"
-                 f"（扫描到有双边报价的合约 {fresh.get('n_quoted')} 个）")
+    # ★ 2026-10-21：切 CBOE 源时 freshness 的 min_age_days/n_fresh/n_quoted 按设计为 None
+    #   （见 collect_index 的 cboe_ok 分支：不做 yfinance 口径的新鲜度探测）。
+    #   原实现直接渲染成「None 天 / None 个」，读者会误以为「数据没取到」——
+    #   实测 NFLX 10-20 盘后轮：明明 CBOE 全链 3136 个合约、IV 等级 FULL，却显示 None。
+    #   ⇒ 显式写「不适用」并给出原因，不让占位符冒充数据。
+    if fresh.get("min_age_days") is None and fresh.get("source") == "cboe_delayed":
+        lines.append(f"- **报价新鲜度闸门**：**不适用**（{fresh.get('skipped_reason') or '已切 CBOE 源'}）；"
+                     f"CBOE 延迟报价为**上一时段收盘快照**，按设计不做 yfinance 口径的成交日探测")
+    else:
+        lines.append(f"- **报价新鲜度闸门**：只接受 ``lastTradeDate`` ≤ "
+                     f"{opts.get('quote_age_filter_days')} 天的合约；"
+                     f"本次最新成交距今 **{fresh.get('min_age_days')} 天**，"
+                     f"合格样本 **{fresh.get('n_fresh')}** 个"
+                     f"（扫描到有双边报价的合约 {fresh.get('n_quoted')} 个）")
     lines.append(f"- **采集时点**：{fresh.get('session_note') or '未记录'}")
     # ★ 2026-10-16：**来源声明**（方案 A 时点分支的配套，与 collect_index 同步）。
     #   两个源的 IV/偏斜口径不同、数值不可混用，故必须显式标注。
@@ -987,16 +1085,9 @@ def _retry(fn, *args, retries: int = _NET_RETRIES, delay: float = 1.5):
 
     与 `_safe_call` 保持**同一退避口径**（1.5×(n+1) 秒），避免两处漂移。
     """
-    last: Exception | None = None
-    for attempt in range(retries + 1):
-        try:
-            return fn(*args)
-        except Exception as exc:  # noqa: BLE001
-            last = exc
-            if attempt < retries:
-                time.sleep(delay * (attempt + 1))
-    assert last is not None
-    raise last
+    from wb_analysis._net import retry as _net_retry
+
+    return _net_retry(fn, *args, retries=retries, delay=delay, retryable=Exception)
 
 
 def _safe_call(name: str, fn, *args, retries: int = _NET_RETRIES) -> tuple[str, str]:
@@ -1065,7 +1156,7 @@ def _emit_stub(ticker: str, as_of: str, evidence_md: Path, health: dict) -> Path
     if stub_path.exists():
         return None
 
-    missing = [k for k, v in health.items() if v in ("fail", "unavailable", "skipped")]
+    missing = [k for k, v in health.items() if v in ("fail", "unavailable", "skipped", "withheld")]
     notes = f"证据包: {evidence_md}\n"
     if missing:
         notes += f"以下通道在本次采集中不可用，分析时须显式声明缺口、不得臆测: {', '.join(missing)}\n"
@@ -1130,6 +1221,12 @@ def collect_one(
 
     # --- 3. 基本面 ---
     st, txt = _safe_call("get_fundamentals", route, "get_fundamentals", ticker, as_of)
+    # ★ 2026-10-19：vendor 对**历史基准日**会「拒答」§3（正文是一段 withheld 声明），
+    #   但 _safe_call 只看调用是否抛错，仍判 ok ⇒ 健康度照报全绿（铁律 3 的通道级形态）。
+    #   0700.HK 实测：健康度 29/32，§3 实际不可用，只有缺口台账发现。
+    #   ⇒ 正文命中 withheld/拒答 时把状态降为 withheld，让健康度与非全绿清单如实反映。
+    if st == "ok" and re.search(r"withheld|拒答|point-in-time fundamentals", str(txt), re.I):
+        st = "withheld"
     health["get_fundamentals"] = st
     sanity = _fundamentals_sanity(txt)
     # 注意：不要把校验结果写进 health —— 它是「提示」不是「通道」，
@@ -1307,6 +1404,18 @@ def collect_one(
         blocks.append("## 13. 最新交易日实时收盘补充\n\n"
                       f"(不可用: {type(exc).__name__}: {exc})")
 
+    # --- 14. 盘前 / 盘后（扩展时段）---
+    # ★ 2026-10-21 新增：事件驱动的价格发现大量发生在扩展时段，§13 只覆盖常规时段。
+    try:
+        eh_md, eh_stats = _retry(_extended_hours_block, ticker, as_of)
+        stats["extended_hours"] = eh_stats
+        health["extended_hours"] = "ok" if eh_stats.get("sessions") else "unavailable"
+        blocks.append("## 14. 盘前 / 盘后（扩展时段）\n\n" + eh_md)
+    except Exception as exc:  # noqa: BLE001
+        health["extended_hours"] = "fail"
+        blocks.append("## 14. 盘前 / 盘后（扩展时段）\n\n"
+                      f"(不可用: {type(exc).__name__}: {exc})")
+
     # --- 健康度汇总 ---
     # ⚠️ 判据是 ``!= "ok"`` 而不是白名单 ``in ("fail", "unavailable")``：
     # 2026-09-17 起健康度会登记 ``partial(...)`` / ``stale`` / ``error`` 等降级状态，
@@ -1370,7 +1479,7 @@ def collect_one(
 def today_eastern() -> str:
     """返回**美东当日**（数据源 `today` 的口径），而非本机日期。
 
-    ★ 2026-10-11（O3）修正：`--date` 的默认值原为 `dt.date.today()`＝**本机日期**。
+    ★ 2026-10-11（O3）修正：`--date` 的默认值原为 `_clock.market_date()`＝**本机日期**。
     北京时区比美东早 12~13 小时 ⇒ 本机日期**天然比美东当日早一天**（例：
     本机 10-11 10:15 = 美东 10-10 22:15）。而数据源的 `today` 走美东日历
     ⇒ 默认值本身就是一个「未来日期」，会静默触发下面的 §3 扣留。

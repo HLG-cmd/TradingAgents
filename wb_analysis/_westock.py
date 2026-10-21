@@ -76,3 +76,29 @@ def parse_md_table(text: str) -> tuple[list[str], list[list[str]]]:
     header = cells(rows[0])
     body = [cells(r) for r in rows[1:] if not re.match(r"^\|[\s\-:|]+\|$", r)]
     return header, body
+
+
+def filter_news_asof(news_text: str, as_of: str) -> tuple[str, int]:
+    """剔除**晚于基准日**的新闻条目，返回 (过滤后文本, 剔除条数)。
+
+    ★ 2026-10-20 新增（实测踩坑）：`news list` 返回的是「当下」的资讯流，**不按 --date 截断**。
+      基准日 2026-10-19 的证据包里混进了 10-20 的盘中消息（「洛阳钼业跌超 7%」
+      「ETF 最新价创 120 日新低」），若下游照常引用，就是**用未来信息解释过去的价格**
+      （前视偏差），与「基准日」这套口径自相矛盾。且它不会报错：数据看起来更「新」，
+      反而更受欢迎 —— 典型的静默失败（铁律 3）。
+
+    本函数是**唯一实现**：`collect_a_etf.py` / `collect_a_stock.py` / `collect_hk_stock.py`
+    均从此处导入，避免三份拷贝各自漂移（同一口径只允许一处定义）。
+
+    只处理 markdown 表格行（`| ... | 2026-10-20 10:30:49 | ... |`）。
+    无日期的行**原样保留**（宁可留一条可疑条目，也不静默删掉整段）。
+    """
+    kept, dropped = [], 0
+    for line in news_text.splitlines():
+        if line.lstrip().startswith("|"):
+            m = re.search(r"(20\d\d)-(\d\d)-(\d\d)", line)
+            if m and f"{m.group(1)}-{m.group(2)}-{m.group(3)}" > as_of:
+                dropped += 1
+                continue
+        kept.append(line)
+    return "\n".join(kept), dropped

@@ -50,6 +50,11 @@ from wb_analysis._paths import SKIP_ARCHIVE_DIRS  # noqa: E402
 
 NUM_RE = re.compile(r"\d[\d,]*\.?\d*")
 
+#: 二元算式：`a op b = c`（纯数字，不含 % / 单位 / 括号）。用于 4b 算式自洽校验。
+_FORMULA_RE = re.compile(
+    r"(?<![\d.])(-?\d[\d,]*(?:\.\d+)?)\s*([+\-−×xX*÷/])\s*(-?\d[\d,]*(?:\.\d+)?)\s*=\s*(-?\d[\d,]*(?:\.\d+)?)(?![\d.])"
+)
+
 # 工作文档（不是角色产出、不被渲染进报告、也不被 extract_rating 解析）。
 # ⚠️ 2026-09-19 修正：`_constraints.md` 必须**逐字写出五个英文词**才能"定义"评级词汇表
 # （原文：「正文禁裸的英文评级词（Buy/Overweight/Hold/Underweight/Sell，含大写形式）」）。
@@ -153,6 +158,11 @@ def main() -> int:
     scanned = 0
     hard_total = 0          # 契约违规数（✗）—— 只有它才阻断交付
     for f in sorted(draft_dir.rglob("*.md")):
+        # 隐藏工作文件（`.prompt_bull.md` 等）本身不是角色产出：
+        # 它们**必须**逐字写出被禁的英文评级词才能定义契约（否则「禁止」无从谈起），
+        # 不排除就会被当成角色稿判成契约违规 —— 与 DOC_FILES 同一类盲区。
+        if f.name.startswith("."):
+            continue
         if f.name.startswith("0_"):
             continue
         if f.name in DOC_FILES:
@@ -177,8 +187,10 @@ def main() -> int:
                 continue
             unknown.append(tok)
         if unknown:
-            issues.append(f"  未溯源数字 {len(unknown)} 个：{', '.join(unknown[:25])}"
-                          + (" …" if len(unknown) > 25 else ""))
+            # ★ 2026-10-19：25 个 → 12 个。实测单文件可列 30+ 个（多为合法派生量），
+            #   全列出来是噪声，人眼反而漏掉真正可疑的那几个。全量清单用 --full 另行导出。
+            issues.append(f"  未溯源数字 {len(unknown)} 个：{', '.join(unknown[:12])}"
+                          + (" …" if len(unknown) > 12 else ""))
 
         # --- 2. 越界的交易员契约行 ---
         # ⚠️ 必须区分「真的写了这行」与「只是提到这个短语」。
@@ -288,10 +300,79 @@ def main() -> int:
                 if not any(neg in text for neg in negations):
                     issues.append("  ✗ 铁律 #45 违规：跌破支撑下行趋势中出现底背离/左侧抄底表述且无警示否定词")
 
+        # --- 4b. 算式自洽（2026-10-19 新增）---
+        # 实测两轮（601899.SS / 0700.HK）共 4 处「a op b = c」算错：FY2024 ROE 分母、
+        # 金价 5% 折算（140 vs 136）、EPS 敏感性表口径、股本分母 —— 全部靠人眼回读才发现。
+        # 此前 lint 只查「数字是否溯源」，不查「算式是否成立」。
+        # 判据：只校验**纯数字**的二元算式（不含 % / 单位 / 括号），容差 max(0.02, |结果|×1%)。
+        #
+        # ★ 2026-10-19 首批实测（512400.SS）发现两个**误报源**，均已修：
+        #   ① 百分比结果：`2.9013 ÷ 14.5158 = 19.987` 的右边是**百分数**，原判据拿它跟 0.19987 比
+        #      ⇒ 一律报「算错」。中文投研稿里比率几乎都写成百分数，这是最高频形态，
+        #      若不修，本检查会变成噪声源（最终被整体关掉 —— 那才是真事故）。
+        #      修法：允许两种等价成立 —— `val == z` **或** `val×100 == z`。
+        #   ② 链式算式：`J = 3K − 2D = 3×13.3304 − 2×14.6219 = 39.9912 − 29.2438 = 10.7474`
+        #      里，正则会把中间的 `2×14.6219 = 39.9912` 单独抓出来判定。
+        #      修法：匹配点**左侧**紧邻运算符 ⇒ 属于链式表达，跳过。
+        _formula_bad: list[str] = []
+        for _m in _FORMULA_RE.finditer(text):
+            _a, _op, _b, _c = (_m.group(i) for i in (1, 2, 3, 4))
+            # 链式守卫：左侧紧邻运算符 ⇒ 跳过（不构成独立二元算式）
+            _head = text[max(0, _m.start() - 12):_m.start()]
+            if _head and _head.rstrip()[-1:] in "=+-−×÷/*":
+                continue
+            try:
+                _x, _y, _z = (float(s.replace(",", "")) for s in (_a, _b, _c))
+            except ValueError:
+                continue
+            if _op in ("+",):
+                _val = _x + _y
+            elif _op in ("-", "−"):
+                _val = _x - _y
+            elif _op in ("×", "x", "X", "*"):
+                _val = _x * _y
+            else:  # ÷ /
+                if _y == 0:
+                    continue
+                _val = _x / _y
+            # 两种合法形态：直接值，或百分数（右边乘 100）
+            # 容差：绝对下限 0.005（避免把四舍五入误判为算错），相对 1.5%。
+            # ★ 原为 max(0.02, 1%)：0.02 的绝对下限对「元」级价格差（如 0.055 写成 0.55）太松，
+            #   实测漏检 0.0409 × 1.525 = 0.064（真值 0.0624）。
+            _tol = max(0.005, abs(_z) * 0.015)
+            if abs(_val - _z) > _tol and abs(_val * 100 - _z) > _tol:
+                _formula_bad.append(f"{_m.group(0)}（应为 {_val:.4g} / 若为百分数 {_val * 100:.4g}）")
+        if _formula_bad:
+            issues.append(f"  ⚠ 算式不成立 {len(_formula_bad)} 处：" + "；".join(_formula_bad[:3]))
+
+        # --- 4c. 跨轮引用（2026-10-19 新增）---
+        # 本轮实测：manager.md 曾写「上轮（A 股紫金）」，违反「不看跑过的报告」的用户约束。
+        _cross = [w for w in ("上轮", "上一轮", "此前报告", "历史报告", "跑过的报告") if w in text]
+        if _cross:
+            issues.append(f"  ⚠ 出现跨轮引用：{'、'.join(_cross)}（本项目禁止引用历史报告）")
+
+        # --- 4d. 重复表述（2026-10-19 新增）---
+        # 「每句都要有对应价值」的可执行版本：同一句（≥20 字、以句末标点收尾）
+        # 在一份稿里出现 ≥2 次，即为凑字数或自我复读。只查中文句子，不查表格与标题。
+        _sents = re.findall(r"[^。！？\n]{20,}[。！？]", text)
+        _cnt: dict[str, int] = {}
+        for _s in _sents:
+            _k = re.sub(r"\s+", "", _s)
+            _cnt[_k] = _cnt.get(_k, 0) + 1
+        _dup = [k for k, c in _cnt.items() if c >= 2]
+        if _dup:
+            issues.append(f"  ⚠ 重复表述 {len(_dup)} 处（同一句出现 ≥2 次）：{_dup[0][:40]}…")
+
         # --- 5. 篇幅 ---
+        # ★ 2026-10-19 调整：下限 6000 → 4000（用户口径：4,000 已是上限要求）。
+        #   6000 对中文角色稿过高 —— 实测两轮首稿各 11/12 份低于 6000、返工 3–4 轮，
+        #   补进去的内容有相当比例是「把结论换个说法再列一遍」，密度反而下降。
+        #   4,000 足以容纳 5 个必需小节 + 3 条反证 + 算式；超过 6,000 反向提示偏长。
         n = len(text)
-        if n < 6000:
-            issues.append(f"  ⚠ 篇幅偏短（{n:,} 字符）——各角色下限通常 6000~9000")
+        if n < 4000:
+            issues.append(f"  ⚠ 篇幅偏短（{n:,} 字符）——各角色下限 4,000（建议 4,000–4,800）")
+        elif n > 6000:
+            issues.append(f"  ⚠ 篇幅偏长（{n:,} 字符）——超过 6,000 请自查是否重复论述")
 
         # --- 6. 截断检测 ---
         # 实测（2026-09-17）：子智能体写文件时可能在句子中途停笔，

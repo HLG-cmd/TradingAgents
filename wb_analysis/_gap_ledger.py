@@ -123,12 +123,17 @@ RULES: dict[str, dict] = {
                                    "remedy": "改在美东盘中重采", "fallback": "同 etf:option_iv"},
     # ⚠️ 2026-10-04 泛化：A 股 ETF 分「行业 ETF」（512400）与「策略/主题 ETF」（515100 红利低波）两类，
     #    两类均无场内期权。原措辞只提"行业ETF"，对策略 ETF 不准确，故改为"A股行业/策略 ETF"。
+    # ⚠️ 2026-10-19 修正：原文案写死「A 股行业/策略 ETF 均无场内期权」，港股个股
+    #    （0700.HK）跑出来也照报这句 —— 市场口径错配，会误导角色以为「港股没有股票期权」。
+    #    改为市场无关表述，并分别给出 A 股/港股/美股的处置口径。
     "option_structure": {"kw": ["option_structure", "期权", "期权维度", "场内期权"], "cls": "A", "decisive": True,
-                         "blocks": "无法回答「期权市场如何为下行风险定价」——A 股行业/策略 ETF 均无场内期权，"
+                         "blocks": "无法回答「期权市场如何为下行风险定价」——本证据包无可用期权链数据，"
                                    "下行保护成本不可评估",
-                         "remedy": "A 股行业/策略 ETF 无场内期权（结构性缺失）；接受该维度缺失并把结论降为条件式",
-                         "fallback": "上证50ETF / 沪深300ETF 期权隐含波动率（宽基口径）+ 本标的历史 HV"
-                                     "（**口径不同，仅作波动率环境代理**）"},
+                         "remedy": "按市场处理：A 股个股/行业与策略 ETF 无场内期权（结构性缺失）；"
+                                   "港股虽有股票期权但本采集器未接期权链；美股可改在美东盘中重采。"
+                                   "三者均须把结论降为条件式",
+                         "fallback": "A 股→宽基 ETF 期权 IV；港股→恒指波幅指数；美股→^VIX"
+                                     "（**均为前瞻 IV，口径不同，不可线性换算**）+ 本标的历史 HV"},
     # ⚠️ 2026-10-04 新增（A 股 ETF 轮）：下面两条属「数据陈旧」而非「通道失败」——
     #    通道**取到了值**，但值的时间戳与基准日不符。登记它们是为了让下游看见，
     #    否则会被当成基准日当日值使用（铁律 26 快照不得脱离时间戳 / 铁律 32 缺口须被下游看见）。
@@ -175,6 +180,22 @@ RULES: dict[str, dict] = {
     #    实测缺失成因为 **yfinance 限流**（`YFRateLimitError: Too Many Requests`）
     #    ⇒ 属 **B 类（限流/阈值误伤）**，不是 C 类采集器 bug，也不是 A 类上游真缺。
     #    未登记时台账会标 `cls="?"` 并提示「决定性判断会漏」——故补录。
+    # ⚠️ 2026-10-20 新增（688836 轮实测）：A股个股 `get_stock_data` / `get_fundamentals`
+    #    / 三大报表 / 长周期指标在 yfinance 侧失败。根因实测为 **YFRateLimitError:
+    #    Too Many Requests**（短时间多次调用触发限流）⇒ 属 **B 类（限流/阈值误伤）**，
+    #    不是 C 类采集器 bug，也不是 A 类上游真缺。
+    #    ⚠️ 关键：westock 侧通道（quote/kline/technical/chip/…）**不受影响**，
+    #    A股个股的主口径数据（价、量、均线、KDJ/RSI/MACD、筹码）来自 westock，
+    #    故该缺口**不阻断交付**，但须在简报中声明「估值快照与年报口径缺失」。
+    "get_stock_data": {"kw": ["get_stock_data", "yfinance", "YFRateLimit", "估值快照", "限流"],
+                       "cls": "B", "decisive": False,
+                       "blocks": "yfinance 侧（估值快照 / 三大报表 / MA60-250 等长周期指标）取不到 ⇒ "
+                                 "**市盈率、PB、年报财务、年线**该轮不可用；"
+                                 "**westock 侧主口径（价、量、短中期均线、KDJ/RSI/MACD、筹码、资金流）不受影响**",
+                       "remedy": "等待数分钟让限流窗口重置后重跑 `collect_a_stock.py`；"
+                                 "或用 westock 的 `profile` / `finance` 通道人工补齐",
+                       "fallback": "westock `technical`（MA5/10/20、BOLL、MACD、KDJ、RSI）+ `finance` 口径"
+                                   "（**与年报口径不同，须分别声明**）"},
     "realtime_close": {"kw": ["realtime_close", "实时收盘", "最新交易日实时"], "cls": "B", "decisive": False,
                        "blocks": "取不到「最新交易日」的实时价 ⇒ **口径 B（盘中价）不可用**，"
                                  "「实时时段比日线末日新 N 个交易日」的对比无法进行；"
@@ -282,6 +303,25 @@ RULES: dict[str, dict] = {
                     "与项目自建 BSM 反解数值不可混用**）；波动率环境代理 ^VIX / ^VXN"},
 }
 
+# ★ 2026-10-20 NFLX 轮实测：美股采集器（`collect.py`）的通道名是 **`get_fundamentals`**，
+#   而 §3 扣留的六要素只登记在语义键 `profile` 下；台账按**通道名精确查表**
+#   （`RULES.get(name)`）⇒ 未登记时 cls 被判成 `?`、decisive 漏判，
+#   并打印「未归类：请把该通道登记进 RULES 表」。
+#   与 2026-10-13 `sector_fin_degenerate` 的教训同源（键名必须是通道名）。
+#   ⇒ 不复制第二份六要素（两处写必漂移），直接**别名**到 `profile`；
+#     `remedy_file` 也随之生效：supplement 一旦落地，该通道自动降级为「已解决（口径说明）」。
+RULES["get_fundamentals"] = RULES["profile"]
+
+# ★ 2026-10-21 新增：盘前/盘后（扩展时段）通道。取不到时不阻断方向判断
+#   （常规时段收盘与日线已覆盖决策所需价格），但必须让下游看见「事件反应未知」。
+RULES["extended_hours"] = {
+    "kw": ["extended_hours", "盘前", "盘后", "扩展时段", "prepost"],
+    "cls": "A", "decisive": False,
+    "blocks": "无法观察事件在扩展时段的第一反应（盘前/盘后成交）⇒ 「事件后开盘跳空」只能从常规时段推断",
+    "remedy": "yfinance 1 分钟 bar 带 prepost=True 重采；该标的若无扩展时段成交则接受缺失",
+    "fallback": "常规时段首根 15 分钟 bar 的开盘缺口（口径不同：只反映集合竞价结果）",
+}
+
 BODY_NOTE = {"stale": "报价陈旧（超过新鲜度闸门）", "unavailable": "通道不可用", "missing": "无数据",
              "empty": "返回为空", "N/A": "上游未提供"}
 
@@ -325,6 +365,16 @@ def build(ticker: str, date: str) -> dict:
              "remedy": (rule or {}).get("remedy", "人工归类"),
              "fallback": (rule or {}).get("fallback", "—"),
              "label": name, "kw": (rule or {}).get("kw", [name])}
+        # ★ 2026-10-20：`remedy_file` 此前只在 `profile` 分支生效；通道级条目
+        #   （如美股 `get_fundamentals=withheld`）即便 supplement 已落地仍报「未解决」。
+        #   改为**通用判据**：规则声明了补救产物且文件存在 ⇒ 降级为已解决、decisive=False。
+        rf = (rule or {}).get("remedy_file")
+        if rf:
+            remedy_path = EVID / f"{ticker}_{date}.{rf}"
+            if remedy_path.exists():
+                g.update({"status": "resolved", "decisive": False,
+                          "resolved_by": remedy_path.relative_to(ROOT).as_posix(),
+                          "note": "采集时确缺该通道，但补救产物已落地 ⇒ 降级为「口径说明」，引用时标明口径即可"})
         gaps.append(g)
     if info["profile_withheld"]:
         rule = RULES["profile"]
@@ -457,6 +507,11 @@ def main() -> int:
     ap.add_argument("ticker")
     ap.add_argument("date")
     ap.add_argument("--check", default=None, help="给草稿目录，校验决定性缺口是否在简报里声明")
+    # ★ 2026-10-19：门禁（_precheck）调用本工具时不应改动仓库状态 ——
+    #   铁律 50「判据函数不得带副作用」。此前 `--check` 也会重写 gaps.json，
+    #   导致「跑一次门禁 = 改一次台账」，resolved 状态在检查过程中被刷新。
+    ap.add_argument("--no-write", action="store_true",
+                    help="只计算不落盘（门禁调用时使用）")
     args = ap.parse_args()
 
     led = build(args.ticker, args.date)
@@ -465,7 +520,8 @@ def main() -> int:
         return 1
 
     out = EVID / f"{args.ticker}_{args.date}.gaps.json"
-    out.write_text(json.dumps(led, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    if not args.no_write:
+        out.write_text(json.dumps(led, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
 
     print("=" * 100)
     _res = led.get("resolved_count", 0)

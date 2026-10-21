@@ -46,6 +46,7 @@ import datetime as dt  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from quant.edgar_fundamentals import get_point_in_time
+from wb_analysis import _clock
 
 # 判定门槛（年化）
 STRONG = 0.08      # 3 年 CAGR >= 8% ⇒ 成长被证实
@@ -97,7 +98,7 @@ def main() -> int:
     args = ap.parse_args()
 
     yf_growth: dict[str, float] = {}
-    as_of = args.as_of or dt.date.today().isoformat()
+    as_of = args.as_of or _clock.iso_today()
     if args.tickers:
         tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
     else:
@@ -139,7 +140,7 @@ def main() -> int:
     df = pd.DataFrame(rows)
     out_dir = ROOT / "reports" / "_datasets"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"growth_verify_edgar_{dt.date.today().isoformat()}.csv"
+    out = out_dir / f"growth_verify_edgar_{_clock.iso_today()}.csv"
     df.to_csv(out, index=False, encoding="utf-8-sig", lineterminator="\r\n")
     print(f"\n[verify] 已导出 {out.name}")
 

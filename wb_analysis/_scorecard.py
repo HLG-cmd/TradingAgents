@@ -44,6 +44,7 @@ if str(ROOT) not in sys.path:
 # ★ 2026-10-10：`TREE_RE` / 功能目录集原为本地字面量，与 `_reports_index.py` 逐字重复
 #   ⇒ 单一来源 `wb_analysis/_paths.py`。
 from wb_analysis._paths import FUNC_DIRS, TREE_RE, iter_report_trees  # noqa: E402
+from wb_analysis import _clock
 
 REPORTS = ROOT / "reports"
 CSV = REPORTS / "QUALITY.csv"
@@ -168,7 +169,7 @@ def score_tree(tr: Path, prev_cache: dict[str, dict[str, str]] | None = None) ->
         "honest_marks": sum(1 for w in HONEST_WORDS if w in report),
         "conditional": "yes" if sum(1 for w in COND_WORDS if w in report) >= 2 else "",
         "traceable": traceable,
-        "scored_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "scored_at": _clock.now().strftime("%Y-%m-%d %H:%M"),
     }
 
 

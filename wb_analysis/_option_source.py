@@ -198,8 +198,37 @@ class CboeChain:
 
     @property
     def spot(self) -> float | None:
-        v = (self.raw.get("data") or {}).get("current_price")
-        return float(v) if v else None
+        """CBOE 快照的标的现价（ATM 选取与 BSM 反解的唯一基准）。
+
+        ★ 2026-10-21 修（NFLX 10-20 盘后实测，**口径不匹配导致的静默失真**）：
+          CBOE 的 ``current_price`` 是**含扩展时段的最后成交价**，而期权链的
+          ``bid``/``ask`` 是**常规时段收盘快照**（本接口盘后返回上一时段快照）。
+          两者混用 = 用「盘后已重定价的 spot」去反解「常规时段收盘的报价」——
+          实测 NFLX 10-20：常规收盘 68.69，盘后因财报跌到 64.72（−5.78%），
+          于是 ATM 按 64.72 选到远离真实价的合约，产出
+          ATM_C IV 101.44% vs ATM_P 34.26%、25Δ 偏斜 **−41.78pp**（真实值应为正、量级 ~1pp），
+          而 IV 等级仍报 FULL —— 典型的静默失败。
+
+          ⇒ 判据：``current_price`` 与 ``close`` 偏离 >5% 时，视为**跨时段口径不匹配**
+            （而非数据错误），改用 ``close`` 与期权报价的时点对齐；
+            盘中两者本应接近（15 分钟延迟），此时保留 ``current_price``（更实时）。
+            偏离超阈值时**打印警告**（不静默回退，便于审计）。
+          ⚠️ 注意：``close`` 只是**期权反解的锚**，不代表「最新价」——盘后真实价格
+            见证据包 §14（扩展时段），两者不可互相替代（铁律 4）。
+        """
+        data = self.raw.get("data") or {}
+        try:
+            cur = float(data["current_price"]) if data.get("current_price") is not None else None
+            close = float(data["close"]) if data.get("close") is not None else None
+        except (TypeError, ValueError):
+            return None
+        if cur is None or cur <= 0:
+            return close
+        if close is not None and close > 0 and abs(cur / close - 1.0) > 0.05:
+            print(f"  ⚠ CBOE current_price {cur:.2f} 与 close {close:.2f} 偏离 "
+                  f"{(cur / close - 1.0) * 100:+.1f}% > 5% ⇒ 改用 close 作 spot")
+            return close
+        return cur
 
     @property
     def iv30(self) -> float | None:

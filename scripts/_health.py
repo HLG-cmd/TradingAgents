@@ -98,11 +98,18 @@ def chk_reports() -> tuple[str, str]:
     「崩溃 ≠ 检出问题」，但 **本检查当时没有同样的保护**。
 
     ⇒ 修法：**先验 rc，再看内容**。`rc != 0` 一律不得进 PASS 分支。
+
+    ★★ 2026-10-19 修（同一判据的另一面）：`_reports_index.py --check` 的退出码
+    **契约是「0=干净，1=检出问题」**（见其 `--help`）。上一版把 `rc != 0` 一律
+    当成「工具崩溃」，于是「检出问题」被误报成「无法判断」的 FAIL，
+    下面带清理入口（`_seal_run.py --orphans --apply`）的 WARN 分支**永远不可达**。
+    ⇒ 只有 **`0/1` 之外**的退出码才是崩溃；`rc == 1` 却列不出任何问题条目时，
+    才判「输出自相矛盾」。
     """
     rc, out = run([PY, str(ROOT / "wb_analysis" / "_reports_index.py"), "--check"])
+    first = out.strip().splitlines()[0][:70] if out.strip() else "(无输出)"
     # ① 先验「工具是否真的跑成功」—— 崩溃时不得把「无输出」读成「无问题」
-    if rc != 0:
-        first = out.strip().splitlines()[0][:70] if out.strip() else "(无输出)"
+    if rc not in (0, 1):
         return "FAIL", f"`_reports_index.py --check` 未正常退出（rc={rc}）⇒ 无法判断，首行：{first}"
     lines = [l.strip() for l in out.splitlines() if l.strip().startswith("- [")]
     n = len(lines)
@@ -112,6 +119,10 @@ def chk_reports() -> tuple[str, str]:
             # ② 连「报告树 N 棵」都解析不到 ⇒ 输出格式已变，不能假定为 0
             return "WARN", ("`_reports_index.py --check` 输出无法解析（未见「报告树 N 棵」）"
                             "⇒ **不能假定为 0 问题**，请人工跑一次确认")
+        if rc == 1:
+            # ③ 退出码说「有问题」，却一条明细都没列出 ⇒ 输出自相矛盾，不能当干净
+            return "FAIL", ("`_reports_index.py --check` 退出码 1（契约=检出问题）"
+                            f"但未列出任何问题条目 ⇒ 无法判断，首行：{first}")
         return "PASS", f"报告树 {m.group(1)} 棵，无堆积问题"
     # ★ 2026-10-11（O6）：告警必须**带可执行入口**。
     #   此前只报「N 项待整理（孤儿/重复/散落）」，操作者得自己猜到该跑
@@ -271,7 +282,7 @@ def chk_gitignore() -> tuple[str, str]:
 ROOT_PY_ALLOWED = {"conftest.py"}
 ROOT_FILE_ALLOWED = {
     "conftest.py", "pyproject.toml", "README.md", "LICENSE",
-    "screen.bat", "start.bat", ".env", ".env.example", ".gitignore",
+    "screen.bat", "start.bat", ".env", ".env.example", ".gitignore", ".gitattributes",
     "requirements.lock.txt",          # 依赖锁定快照（2026-10-16 新增）
 }
 
@@ -501,7 +512,11 @@ BASELINE_K = "not DeepSeekLive"
 #    含 TRAder 列走 PROPOSAL_RE 兜底的**已知边界**（已文档化：pick() 不认 Action 标签，
 #    但 scan() 对 47/51 棵有 RUN.json 的树走清单，故真实显示仍是 Title Case）；
 #   ③ 报告树命名契约 TREE_RE 与功能目录 SKIP_DIRS。
-BASELINE_PASSED = 929
+BASELINE_PASSED = 937
+# ★ 2026-10-21（第二次）：935 → 937。依据＝实测 `pytest tests/ -q` 输出「937 passed」，
+#   增量 2 项来自统一网络重试参数化测试：
+#   - test_retry_with_custom_retryable_tuple (支持异常元组)
+#   - test_retry_with_custom_retryable_callable (支持判定谓词)
 # ★ 2026-10-17（第二次）：921 → 929。依据＝实测 `pytest tests/ -q` 输出「929 passed」，
 #   增量 8 项全部来自 `tests/test_health_checkers.py::TestChkGitignoreCommentAware`：
 #   锁定本日第 6 例「检查器判据缺陷」—— `chk_gitignore` 的文本层原用**精确相等**

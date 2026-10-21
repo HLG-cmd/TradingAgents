@@ -1,6 +1,6 @@
 # lifecycle: reusable
 # created: 2026-09-23
-# usage: ./.venv/Scripts/python.exe wb_analysis/_gen_supplement.py
+# usage: ./.venv/Scripts/python.exe wb_analysis/_gen_supplement.py <TICKER> <YYYY-MM-DD>
 """生成 `<TICKER>_<date>.supplement.md`：证据包 §3 被上游扣留时的**一等替代证据源**。
 
 背景（项目铁律 3「静默失败」的已知形态之一）：
@@ -110,6 +110,11 @@ def _selfcalc_section(ticker: str, date: str, info: dict, fi: dict) -> str:
 
 
 def main() -> int:
+    # ★ 2026-10-20：无参时原来直接抛 IndexError 裸 traceback（实测踩到），
+    #   与「usage 必须自解释」的项目约定不符 ⇒ 缺参给出用法并以 2 退出。
+    if len(sys.argv) < 3:
+        print("用法: ./.venv/Scripts/python.exe wb_analysis/_gen_supplement.py <TICKER> <YYYY-MM-DD>")
+        return 2
     ticker = sys.argv[1]
     date = sys.argv[2]
     now_et = datetime.now(timezone.utc).astimezone(ET)

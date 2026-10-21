@@ -314,6 +314,18 @@ def build(ticker: str, date: str) -> int:
     out = out_dir / "0_derived.md"
     content = "\n".join(L) + "\n"
     out.write_text(content, encoding="utf-8", newline="\n")
+    # ★ 2026-10-21 修（518880 实测）：原实现只写 drafts/0_derived.md，**不写
+    #   evidence/<T>_<date>.derived.md 副档**；而美股路径（_gen_derived_stock.py）
+    #   两边都写 ⇒ 封存时 A 股 ETF 轮的证据副档缺失（审计包里少 2 项，
+    #   与 512400 轮的 5 项证据结构不一致）。补齐副档，口径与 drafts 版逐字相同。
+    try:
+        ev_dir = EVID if (EVID := ROOT / "wb_analysis" / "evidence").exists() else None
+        if ev_dir is not None:
+            ev_out = ev_dir / f"{ticker}_{date}.derived.md"
+            ev_out.write_text(content, encoding="utf-8", newline="\n")
+            print(f"  ⇒ 副档已同步 {ev_out.relative_to(ROOT).as_posix()}")
+    except OSError as exc:
+        print(f"  ⚠ 副档写入失败（不阻断主流程）：{exc}")
     print(f"  ⇒ 写入 {out.relative_to(ROOT).as_posix()}（{len(content)} 字符）")
     print(f"     K 线 {len(closes)} 根 ｜ quote={len(quote)} tech={len(tech)} chip={len(chip)} ｜ "
           f"铁律24 命中: {', '.join(flagged) if flagged else '无'}")

@@ -224,8 +224,7 @@ __marimo__/
 reports/
 
 # ── 本项目自建：瞬态产物（跑完会被封存进 reports/**/_source.zip，平时应为空）──
-wb_analysis/evidence/*
-!wb_analysis/evidence/TREASURY*
+wb_analysis/evidence/
 wb_analysis/drafts/
 wb_analysis/analysis/
 wb_analysis/_cache/
@@ -261,3 +260,9 @@ _r5_logs*.txt
 # 本地私有自动化任务脚本（仅本地运行，不入对外仓库）
 scripts/run_nasdaq_premarket*
 
+# --- governance: 一次性脚本与数据快照 ---
+scripts/_oneoff/
+wb_analysis/_oneoff/
+scripts/*.csv
+image*.png
+Claude-*.md

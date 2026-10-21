@@ -19,6 +19,7 @@ import argparse
 import json
 import re
 import sys
+import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from wb_analysis import _clock  # noqa: E402
 from wb_analysis._contract import PROPOSAL_RE, is_non_tree_artifact  # noqa: E402
 from wb_analysis._paths import ALLOWED_TOP, FUNC_DIRS, TREE_RE  # noqa: E402
 
@@ -254,7 +256,7 @@ def scan() -> tuple[list[dict], list[str]]:
         长得一模一样，操作者无从判断该等还是该清 —— 本机多会话并行时尤其致命。
         """
         try:
-            hrs = (datetime.now() - datetime.fromtimestamp(p.stat().st_mtime)).total_seconds() / 3600
+            hrs = (time.time() - p.stat().st_mtime) / 3600
         except OSError:
             return ""
         return f"（已滞留 {hrs:.1f} 小时）" if hrs >= 1 else f"（{hrs * 60:.0f} 分钟前，可能仍在写入）"
@@ -298,7 +300,7 @@ def write_index(rows: list[dict], issues: list[str]) -> Path:
         if t not in cur or r["tree"] > cur[t]["tree"]:
             cur[t] = r
     L = ["# 报告索引（自动生成，勿手改）", "",
-         f"- 生成时间：{datetime.now():%Y-%m-%d %H:%M:%S}",
+         f"- 生成时间：{_clock.now():%Y-%m-%d %H:%M:%S}",
          f"- 扫描范围：`reports/<标的>/<标的>_<时间戳>/`（12 角色报告树）",
          f"- 报告树总数：**{len(rows)}**，覆盖标的 **{len(cur)}** 个", "",
          "## 一、每个标的的最新报告", "",

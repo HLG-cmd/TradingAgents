@@ -14,6 +14,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from wb_analysis import _clock
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -364,7 +365,7 @@ def render_html_report(data: dict) -> str:
         body_sections.append("\n".join(body_parts))
         sec_idx += 1
 
-    generated_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    generated_time = _clock.now().strftime("%Y-%m-%d %H:%M:%S")
 
     return f"""<!doctype html>
 <html lang="zh-CN">

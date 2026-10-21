@@ -123,6 +123,14 @@ def main() -> int:
                   "4_risk/aggressive.md", "4_risk/conservative.md", "4_risk/neutral.md")
 
     def _tier_hits(text: str) -> int:
+        # 决策卡是**已授权的摘要渲染**（`assemble.build_decision_card`），
+        # 它把六席评级在一屏内重述一次 ⇒ 若不剔除，本轮 6 席恰 1 处的稿
+        # 会被判成「合成引入额外评级词」（实测 512400.SS：9 处 ≠ 6 处）。
+        # 剔除方式：去掉 `## 决策卡` 到下一个 `## ` 之间的整段。
+        # 这样既保留「渲染环节不得夹带未授权评级词」的检查力，
+        # 又不把唯一被认可的摘要块算成违规。★ 若以后再往报告首屏加
+        # 其他重述评级的区块，必须同步在此登记，否则门禁会误报。
+        text = re.sub(r"## 决策卡.*?(?=\n## )", "", text, flags=re.S)
         return sum(len(re.findall(rf"\b{w}\b", text)) for w in RATINGS_5_TIER)
 
     per_seat: list[tuple[str, int]] = []

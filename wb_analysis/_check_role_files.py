@@ -69,7 +69,7 @@ def main() -> int:
             bad += 1
             continue
         files = [p for p in sorted(d.rglob("*.md"))
-                 if not p.name.startswith("0_") and not p.name.startswith("_")
+                 if not p.name.startswith("0_") and not p.name.startswith("_") and not p.name.startswith(".")
                  # ⚠️ 2026-10-02：与 `_lint_drafts.py` 对齐——排除 `_stale` / `_archive`。
                  #    被作废的旧稿不参与交付，却被本检查器计入「问题项」，制造了 6 条噪声
                  #    （manager_stale / trader_stale / 4 个风险席位 _stale）。

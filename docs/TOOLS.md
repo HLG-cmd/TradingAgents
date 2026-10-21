@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-18 23:11
+- 生成时间：2026-10-21 23:25
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -31,6 +31,7 @@
 | `wb_analysis/_audit_empty_sections.py` | 审计证据包的「**小节正文为空**」—— 抓「通道全绿但内容是空」这类静默失败。 | ./.venv/Scripts/python.exe wb_analysis/_audit_empty_sections.py <evidence.md> [--strict] |
 | `wb_analysis/_check_residuals.py` | 订正残留检查：防止「改了上游、忘了回头清下游」。 | ./.venv/Scripts/python.exe wb_analysis/_check_residuals.py <草稿目录> |
 | `wb_analysis/_check_role_files.py` | 角色文件体检：篇幅 / 裸五档英文词 / 越界 PROPOSAL / 合规声明 / 必需小节。 | ./.venv/Scripts/python.exe wb_analysis/_check_role_files.py |
+| `wb_analysis/_clock.py` | 唯一时间源（Single source of truth for time）。 | — |
 | `wb_analysis/_contract.py` | 12 角色输出契约的**唯一常量来源** —— 评级词、档位、白名单、正则全在这里定义一次。 | from wb_analysis._contract import ...   （库；被门禁们 import，不单独运行） |
 | `wb_analysis/_crosscheck_nasdaq.py` | 用 Nasdaq 官方公开 API 独立复核证据包 §1 的日线 OHLC（数据来源真实性核验）。 | ./.venv/Scripts/python.exe wb_analysis/_crosscheck_nasdaq.py <标的> [基准日]\n#   · 个股/ETF：官方接口直接逐条核对 OHLC\n#   · 指数（NDX/SPX）：官方接口不支持指数（rCode=400）⇒ 自动改用 QQQ/SPY 代理，只核对**日涨跌幅一致性** |
 | `wb_analysis/_derive_a_etf.py` | A股 ETF 派生指标计算器：从 A 股 ETF 证据包导出「需要算术推导」的二级指标。 | ./.venv/Scripts/python.exe wb_analysis/_derive_a_etf.py 515100 2026-10-13 |
@@ -40,15 +41,18 @@
 | `wb_analysis/_gen_derived_ndx.py` | 把 _derive_ndx.py 的 stdout 落盘（避免 shell 重定向写中文 + /tmp 路径问题）。 | ./.venv/Scripts/python.exe wb_analysis/_gen_derived_ndx.py |
 | `wb_analysis/_gen_derived_stock.py` | 把 _derive_stock.py 的 stdout 落成证据包同级文件（避免 shell 重定向写中文）。 | ./.venv/Scripts/python.exe wb_analysis/_gen_derived_stock.py |
 | `wb_analysis/_gen_meta.py` | 为草稿目录生成 `meta.json`（`assemble.py --from-dir` 的**必备**输入）。 | ./.venv/Scripts/python.exe wb_analysis/_gen_meta.py GOOG_2026-10-01 [NDX_2026-10-01 ...] |
-| `wb_analysis/_gen_supplement.py` | 生成 `<TICKER>_<date>.supplement.md`：证据包 §3 被上游扣留时的**一等替代证据源**。 | ./.venv/Scripts/python.exe wb_analysis/_gen_supplement.py |
+| `wb_analysis/_gen_supplement.py` | 生成 `<TICKER>_<date>.supplement.md`：证据包 §3 被上游扣留时的**一等替代证据源**。 | ./.venv/Scripts/python.exe wb_analysis/_gen_supplement.py <TICKER> <YYYY-MM-DD> |
 | `wb_analysis/_insider_agg.py` | 从证据包 §8 内部人交易 CSV 段落聚合买卖统计（回原始样本重数，不依赖任何摘要）。 | ./.venv/Scripts/python.exe wb_analysis/_insider_agg.py |
+| `wb_analysis/_log.py` | 流水线日志与"降级留痕"。 | — |
 | `wb_analysis/_nasdaq_official.py` | 拉 Nasdaq 官方 API 的日线并打印，用于人工对照 NDX 证据包 §1。 | ./.venv/Scripts/python.exe wb_analysis/_nasdaq_official.py |
+| `wb_analysis/_net.py` | 统一的网络重试。 | — |
 | `wb_analysis/_option_source.py` | 期权链数据源适配器：把 **CBOE 官方延迟报价** 适配成 yfinance ``Ticker`` 的接口形状。 | from wb_analysis._option_source import fetch_chain; （库，被采集器 import） |
 | `wb_analysis/_paths.py` | `reports/` 布局与「草稿扫描跳过」的**唯一常量来源** —— 目录名 / 功能目录 / 顶层白名单 / 归档跳过表。 | from wb_analysis._paths import TREE_RE, FUNC_DIRS, ALLOWED_TOP, SKIP_ARCHIVE_DIRS, iter_report_trees |
 | `wb_analysis/_probe_brief_facts.py` | 把证据包里「写简报所需的全部事实」压成一份短摘要（避免整包 60KB 进上下文）。 | ./.venv/Scripts/python.exe wb_analysis/_probe_brief_facts.py <TICKER> <DATE> [小节...] |
 | `wb_analysis/_probe_option_dual_quote.py` | 判定期权链「有双边报价」与「新鲜成交」两个集合的交集（决定期权维度能否使用）。 | ./.venv/Scripts/python.exe wb_analysis/_probe_option_dual_quote.py |
 | `wb_analysis/_probe_option_freshness.py` | 独立复核 GOOG 期权链的「快照新鲜度」。 | ./.venv/Scripts/python.exe wb_analysis/_probe_option_freshness.py |
 | `wb_analysis/_report_html.py` | 单页自包含 HTML 报告渲染器（吸收上游 v0.6.0 设计） | — |
+| `wb_analysis/_role_prompt.py` | 生成单个角色的**完整提示词** —— 用于跨平台、跨会话的子智能体拆分。 | ./.venv/Scripts/python.exe wb_analysis/_role_prompt.py 0700.HK 2026-10-16 bull [--out prompt.md] |
 | `wb_analysis/_rv_and_adjust_probe.py` | GOOG 已实现波动率（RV）与「复权价 vs 未调整价」诊断。 | ./.venv/Scripts/python.exe wb_analysis/_rv_and_adjust_probe.py |
 | `wb_analysis/_screen_pool.py` | 任意股票池的四维量化筛选 + 「高成长 x 低估值」交叉筛选。 | ./.venv/Scripts/python.exe wb_analysis/_screen_pool.py |
 | `wb_analysis/_screen_sp500_full.py` | SP500 全量（503）四维量化筛选 + 「高成长 x 低估值」交叉筛选。 | ./.venv/Scripts/python.exe wb_analysis/_screen_sp500_full.py |
@@ -67,14 +71,22 @@
 | `wb_analysis/collect_a_etf.py` | A股 ETF 证据采集器（westock CLI） | #   行业 ETF： ./.venv/Scripts/python.exe wb_analysis/collect_a_etf.py --ticker 512400.SS --date 2026-09-30 |
 | `wb_analysis/collect_a_stock.py` | A股个股证据采集器 —— 整合 westock CLI (腾讯官方接口) 与 TradingAgents 内置层。 | ./.venv/Scripts/python.exe wb_analysis/collect_a_stock.py --ticker 601899.SS --date 2026-10-16 |
 | `wb_analysis/collect_hk_index.py` | 采集**港股指数**证据（westock CLI）—— 项目首个港股链路。 | ./.venv/Scripts/python.exe wb_analysis/collect_hk_index.py --index hkHSTECH |
+| `wb_analysis/collect_hk_stock.py` | 港股个股**补充**采集器（westock CLI）—— 补主包的三类结构性缺口。 | ./.venv/Scripts/python.exe wb_analysis/collect_hk_stock.py 0700.HK 2026-10-16 |
 | `wb_analysis/collect_index.py` | 指数证据采集器（多指数，默认 NDX）—— 全程不调用任何 LLM。 | ./.venv/Scripts/python.exe wb_analysis/collect_index.py |
 | `wb_analysis/collect_treasury.py` | 采集**美债收益率曲线**（FRED）—— 项目首个宏观专题采集器（非 12 角色标的链路）。 | ./.venv/Scripts/python.exe wb_analysis/collect_treasury.py --date 2026-09-28 |
 | `wb_analysis/erp_context.py` | 股权风险溢价（ERP）的历史分位计算器 —— 解决「ERP 是偏低还是极端」缺少基准的问题。 | ./.venv/Scripts/python.exe wb_analysis/erp_context.py |
+| `wb_analysis/index_breadth.py` | 指数成分股市场宽度（Market Breadth）计算模块。 | — |
+| `wb_analysis/index_math.py` | Black-Scholes-Merton 金融工程纯数学计算模块。 | — |
+| `wb_analysis/index_options.py` | 指数与宽基 ETF 期权结构、波动率曲面与代理通道计算模块。 | — |
+| `wb_analysis/index_valuation.py` | 指数成分股估值、盈利质量与内部人交易聚合模块。 | — |
 
 ## maintenance —— 项目维护（门禁 / 清理 / 索引）
 
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|
+| `scripts/_apply_governance.py` | 治理落地脚本：补齐 lifecycle 头 + 收敛 pyproject.toml（默认干跑）。 | — |
+| `scripts/_codemod_clock.py` | 一次性 codemod：把 wb_analysis 里的裸本地时间改为走 wb_analysis/_clock.py。 | — |
+| `scripts/_diff_evidence_pack.py` | 证据包等价性比对——用于 collect_index.py 拆分子模块前后的行为回归。 | — |
 | `scripts/_health.py` | 项目健康检查：**一条命令看整个项目状态**（把散落的各处门禁汇总成一个入口）。 | ./.venv/Scripts/python.exe scripts/_health.py [--quiet] |
 | `scripts/_memory_index.py` | 为本地运行痕迹目录（`.workbuddy-ai/memory/`）生成**主题索引**（`_INDEX.md`）。 | ./.venv/Scripts/python.exe scripts/_memory_index.py [--check] |
 | `scripts/_probe_baseline.py` | （无文档字符串） | — |

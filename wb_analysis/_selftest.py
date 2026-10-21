@@ -42,7 +42,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
 HERE = Path(__file__).resolve().parent
 PY = sys.executable
 
@@ -692,7 +691,7 @@ def main() -> int:
     # 对策＝非盘中自动切 CBOE 官方延迟报价（做市商报价链，不依赖「当天有没有成交」）。
     #
     # **为什么必须在这里加夹具**：这条分支是**按时间**走的两条互斥路径，而它此前把
-    # `datetime.now()` 写死在函数体里 ⇒ **非盘中那条路径永远无法被测试**，
+    # `_clock.now()` 写死在函数体里 ⇒ **非盘中那条路径永远无法被测试**，
     # 只能靠「某天恰好凌晨跑一次」来验证 —— 而这正是「靠记得注意」而非「靠代码根除」，
     # 违反本项目的两条原则。现在时钟可注入（`_thresholds.option_source_decision(now=...)`），
     # 于是**两条路径都能被夹具证明**。

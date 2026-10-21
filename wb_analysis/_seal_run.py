@@ -30,6 +30,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -49,6 +50,7 @@ from wb_analysis._contract import is_non_tree_artifact  # noqa: E402
 # ★ 2026-10-10：功能目录集原为本地字面量（与 `_reports_index` / `_scorecard` 逐字重复）
 #   ⇒ 单一来源 `wb_analysis/_paths.py`。
 from wb_analysis._paths import FUNC_DIRS, TREE_RE  # noqa: E402
+from wb_analysis import _clock
 
 REPORTS = ROOT / "reports"
 EVID = ROOT / "wb_analysis" / "evidence"
@@ -143,6 +145,28 @@ def _arcname(kind: str, f: Path) -> str:
     return f"drafts/{f.relative_to(DRAFTS).as_posix()}"
 
 
+def _refresh_scorecard() -> None:
+    """封存后刷新 `reports/QUALITY.csv`。
+
+    ★ 2026-10-19 实测：两轮新树封存后都没进 QUALITY.csv，只有手工跑 `_scorecard.py`
+      才补上 —— 记分卡永远落后一轮，等于「质量趋势」这项长期指标是断的。
+      放在封存末尾（而非门禁里），因为它写报告目录、属维护动作，不是判据。
+    """
+    sc = ROOT / "wb_analysis" / "_scorecard.py"
+    if not sc.exists():
+        return
+    try:
+        p = subprocess.run([sys.executable, str(sc)], cwd=str(ROOT),
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if p.returncode == 0:
+            print("      ↻ 已刷新 reports/QUALITY.csv（_scorecard.py）")
+        else:
+            print(f"      ⚠ 记分卡刷新失败（rc={p.returncode}）："
+                  f"{(p.stdout or p.stderr or '').strip()[:80]}")
+    except Exception as e:  # noqa: BLE001
+        print(f"      ⚠ 记分卡刷新异常：{type(e).__name__}")
+
+
 def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
          rebuild: bool = False) -> int:
     d = DRAFTS / f"{ticker}_{date}"
@@ -150,7 +174,8 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
     if apply and q < QUIET_SECONDS and not force:
         print(f"  ✗ 拒绝封存：{d.relative_to(ROOT).as_posix()} 最近 {q:.0f} 秒内仍有写入 "
               f"（静默期要求 {QUIET_SECONDS} 秒）")
-        print("     ⇒ 极可能有子智能体仍在运行。请等它结束，或加 --force 明确承担风险。")
+        print("     ⇒ 两种情况：① 子智能体仍在写；② 你自己刚做完最后一次编辑（最常见）。")
+        print("       等静默期满再跑；确认无并发写入可加 --force 明确承担风险。")
         print("     （事故记录：2026-09-23 因过早封存导致交付树与审计包不一致）")
         return 3
     groups = artifacts_for(ticker, date)
@@ -238,7 +263,7 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
             zp = tree / "_source.zip"
             bdir = BACKUP_DIR
             bdir.mkdir(parents=True, exist_ok=True)
-            bak = bdir / f"source_{ticker}_{date}_{datetime.now():%Y%m%d_%H%M%S}.zip"
+            bak = bdir / f"source_{ticker}_{date}_{_clock.now():%Y%m%d_%H%M%S}.zip"
             import shutil as _sh
             _sh.copy2(zp, bak)
             with zipfile.ZipFile(zp, "r") as zin:
@@ -252,7 +277,7 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
                 #   否则与 SOURCE_MANIFEST（用 len(z.namelist())）口径不一致、恒少 1。
                 zout.writestr("SEAL.json", json.dumps({
                     "ticker": ticker, "data_date": date,
-                    "sealed_at": datetime.now().isoformat(timespec="seconds"),
+                    "sealed_at": _clock.now().isoformat(timespec="seconds"),
                     "report_tree": tree.name, "n_entries": len(old_entries) + 1,
                 }, ensure_ascii=False, indent=2) + "\n")
             with zipfile.ZipFile(zp) as zchk:
@@ -292,7 +317,7 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
         old = tree / "_source.zip"
         bdir = BACKUP_DIR
         bdir.mkdir(parents=True, exist_ok=True)
-        bak = bdir / f"source_{ticker}_{date}_{datetime.now():%Y%m%d_%H%M%S}.zip"
+        bak = bdir / f"source_{ticker}_{date}_{_clock.now():%Y%m%d_%H%M%S}.zip"
         if apply:
             import shutil as _sh
             _sh.copy2(old, bak)
@@ -332,7 +357,7 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
             z.writestr(arc, carried[arc])
         # ★ 2026-10-16 修：`+ 1` 是为了把 SEAL.json 自身计入（与 SOURCE_MANIFEST 同口径）。
         z.writestr("SEAL.json", json.dumps({
-            "ticker": ticker, "data_date": date, "sealed_at": datetime.now().isoformat(timespec="seconds"),
+            "ticker": ticker, "data_date": date, "sealed_at": _clock.now().isoformat(timespec="seconds"),
             "report_tree": tree.name, "n_entries": len(expected) + 1,
         }, ensure_ascii=False, indent=2) + "\n")
 
@@ -414,7 +439,7 @@ def orphans(apply: bool) -> int:
     if not found:
         print("  ✓ 无孤儿产物")
         return 0
-    zp = BACKUP_DIR / f"orphans_{datetime.now():%Y%m%d_%H%M%S}.zip"
+    zp = BACKUP_DIR / f"orphans_{_clock.now():%Y%m%d_%H%M%S}.zip"
     print(f"  发现 {len(found)} 组孤儿产物（无对应报告树）：")
     allf: dict[str, Path] = {}
     for tk, dt, groups in found:
@@ -455,7 +480,11 @@ def orphans(apply: bool) -> int:
                 d.rmdir()
             except OSError:
                 pass
-    print(f"  ✓ 已删除 {n} 个孤儿文件；回滚包 {zp.relative_to(ROOT).as_posix()}")
+    # ★ 2026-10-20：回滚包固定落在 `BACKUP_DIR`（系统临时目录），**不在 ROOT 之下**，
+    #   `zp.relative_to(ROOT)` 必抛 ValueError 且掩盖「已删除成功」的结果——
+    #   只在 ROOT 内时用项目相对路径显示，否则回退为绝对路径。
+    disp = zp.relative_to(ROOT).as_posix() if str(zp).startswith(str(ROOT)) else zp.as_posix()
+    print(f"  ✓ 已删除 {n} 个孤儿文件；回滚包 {disp}")
     return 0
 
 
@@ -521,7 +550,10 @@ def main() -> int:
         if not trees:
             print(f"✗ 找不到 {tk} {dt} 的报告树")
             return 1
-        return seal(tk, dt, max(trees), args.apply, args.force, args.rebuild)
+        rc = seal(tk, dt, max(trees), args.apply, args.force, args.rebuild)
+        if rc == 0 and args.apply:
+            _refresh_scorecard()
+        return rc
 
     runs = runs_in_reports()
     if not runs:
@@ -573,6 +605,8 @@ def main() -> int:
             r = seal(tk, dt, tree, True, args.force, args.rebuild)
             if r != 0:
                 rc = r
+        if rc == 0:
+            _refresh_scorecard()
         return rc
     return 0
 

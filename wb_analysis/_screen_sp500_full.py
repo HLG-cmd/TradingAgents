@@ -35,6 +35,7 @@ import datetime as dt  # noqa: E402
 
 from quant.screener_engine import export_radar_csv, run_quant_screening
 from quant.stock_pools import get_latest_sp500
+from wb_analysis import _clock
 
 # ── 交叉筛选门槛（均为 0~100 的截面百分位得分）────────────────────────────
 TIERS = [
@@ -65,7 +66,7 @@ def main() -> int:
 
     out_dir = ROOT / "reports" / "_datasets"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"radar_sp500full_{dt.date.today().isoformat()}.csv"
+    out = out_dir / f"radar_sp500full_{_clock.iso_today()}.csv"
     export_radar_csv(full, str(out))
     print(f"[screen] 明细已导出 {out.name}  （{len(full)} 只）")
     print(f"[screen] 扫描 {meta.get('scanned')} / 有效 {meta.get('valid')} / 失败 {meta.get('failed')}")

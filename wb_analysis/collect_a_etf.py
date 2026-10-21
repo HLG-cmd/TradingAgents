@@ -31,6 +31,7 @@ import argparse
 import datetime as dt
 import json
 import pathlib
+import re
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -43,7 +44,9 @@ EVID_DIR = ROOT / "wb_analysis" / "evidence"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 # westock CLI 的统一接入层（路径解析 + 调用 + 表格解析），与 collect_hk_index.py 共用。
-from wb_analysis._westock import WESTOCK, parse_md_table, run_westock  # noqa: E402
+from wb_analysis._westock import (  # noqa: E402
+    WESTOCK, filter_news_asof, parse_md_table, run_westock,
+)
 
 # ── 标的档案表：名称 / 模式 / 行业板块 / 跟踪指数 显式登记 ──
 #    未登记的标的也能跑（--mode 由参数决定），但名称会标为 [未登记]，
@@ -59,6 +62,11 @@ KNOWN: dict[str, dict] = {
     #   两者费率也不同（563020 管理费 0.15% 为同指数最低档）。
     "563020": {"wcode": "sh563020", "name": "红利低波ETF易方达", "mode": "strategy",
                "track_index": "csH30269", "track_name": "中证红利低波动"},
+    # ★ 2026-10-21 新增：黄金 ETF（「积存金」的场内等价物）。
+    #   518880 华安黄金ETF：跟踪国内黄金现货价格（AU9999），规模与流动性均为同类第一，
+    #   是散户「积存金」需求在 A 股最直接的场内替代。
+    #   ⚠️ 商品型：无盈利/无分红/无 PB ⇒ 禁止引用权益估值，只能比费率/跟踪误差/折溢价。
+    "518880": {"wcode": "sh518880", "name": "黄金ETF华安", "mode": "commodity"},
 }
 UNKNOWN_NAME = "[未登记标的]"
 
@@ -83,7 +91,37 @@ def pct(v, digits=2) -> str:
 
 
 def ok_of(raw: str) -> bool:
-    return ("<westock" not in raw) and bool(raw.strip())
+    """通道是否真的取到了数据（**不是**「返回了非空文本」）。
+
+    ★ 2026-10-21 修（518880 黄金 ETF 实测，**假绿**）：
+      westock 在标的代码非法时返回的是**中文错误文本**，例如
+      「查询dayK线失败：[code=1620053001] error_type=2 suggest=3 msg=service error」——
+      它既不含 ``<westock`` 标签、又非空 ⇒ 旧判据 `("<westock" not in raw) and bool(raw)`
+      把 14 个通道**全部判成 ok**，证据包通篇「[未取到]」却报「成功 14/14」。
+      ⇒ 补三类失败签名：中文「失败」、``service error``、``error_type=``。
+    """
+    t = str(raw or "")
+    if not t.strip() or "<westock" in t:
+        return False
+    return not any(k in t for k in ("查询", "失败", "service error", "error_type="))
+
+
+def _wcode_of(ticker: str) -> str:
+    """把标的代码规范成 westock 的 ``sh``/``sz`` 前缀形式。
+
+    ★ 2026-10-21 修（518880 实测）：原实现只在**带后缀**时加前缀
+      （``512400.SS`` → ``sh512400``），未登记且不带后缀的代码（``518880``）
+      会**原样**传给 westock ⇒ 全部通道返回 service error，且因假绿判据照报 14/14。
+      ⇒ 判据：显式后缀优先（.SS/.SH→sh，.SZ→sz）；无后缀按代码首位推断
+        （5/6/9 开头 = 上交所，0/1/2/3 开头 = 深交所），无法判定时原样返回。
+    """
+    t = str(ticker).strip()
+    if "." in t:
+        code, _, suf = t.partition(".")
+        return ("sh" if suf.upper() in ("SS", "SH") else "sz") + code
+    if len(t) == 6 and t.isdigit():
+        return ("sh" if t[0] in "569" else "sz") + t
+    return t
 
 
 # ── 解读判语（数据驱动；数据不符时自动降级为中性，不出错话）──
@@ -343,7 +381,11 @@ def build_tasks(mode: str, wcode: str, track_index: str | None,
         ("technical", ["technical", wcode, "--date", date]),
         ("chip", ["chip", wcode, "--date", date]),
         ("fund_flow", ["fund", "flow", wcode, "--date", date]),
-        ("news", ["news", "list", wcode, "--limit", "10"]),
+        # ★ 2026-10-20：`--limit 10` 只够拿「当下」的 10 条；基准日只要不是今天，
+        #   这 10 条就会全部被 as-of 过滤剔光（实测 10-19 基准日：10 条全是 10-20 的
+        #   早间消息 ⇒ 过滤后新闻为 0 条，等于把一条通道悄悄关掉）。
+        #   放大到 40 条，保证窗口能覆盖到基准日及之前。
+        ("news", ["news", "list", wcode, "--limit", "40"]),
         # 日频无风险利率与期限利差
         ("macro_term_spread", ["macro", "indicator", "cn_term_spread", "--date", date]),
         # 股债/红利溢价率
@@ -390,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
     ticker = args.ticker
     date = args.date
     meta = KNOWN.get(ticker, {})
-    wcode = meta.get("wcode") or ("sh" + ticker.split(".")[0] if "." in ticker else ticker)
+    wcode = meta.get("wcode") or _wcode_of(ticker)
     mode = args.mode or meta.get("mode") or "industry"
     track_index = args.track_index or meta.get("track_index")
     sector_code = args.sector or meta.get("sector")
@@ -1044,9 +1086,15 @@ def _append_flow_and_news(L, fund_flow, raw, date, start: int = 5, news_prefix: 
     L.append("")
     L.append("---")
     L.append("")
-    L.append(f"## {start + 1}. {news_prefix}新闻与要闻动态 ({date} 及近期)")
+    news_body, n_dropped = filter_news_asof(raw.get("news", "").strip(), date)
+    head = f"## {start + 1}. {news_prefix}新闻与要闻动态 (as-of {date}，晚于基准日者已剔除)"
+    L.append(head)
     L.append("")
-    L.append(raw.get("news", "").strip())
+    L.append(news_body)
+    if n_dropped:
+        L.append("")
+        L.append(f"> **as-of 过滤**：剔除 {n_dropped} 条晚于基准日 {date} 的条目"
+                 f"（资讯流按「当下」返回，不按 `--date` 截断；保留会造成前视偏差）。")
     L.append("")
 
 
