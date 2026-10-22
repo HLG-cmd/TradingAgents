@@ -589,6 +589,13 @@ def _price_summary(csv_text: object) -> tuple[str, dict]:
     close = df["Close"]
     last = float(close.iloc[-1])
     stats: dict = {"latest_close": round(last, 2), "bars": int(len(df))}
+    # 末根**已收盘** bar 的日期（未收盘 bar 已在上面按「时点优先」剔除）。
+    # 2026-10-22 修：下游（collect_index 的跨资产通道新鲜度基准）原来用
+    # 「§1 文本里所有日期字符串的最大值」推 ref_date，会把采集头里的 as_of
+    # 日期也算进去 ⇒ 基准被推到未收盘的当天，正常的最新已完成交易日被误判
+    # stale、缺行补齐条件（ref < as_of）失效。此处显式回传末根日期根治。
+    _last_d = df["Date"].iloc[-1] if "Date" in df.columns else df.index[-1]
+    stats["last_bar_date"] = str(_last_d)[:10]
     stats.update(unclosed_info)
 
     for label, n in (("ret_5d", 5), ("ret_20d", 20), ("ret_60d", 60), ("ret_120d", 120)):

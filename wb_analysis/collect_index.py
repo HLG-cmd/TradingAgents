@@ -247,8 +247,12 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
     # 指数自身最后一根**已收盘** bar 的日期 = 跨资产通道的新鲜度基准（ref_date）。
     # 盘中/盘前采集时 as_of 当日尚未收盘，§12/§14 的日线只能到上一交易日；
     # 直接用 as_of 当基准会把「正常的最新已完成交易日」误判成陈旧。
-    _px_dates = re.findall(r"\d{4}-\d{2}-\d{2}", str(text))
-    ref_date = max(_px_dates) if _px_dates else as_of
+    # ★ 2026-10-22 修：旧实现对 §1 全文做日期正则取 max，把采集头里的
+    #   as_of 也算进去 ⇒ ref=as_of（未收盘当天）。改为直接取 _price_summary
+    #   回传的末根已收盘 bar 日期（该函数已按「时点优先」剔除未收盘 bar）。
+    ref_date = str(price_stats.get("last_bar_date") or "")[:10]
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", ref_date):
+        ref_date = as_of
 
     # --- 2. 指数技术指标 ---
     ind_lines = []
