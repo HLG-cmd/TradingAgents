@@ -192,7 +192,7 @@ def _load_cached(kind: str, max_age_days: float = 1.0) -> list[str] | None:
         data = json.loads(p.read_text(encoding="utf-8"))
         tickers = data.get("tickers") or []
         return tickers if len(tickers) >= 90 else None
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -204,7 +204,7 @@ def _save_cached(kind: str, tickers: list[str], url: str) -> None:
             "count": len(tickers),
             "tickers": tickers,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
+    except OSError:
         pass   # 缓存写不进去不该影响主流程
 
 

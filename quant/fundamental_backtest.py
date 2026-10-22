@@ -249,7 +249,7 @@ def main() -> int:
     for _i, _tk in enumerate(_cols, 1):
         try:
             cumulative_split_factor(_tk, str(C.index[-1])[:10])
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         if _i % 50 == 0 or _i == len(_cols):
             _el = time.time() - _t0

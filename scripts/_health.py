@@ -518,6 +518,12 @@ BASELINE_K = "not DeepSeekLive"
 #    含 TRAder 列走 PROPOSAL_RE 兜底的**已知边界**（已文档化：pick() 不认 Action 标签，
 #    但 scan() 对 47/51 棵有 RUN.json 的树走清单，故真实显示仍是 Title Case）；
 #   ③ 报告树命名契约 TREE_RE 与功能目录 SKIP_DIRS。
+# 2026-10-22（第二次）：1078 → 1111。新增 5 个 quant 模块单测（33 项）：
+#   - tests/quant/test_cleanup_cache.py（8 项：目录尺寸统计、嵌套清理、keep-edgar/prices、--yes/status）
+#   - tests/quant/test_wb_deep_dive.py（8 项：动态池路由、核心子集、自定义代码、一阶段初筛与导出）
+#   - tests/quant/test_smart_screener.py（3 项：因子权重总和、--skip-agent 量化初筛与导出）
+#   - tests/quant/test_factor_backtest.py（8 项：Spearman秩相关、IC/ICIR/t-stat、趋势加权、五分位差）
+#   - tests/quant/test_fundamental_backtest.py（6 项：截面百分位与行业中性化、多因子加权、五分位差）
 # 2026-10-22：1039 → 1078。新增 4 个门禁测试模块（39 项）：
 #   - tests/test_wb_paths.py（14 项：TREE_RE 命名契约 / FUNC_DIRS / iter_report_trees 枚举）
 #   - tests/test_wb_check_residuals.py（8 项：订正残留分类 / 留痕豁免 / 真残留检出）
@@ -525,7 +531,7 @@ BASELINE_K = "not DeepSeekLive"
 #   - tests/test_wb_verify_ratings.py（5 项：评级词扫描 / 席位白名单 / 必需字段）
 #   - tests/test_wb_thresholds.py（+1 项：US_MARKET_HOLIDAYS 2024-2027 锚点测试）
 #   - tests/test_wb_contract.py（+5 项：FIVE_RE 小写英文正文不误报）
-BASELINE_PASSED = 1078
+BASELINE_PASSED = 1111
 # ★ 2026-10-21（第二次）：935 → 937。依据＝实测 `pytest tests/ -q` 输出「937 passed」，
 #   增量 2 项来自统一网络重试参数化测试：
 #   - test_retry_with_custom_retryable_tuple (支持异常元组)

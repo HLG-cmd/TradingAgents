@@ -185,7 +185,7 @@ def main():
             csv_file = reports_dir / f"radar_{pool_key}_{datetime.date.today().isoformat()}.csv"
             export_radar_csv(src_df, str(csv_file))
             console.print(f"\n[green][OK] 量化明细已导出（UTF-8 BOM，Excel 可直接打开）: {csv_file.name}[/green]")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         console.print(f"\n[yellow][WARN] CSV 导出失败: {exc}[/yellow]")
 
     # 4. 候选标的确认与辩论轮数配置
@@ -270,7 +270,7 @@ def main():
                 "ResearchPlan": research_plan,
             })
             console.print(f"[green][OK] {ticker} 会诊完成！评级: {decision_text}[/green]")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             console.print(f"[red][FAIL] {ticker} 会诊出现异常: {e}[/red]")
             final_results.append({
                 "Ticker": ticker,
@@ -300,7 +300,8 @@ def main():
     console.print(final_table)
 
     # 4. 生成完整研报 Markdown
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    _now = datetime.datetime.now(datetime.timezone.utc).astimezone()
+    timestamp = _now.strftime("%Y%m%d_%H%M%S")
     reports_dir = PROJECT_ROOT / "reports" / "_other"      # 非 12 角色的专题报告统一落 _other/
     reports_dir.mkdir(parents=True, exist_ok=True)
     report_file = reports_dir / f"screener_{pool_key}_{timestamp}.md"
@@ -312,13 +313,13 @@ def main():
         f"趋势 {FACTOR_WEIGHTS['trend']*100:.0f}%"
     )
     md_content = f"# {pool_name} 智能量化漏斗与终审报告 (v2.0)\n\n"
-    md_content += f"- **生成时间**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+    md_content += f"- **生成时间**: {_now.strftime('%Y-%m-%d %H:%M:%S')}\n"
     md_content += f"- **多因子模型**: 四维 GARP ({w_str})\n"
     md_content += f"- **辩论轮数**: {debate_choice} 轮对抗交锋\n\n"
     md_content += "## 一、四维 GARP 多因子初筛 Top 10\n\n"
     try:
         md_content += top_10.to_markdown(index=False) + "\n\n"
-    except Exception:
+    except Exception:  # noqa: BLE001
         md_content += top_10.to_string(index=False) + "\n\n"
 
     if failed_records:

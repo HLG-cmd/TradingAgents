@@ -97,6 +97,8 @@ ignore = ["E501", "B905", "B023", "E402", "SIM102", "SIM105", "SIM108", "SIM300"
 "**/__init__.py" = ["F401"]   # intentional re-exports
 "wb_analysis/**" = ["E501", "E741", "F401" ]
 "scripts/**" = ["E501", "E741", "F401" ]
+"tradingagents/**" = ["BLE001"]
+"cli/**" = ["BLE001"]
 
 [tool.ruff.lint.isort]
 # Keep multiple aliased names from one module in a single combined import block

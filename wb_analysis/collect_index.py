@@ -24,6 +24,8 @@
   2) **成分结构**：ETF 代理真实权重前十大 + 集中度（HHI）+ 行业分布
   3) **市场广度**：% 站上 200SMA / 50SMA、涨跌家数、**等权 vs 加权收益背离**（判断上涨是否健康）
   4) **内部人聚合**：成分股内部人买卖净额（替代指数的内部人维度）
+  5) **跨资产基准**（§14，2026-10-22 新增）：纳斯达克100期货 / 原油（WTI+布伦特）/
+     美债收益率曲线（5Y/10Y/30Y），新鲜度基准＝指数自身最后一根已收盘 bar
 
 估值聚合采用**市值加权（调和）口径**，而非简单的 PE 算术平均：
     指数 PE = Σ 市值 / Σ 净利润，  净利润_i = 市值_i / PE_i
@@ -46,6 +48,7 @@ import datetime as dt
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import time
@@ -168,11 +171,13 @@ from wb_analysis.index_math import (
 )
 from wb_analysis.index_options import (
     BOND_PROXIES,
+    CROSS_ASSET_GROUPS,
     VOL_PROXIES,
     _iv_method_label,
     _resolve_source_note,
     _should_use_cboe_source as _should_use_cboe_source_impl,
     _source_label,
+    fetch_cross_asset_proxies,
     fetch_option_structure as _fetch_option_structure_impl,
     fetch_volatility_proxies,
     probe_option_freshness,
@@ -238,6 +243,12 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
     price_block, price_stats = _price_summary(text)
     health["index:get_stock_data"] = status
     blocks.append(f"## 1. 指数行情与价格结构\n\n```\n{price_block}\n```")
+
+    # 指数自身最后一根**已收盘** bar 的日期 = 跨资产通道的新鲜度基准（ref_date）。
+    # 盘中/盘前采集时 as_of 当日尚未收盘，§12/§14 的日线只能到上一交易日；
+    # 直接用 as_of 当基准会把「正常的最新已完成交易日」误判成陈旧。
+    _px_dates = re.findall(r"\d{4}-\d{2}-\d{2}", str(text))
+    ref_date = max(_px_dates) if _px_dates else as_of
 
     # --- 2. 指数技术指标 ---
     ind_lines = []
@@ -673,9 +684,64 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
             f"```\n{slines}\n```"
         )
 
+    # --- 14. 跨资产基准通道（纳斯达克100期货 / 原油 / 美债收益率曲线）---
+    print(f"  [6/7] 采集跨资产基准通道（NQ期货 / 原油 / 美债曲线，新鲜度基准 {ref_date}）...",
+          flush=True)
+    try:
+        ca = fetch_cross_asset_proxies(as_of, ref_date=ref_date)
+        for grp in CROSS_ASSET_GROUPS:
+            health[grp] = (ca.get("group_status") or {}).get(grp, {}).get("status", "error")
+
+        def _f(v, w=8):
+            return f"{v:>{w}}" if v is not None else " " * (w - 1) + "-"
+
+        cal = []
+        for p in ca.get("proxies", []):
+            rows = [b for b in p["bars"] if b.get("close") is not None]
+            if not rows:
+                continue
+            cal.append(f"### {p['ticker']}（{p['label']}，最近 {len(rows)} 个交易日）")
+            cal.append("```")
+            cal.append("  日期        开      高      低      收        成交量  日振幅%")
+            for b in rows:
+                rg = f"{b.get('intraday_range_pct'):>7.3f}" if b.get("intraday_range_pct") is not None else "      -"
+                vol = f"{b['volume']:>12,}" if b.get("volume") else f"{'无成交量数据':>12}"
+                tag = "  ←当日未收盘（隔夜时段）" if b["date"] > ref_date else ""
+                cal.append(f"  {b['date']}  {_f(b['open'])} {_f(b['high'])} {_f(b['low'])} "
+                           f"{_f(b['close'])} {vol} {rg}{tag}")
+            cal.append("```")
+            cal.append("")
+        notes = [
+            "**新鲜度自检**：每个代码的最后一个**已收盘** bar 日期必须等于基准日 "
+            f"{ref_date}（指数自身最后一根已收盘 bar）；不等即记 stale 并进缺口台账，不静默降级。",
+            "**通道说明**：期现价差、曲线斜率等推导值见 `0_derived.md` G 节。",
+        ]
+        if ca.get("notes"):
+            notes.append("**上游异常**：" + "；".join(ca["notes"]))
+        blocks.append(
+            "## 14. 跨资产基准通道（纳斯达克100期货 / 原油 / 美债收益率曲线）\n\n"
+            "- **为什么单独列一节**：权益内部证据（价格/期权/广度）回答不了三件事——"
+            "同一标的在**衍生品市场**怎么定价（NQ 期货含隔夜信息与展期成本）、"
+            "**通胀与风险偏好**的方向（原油）、**无风险利率与衰退定价**（美债曲线）。"
+            "这三类是用户点名要求的基础数据，任一缺失都必须进台账。\n"
+            "- **口径限制（必须声明）**：NQ 期现价差**不等于精确理论基差**——主力连续合约含"
+            "展期成本、分红时点与结算规则差异，只能用于「方向与量级」判断；"
+            "WTI 与布伦特两合约口径不同，不可混用；收益率指数单位为百分数"
+            "（41.50 = 4.150%）；期货在 as_of 当日会有只覆盖隔夜时段的未收盘 bar，"
+            "已标注且不进入派生计算。\n\n"
+            + "\n".join(cal) + "\n\n" + "\n".join(notes)
+        )
+    except Exception as exc:  # noqa: BLE001
+        ca = {"error": f"{type(exc).__name__}: {exc}", "proxies": [], "notes": [],
+              "group_status": {g: {"status": "error", "missing": [], "stale": []}
+                               for g in CROSS_ASSET_GROUPS}}
+        for grp in CROSS_ASSET_GROUPS:
+            health[grp] = "error"
+        blocks.append(f"## 14. 跨资产基准通道\n\n(不可用: {type(exc).__name__}: {exc})")
+
     # --- 健康度 ---
     ok = sum(1 for v in health.values() if v == "ok")
-    bad = [k for k, v in health.items() if v in ("fail", "unavailable", "error")]
+    bad = [k for k, v in health.items() if v in ("fail", "unavailable", "error", "stale")]
     summary = ["## 通道健康度\n", f"- 成功: {ok} / {len(health)}"]
     if bad:
         summary.append(f"- 失败或不可用: {', '.join(bad)}")
@@ -702,6 +768,7 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
                 "top_holdings": holdings,
                 "insiders": insiders,
                 "option_structure": opts,
+                "cross_asset": ca,
                 "channel_health": health,
                 "evidence_md": str(md_path),
             },
@@ -755,7 +822,7 @@ def main() -> int:
         traceback.print_exc()
         return 1
 
-    print(f"  [6/6] 汇总完成，用时 {time.time()-t0:.1f}s")
+    print(f"  [7/7] 汇总完成，用时 {time.time()-t0:.1f}s")
     ok = sum(1 for v in res["health"].values() if v == "ok")
     print(f"\n  ✓ 通道 {ok}/{len(res['health'])} 成功")
     bad = [k for k, v in res["health"].items() if v in ("fail", "unavailable", "error")]

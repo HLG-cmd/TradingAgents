@@ -259,4 +259,50 @@ ins = d["insiders"]
 b = sum(r["buy_value"] for r in ins)
 s = sum(r["sell_value"] for r in ins)
 print(f"\n  内部人 买 ${b / 1e9:.3f}B / 卖 ${s / 1e9:.3f}B = {s / b:.1f}x")
+
+print("\n" + "=" * 74)
+print("G. 跨资产基准（NQ期货 / 原油 / 美债曲线）—— 最新性自检")
+print("=" * 74)
+# ★ 2026-10-22 新增：跨资产三通道（用户点名要求的基础数据）。
+#   自检口径：每个代码最后一个**已收盘** bar 的日期必须等于指数自身最后一根已收盘
+#   bar（采集器写入 JSON 的 cross_asset.ref_date）。不等 ⇒ 记 stale 并提示写进简报。
+ca = d.get("cross_asset") or {}
+proxies = {p["ticker"]: p for p in (ca.get("proxies") or [])}
+ref = ca.get("ref_date") or DATE
+if ca.get("error"):
+    print(f"  ⚠ 证据包 cross_asset 段不可用（{ca['error']}）—— 跨资产维度缺失，须在 0_brief.md 声明")
+elif not proxies:
+    print("  ⚠ 证据包无 cross_asset 段（采集器版本过旧）—— 跨资产维度缺失，须在 0_brief.md 声明")
+else:
+    print(f"  新鲜度基准（指数最后已收盘 bar）: {ref}")
+    for tkr, label in (("NQ=F", "纳指100期货"), ("CL=F", "WTI原油"), ("BZ=F", "布伦特原油"),
+                       ("^TNX", "美债10Y"), ("^FVX", "美债5Y"), ("^TYX", "美债30Y")):
+        p = proxies.get(tkr)
+        if not p or not p.get("last_date"):
+            print(f"  {tkr:<6} {label:<10} 缺失")
+            continue
+        flag = "✓=基准日" if p.get("fresh") else f"⚠ 陈旧{p.get('age_days')}天"
+        chg = ""
+        comp = [x for x in p["bars"] if x["date"] <= ref and x["close"] is not None]
+        if len(comp) >= 2 and comp[-2]["close"]:
+            chg = f"  日环比 {(p['last_close'] / comp[-2]['close'] - 1) * 100:+.2f}%"
+        part = f"  （另有未收盘 bar: {', '.join(x['date'] for x in p.get('partial_bars', []))}）" \
+            if p.get("partial_bars") else ""
+        print(f"  {tkr:<6} {label:<10} 收 {p['last_close']:>10}  ({p['last_date']} {flag}){chg}{part}")
+    nq = proxies.get("NQ=F")
+    if nq and nq.get("last_close") and ps.get("latest_close"):
+        basis = (nq["last_close"] / ps["latest_close"] - 1) * 100
+        print(f"  NQ期货/指数 期现差 {basis:+.3f}%"
+              f"（含展期与分红时点因素，**不等于精确理论基差**，只用于方向与量级）")
+    y10 = (proxies.get("^TNX") or {}).get("last_close")
+    y5 = (proxies.get("^FVX") or {}).get("last_close")
+    y30 = (proxies.get("^TYX") or {}).get("last_close")
+    if None not in (y10, y5, y30):
+        print(f"  曲线 30Y−10Y = {y30 - y10:+.2f}pp | 10Y−5Y = {y10 - y5:+.2f}pp"
+              f"（单位=百分点；ERP 用 FRED DGS10 口径见 E 节）")
+    stale = [t for t, p in proxies.items() if p.get("last_date") and not p.get("fresh")]
+    if stale:
+        print(f"  ⚠ 非基准日收盘的代码：{stale} —— 该缺口必须写进 0_brief.md 并降条件式结论")
+    else:
+        print("  ✓ 全部代码均已收盘至基准日 —— 跨资产通道无缺口")
 print("=" * 74)

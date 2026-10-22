@@ -75,6 +75,29 @@ RULES: dict[str, dict] = {
                 "remedy_file": "supplement.md"},
     "verify_earnings_quality": {"cls": "?", "decisive": False, "blocks": "—", "remedy": "人工归类", "fallback": "—"},
 
+    # ★ 2026-10-22 新增（NDX 轮，用户点名要求的基础数据）：跨资产基准三通道。
+    #   decisive=True 的理由：这不是「锦上添花」的维度，而是用户明确要求必须具备的
+    #   基础数据；任一缺失即视为交付不完整，必须进 0_brief.md 并把结论降为条件式。
+    #   cls=A（上游真缺/取数失败），因为三个代码都在 yfinance 免费通道上，失败即真缺。
+    "cross_asset:nq_futures": {
+        "kw": ["cross_asset:nq_futures", "NQ 期货", "纳指期货", "纳斯达克100期货", "NQ=F", "期现"],
+        "cls": "A", "decisive": True,
+        "blocks": "看不到同一标的在衍生品市场的定价（隔夜信息/展期成本）⇒ 「期现背离」类判断缺失",
+        "remedy": "yfinance NQ=F 日线重采；持续失败则改用 QQQ 盘后收益替代并声明口径不同",
+        "fallback": "QQQ 盘后/盘前收益（口径不同：ETF 含溢折价，非期货基差）"},
+    "cross_asset:crude": {
+        "kw": ["cross_asset:crude", "原油", "WTI", "布伦特", "CL=F", "BZ=F"],
+        "cls": "A", "decisive": True,
+        "blocks": "缺少通胀与风险偏好的跨资产锚 ⇒ 宏观传导链断一环",
+        "remedy": "yfinance CL=F / BZ=F 日线重采",
+        "fallback": "FRED DCOILWTICO / DCOILBRENTEU（T+2 滞后，口径为现货结算价）"},
+    "cross_asset:treasury": {
+        "kw": ["cross_asset:treasury", "美债收益率", "收益率曲线", "^TNX", "^FVX", "^TYX"],
+        "cls": "A", "decisive": True,
+        "blocks": "无风险利率与衰退定价缺当日口径 ⇒ ERP 与估值判断只能用滞后值",
+        "remedy": "yfinance ^TNX/^FVX/^TYX 日线重采（当日收盘，补 FRED H.15 的 T+2 滞后）",
+        "fallback": "FRED DGS10/DGS5/DGS30（约一个工作日发布滞后，须披露数据日期）"},
+
     # ⚠️ 2026-10-09 NVDA 轮补登记：**「通道报 ok 但数值不自洽」这一类缺口此前完全漏检**。
     #    既有门禁（channel_health / _PLACEHOLDER_MARKERS / _audit_empty_sections）全部只看
     #    「调用是否成功、内容是否非空」，而 NVDA 的 Forward EPS 15.9146 = EPS(TTM) 7.91 的 2.01 倍

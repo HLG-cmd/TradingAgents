@@ -38,6 +38,14 @@ def get_YFin_data_online(
     end_inclusive = (end_dt + relativedelta(days=1)).strftime("%Y-%m-%d")
     data = yf_retry(lambda: ticker.history(start=start_date, end=end_inclusive))
 
+    # ★ 2026-10-22：yfinance 日线聚合曾对最新已完成交易日全天返回 NaN OHLC
+    #   （AAPL/MSFT/SPY/^GSPC/^NDX/QQQ 两条下载路径实测全中，仅剩 Volume 列）。
+    #   不补救 ⇒ 下游 dropna 后把「最新收盘」静默回退一天（陈旧价冒充最新价，
+    #   铁律 3 形态）。补救：同日 1 分钟 bar 聚合计齐，口径写进 CSV 头。
+    from .nan_daily_fix import patch_nan_ohlcv as _patch_nan_ohlcv
+
+    data, _nan_notes = _patch_nan_ohlcv(data, canonical)
+
     # Empty result means the symbol is unknown/delisted. Raise a typed error
     # instead of returning prose: the routing layer turns it into a single
     # unambiguous "no data" signal so the agent never fabricates a price.
@@ -70,6 +78,8 @@ def get_YFin_data_online(
     header = f"# Stock data for {label} from {start_date} to {end_date}\n"
     header += f"# Total records: {len(data)}\n"
     header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    if _nan_notes:
+        header += "# " + "；".join(_nan_notes) + "\n\n"
 
     return header + csv_string
 
@@ -225,7 +235,16 @@ def _get_stock_stats_bulk(
     """
     from stockstats import wrap
 
+    # ★ 2026-10-22：load_ohlcv 的磁盘缓存会沉淀 NaN 日线行（上游日线聚合异常），
+    #   指标由 stockstats 在这份数据上计算 ⇒ 必须在 wrap 之前打补丁，
+    #   否则 10-21 的 SMA/MACD/RSI 全是 NaN 或被前值填充。
+    from .nan_daily_fix import patch_nan_ohlcv as _patch_nan_ohlcv
+    from .symbol_utils import normalize_symbol as _normalize_symbol
+
     data = load_ohlcv(symbol, curr_date)
+    data, _nan_notes = _patch_nan_ohlcv(data, _normalize_symbol(symbol))
+    if _nan_notes:
+        logger.warning("patched NaN daily bars for %s: %s", symbol, _nan_notes)
     df = wrap(data)
     df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
 

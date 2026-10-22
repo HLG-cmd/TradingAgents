@@ -68,7 +68,7 @@ def load_prices_long(ticker: str, start: str = DEFAULT_START,
                 df = pd.read_csv(p, parse_dates=["Date"])
                 if not df.empty and "Close" in df.columns:
                     return df
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
 
     raw = yf.Ticker(tk).history(start=start, auto_adjust=True)
@@ -84,7 +84,7 @@ def load_prices_long(ticker: str, start: str = DEFAULT_START,
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         out.to_csv(p, index=False)
-    except Exception:
+    except OSError:
         pass
     return out
 

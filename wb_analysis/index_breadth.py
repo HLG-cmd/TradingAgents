@@ -11,6 +11,10 @@ from __future__ import annotations
 
 import time
 
+from wb_analysis._log import get_logger
+
+logger = get_logger()
+
 __all__ = ["_download_close_chunked", "compute_breadth"]
 
 
@@ -48,6 +52,19 @@ def _download_close_chunked(tickers: list[str], period: str = "1y",
             if data is None or getattr(data, "empty", True):
                 failed.extend(batch)
                 continue
+            try:
+                c = data["Close"]
+            except Exception:  # noqa: BLE001
+                failed.extend(batch)
+                continue
+            # ★ 2026-10-22：yfinance 日线聚合曾对最新已完成交易日全天返回 NaN OHLC。
+            #   breadth 的 20/60/120 日收益与 200SMA/50SMA 覆盖率全建立在收盘序列上，
+            #   一个 NaN 日就会让「站上均线比例」静默失真 ⇒ 用同日 1 分钟 bar 聚合补齐。
+            from tradingagents.dataflows.nan_daily_fix import patch_download_nan
+
+            data, _nan_notes = patch_download_nan(data, batch)
+            if _nan_notes:
+                logger.warning("breadth NaN 日线补齐：%s", _nan_notes)
             try:
                 c = data["Close"]
             except Exception:  # noqa: BLE001

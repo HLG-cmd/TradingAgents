@@ -26,6 +26,8 @@ from wb_analysis.index_math import _bs_delta, _bs_price, _implied_vol
 __all__ = [
     "VOL_PROXIES",
     "BOND_PROXIES",
+    "CROSS_ASSET_TICKERS",
+    "CROSS_ASSET_GROUPS",
     "probe_option_freshness",
     "_source_label",
     "_iv_method_label",
@@ -33,6 +35,7 @@ __all__ = [
     "_resolve_source_note",
     "fetch_option_structure",
     "fetch_volatility_proxies",
+    "fetch_cross_asset_proxies",
 ]
 
 VOL_PROXIES = ("^VIX", "^VXN", "VIXY", "VXX", "UVXY")
@@ -590,6 +593,12 @@ def fetch_volatility_proxies(as_of: str, days: int = 8) -> dict:
             if h.empty:
                 out["notes"].append(f"{tkr}: 无数据")
                 continue
+            # ★ 2026-10-22：yfinance 日线聚合曾对最新已完成交易日全天 NaN
+            #   （^VIX/^TNX 等指数同样中招）⇒ 1 分钟 bar 聚合计齐，口径进 notes。
+            from tradingagents.dataflows.nan_daily_fix import patch_nan_ohlcv
+
+            h, _nan_notes = patch_nan_ohlcv(h, tkr)
+            out["notes"].extend(_nan_notes)
             rows = []
             for idx, r in h.tail(days).iterrows():
                 rows.append({
@@ -615,4 +624,122 @@ def fetch_volatility_proxies(as_of: str, days: int = 8) -> dict:
                 b["close_vs_high_pct"] = round((b["close"] - b["high"]) / b["high"] * 100, 2)
 
     out["as_of_bar"] = as_of
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 跨资产基准通道（2026-10-22 新增）
+# ---------------------------------------------------------------------------
+# 为什么必须单列：指数报告此前只有「权益内部」证据（价格/期权/广度）与 FRED 宏观，
+# 缺三样跨资产基准——**纳斯达克100期货**（同一标的的衍生品定价，含隔夜信息与
+# 展期成本）、**原油**（通胀与风险偏好代理）、**美债收益率曲线**（无风险利率与
+# 衰退定价）。三者是用户点名要求的基础数据，故从 §12 的代理通道独立出来，
+# 单独成节、单独登记健康度，任一缺失即进台账，**不允许静默降级**。
+
+#: 代码 → 中文名。^TNX/^FVX/^TYX 单位为百分数（如 41.50 = 4.150%）。
+CROSS_ASSET_TICKERS: dict[str, str] = {
+    "NQ=F": "纳斯达克100 E-mini 期货（主力连续）",
+    "CL=F": "WTI 原油期货（主力连续）",
+    "BZ=F": "布伦特原油期货（主力连续）",
+    "^TNX": "美债 10 年期收益率（CBOE）",
+    "^FVX": "美债 5 年期收益率（CBOE）",
+    "^TYX": "美债 30 年期收益率（CBOE）",
+}
+
+#: 健康度登记分组。键名同时是 `_gap_ledger.py` RULES 的通道名（两边必须一致）。
+CROSS_ASSET_GROUPS: dict[str, tuple[str, ...]] = {
+    "cross_asset:nq_futures": ("NQ=F",),
+    "cross_asset:crude": ("CL=F", "BZ=F"),
+    "cross_asset:treasury": ("^TNX", "^FVX", "^TYX"),
+}
+
+
+def fetch_cross_asset_proxies(as_of: str, ref_date: str | None = None,
+                              days: int = 8) -> dict:
+    """取纳指100期货 / 原油 / 美债收益率曲线的日线 OHLC 与新鲜度。
+
+    「最新不能有缺口」的判定口径：**每个代码最后一个已收盘日线 bar 的日期
+    必须等于 ref_date**（默认取 as_of；调用方应传入指数自身最后一根已收盘
+    bar 的日期，因为盘中/盘前采集时 as_of 当日尚未收盘）。早于 ref_date ⇒
+    该代码记 stale 并单独返回，由调用方登记健康度、进缺口台账。
+
+    ⚠️ 未收盘 bar 处理（与 `collect.py::_price_summary` 同一纪律）：期货
+    （NQ/CL/BZ）近乎 24 小时交易，as_of 当日会有一根**只覆盖隔夜时段**的
+    未收盘 bar。它保留在 bars 里供展示，但 `last_completed_*` 字段与一切
+    派生计算**只用到 ≤ ref_date 的 bar**，不用当日未收盘价。
+    """
+    import yfinance as yf
+
+    ref = ref_date or as_of
+    out: dict = {"proxies": [], "notes": [], "as_of": as_of, "ref_date": ref}
+    for tkr, label in CROSS_ASSET_TICKERS.items():
+        try:
+            h = yf.Ticker(tkr).history(period=f"{days}d")
+            if h.empty:
+                out["notes"].append(f"{tkr}: 无数据")
+                continue
+            # ★ 2026-10-22：yfinance 日线聚合曾对最新已完成交易日全天 NaN
+            #   ⇒ 1 分钟 bar 聚合计齐（口径随 notes 进证据包）。
+            from tradingagents.dataflows.nan_daily_fix import (
+                agg_1m_daily,
+                patch_nan_ohlcv,
+            )
+
+            h, _nan_notes = patch_nan_ohlcv(h, tkr)
+            out["notes"].extend(_nan_notes)
+            rows = []
+            for idx, r in h.tail(days).iterrows():
+                rows.append({
+                    "date": idx.strftime("%Y-%m-%d"),
+                    "open": round(float(r["Open"]), 3) if r["Open"] == r["Open"] else None,
+                    "high": round(float(r["High"]), 3) if r["High"] == r["High"] else None,
+                    "low": round(float(r["Low"]), 3) if r["Low"] == r["Low"] else None,
+                    "close": round(float(r["Close"]), 3) if r["Close"] == r["Close"] else None,
+                    "volume": int(r["Volume"]) if r["Volume"] == r["Volume"] else None,
+                })
+            # 整行缺失补齐：收益率指数（^TNX/^FVX/^TYX）偶发缺最新已完成交易日
+            # **整行**（不是 NaN 而是没有该日期）。同一上游的 1 分钟 bar 仍在，
+            # 聚合补入并声明口径；补不进则留给新鲜度自检报 stale，不编造。
+            if ref < as_of and not any(b["date"] == ref for b in rows):
+                fill = agg_1m_daily(tkr, ref)
+                if fill:
+                    rows.append({
+                        "date": ref,
+                        "open": fill.get("Open"), "high": fill.get("High"),
+                        "low": fill.get("Low"), "close": fill.get("Close"),
+                        "volume": fill.get("Volume"),
+                    })
+                    rows.sort(key=lambda b: b["date"])
+                    out["notes"].append(
+                        f"{tkr} 缺 {ref} 整行日线，已用同日 1 分钟 bar 聚合补入"
+                        f"（口径：{'当日全部 1 分钟 bar' if tkr.endswith('=F') else '常规时段 09:30–16:00 美东'}）")
+            completed = [b for b in rows if b["date"] <= ref and b["close"] is not None]
+            last_c = completed[-1] if completed else None
+            partial = [b for b in rows if b["date"] > ref]
+            out["proxies"].append({
+                "ticker": tkr, "label": label, "bars": rows,
+                "last_date": last_c["date"] if last_c else None,
+                "last_close": last_c["close"] if last_c else None,
+                "age_days": ((dt.date.fromisoformat(ref)
+                              - dt.date.fromisoformat(last_c["date"])).days
+                             if last_c else None),
+                "fresh": bool(last_c and last_c["date"] == ref),
+                "partial_bars": partial,
+            })
+        except Exception as exc:  # noqa: BLE001
+            out["notes"].append(f"{tkr}: {type(exc).__name__}: {exc}")
+
+    for p in out["proxies"]:
+        for b in p["bars"]:
+            if b.get("high") and b.get("low") and b.get("low") > 0:
+                b["intraday_range_pct"] = round((b["high"] - b["low"]) / b["low"] * 100, 3)
+
+    # 组级汇总：供健康度登记与缺口台账使用（missing 优先于 stale 报告）
+    out["group_status"] = {}
+    for grp, tkrs in CROSS_ASSET_GROUPS.items():
+        got = {p["ticker"]: p for p in out["proxies"] if p["ticker"] in tkrs}
+        missing = [t for t in tkrs if t not in got or not got[t]["last_date"]]
+        stale = [t for t, p in got.items() if t not in missing and not p["fresh"]]
+        status = "unavailable" if missing else ("stale" if stale else "ok")
+        out["group_status"][grp] = {"status": status, "missing": missing, "stale": stale}
     return out

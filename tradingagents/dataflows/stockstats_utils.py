@@ -327,6 +327,17 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     # Filter to curr_date to prevent look-ahead bias in backtesting.
     data = data[data["Date"] <= curr_date_dt]
 
+    # ★ 2026-10-22：yfinance 日线聚合曾对最新已完成交易日全天返回 NaN OHLC
+    #   （仅剩 Volume；AAPL/MSFT/SPY/^NDX/QQQ 实测全中）。下面的
+    #   `_fill_price_gaps` 会把这种行**整行删掉** ⇒ 指标序列缺最新一天、
+    #   「最新收盘」静默回退一个交易日（铁律 3 形态）。必须在删行之前用
+    #   同日 1 分钟 bar 聚合计齐（口径：股票/指数=常规时段 09:30–16:00 美东）。
+    from .nan_daily_fix import patch_nan_ohlcv
+
+    data, _nan_notes = patch_nan_ohlcv(data, canonical)
+    if _nan_notes:
+        logger.warning("load_ohlcv 补齐 NaN 日线 %s: %s", canonical, _nan_notes)
+
     # A closeless newest bar is an unsettled session, not a symbol without data.
     # _fill_price_gaps below drops it, here and mid-series alike, so the frame
     # ends at the last settled bar; only a range with no close anywhere is no

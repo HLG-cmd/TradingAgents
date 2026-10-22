@@ -46,18 +46,27 @@ from wb_analysis.collect import collect_one  # noqa: E402
 
 # ★ 2026-10-15：`sp500` 接入动态全量池 `get_latest_sp500()`（约 503 只），
 #   原 99 只静态核心子集独立为 `sp500_core`，消除「池名 sp500 却只筛 99 只」的口径歧义。
-POOLS = {"nasdaq": NASDAQ_100, "sp500": SP_500_CORE, "sp500_core": SP_500_CORE}
+POOLS: dict[str, object] = {
+    "nasdaq": NASDAQ_100,
+    "sp500": get_latest_sp500,
+    "sp500_core": SP_500_CORE,
+}
+
+
+def resolve_pool(pool_key: str | None, tickers: list[str]) -> list[str]:
+    """统一解析股票池：支持动态 nasdaq/sp500 全量及 sp500_core 核心子集。"""
+    if pool_key == "nasdaq":
+        return get_latest_nasdaq_100()
+    if pool_key == "sp500":
+        return get_latest_sp500()
+    if pool_key == "sp500_core":
+        return SP_500_CORE
+    return tickers
 
 
 def _stage_one(pool_key: str | None, tickers: list[str], top: int):
     """阶段一：量化初筛。返回 (候选列表, 初筛明细文本)。"""
-    if pool_key == "nasdaq":
-        # 动态同步（当日缓存 -> Wikipedia -> 静态快照），失败会打印原因后降级
-        universe = get_latest_nasdaq_100()
-    elif pool_key == "sp500":
-        universe = get_latest_sp500()
-    else:
-        universe = POOLS[pool_key] if pool_key else tickers
+    universe = resolve_pool(pool_key, tickers)
     label = {
         "nasdaq": "纳斯达克100",
         "sp500": "标普500全量",

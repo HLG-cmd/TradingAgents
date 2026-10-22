@@ -83,7 +83,7 @@ FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 try:
     from dotenv import load_dotenv as _load_dotenv
     _load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-except Exception:
+except Exception:  # noqa: BLE001
     pass
 
 SEC_USER_AGENT = os.getenv(
@@ -250,7 +250,7 @@ def load_cik_map(force: bool = False) -> dict[str, str]:
         if age_days <= CIK_TTL_DAYS:
             try:
                 return json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
+            except (OSError, json.JSONDecodeError):
                 pass
     raw = _get(CIK_MAP_URL).json()
     out: dict[str, str] = {}
@@ -262,7 +262,7 @@ def load_cik_map(force: bool = False) -> dict[str, str]:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         p.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-    except Exception:
+    except OSError:
         pass
     return out
 
@@ -293,10 +293,10 @@ def fetch_facts(ticker: str, force: bool = False) -> dict:
             slim["slim"] = True
             try:
                 p.write_text(json.dumps(slim), encoding="utf-8")
-            except Exception:
+            except OSError:
                 pass
             return slim
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
     cik = cik_for(tk)
     if not cik:
@@ -307,7 +307,7 @@ def fetch_facts(ticker: str, force: bool = False) -> dict:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         p.write_text(json.dumps(data), encoding="utf-8")
-    except Exception:
+    except OSError:
         pass
     return data
 
@@ -707,7 +707,7 @@ def cumulative_split_factor(ticker: str, as_of: str) -> float:
         try:
             import yfinance as yf
             s = yf.Ticker(tk).splits          # pandas Series
-        except Exception:
+        except Exception:  # noqa: BLE001
             s = None
         _SPLIT_CACHE[tk] = s
     # 注意：不能用 `if not s` —— pandas Series 的真值判断会抛
@@ -719,7 +719,7 @@ def cumulative_split_factor(ticker: str, as_of: str) -> float:
         for ts, ratio in s.items():
             if str(ts)[:10] > as_of and ratio and float(ratio) > 0:
                 f *= float(ratio)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return 1.0
     return f
 

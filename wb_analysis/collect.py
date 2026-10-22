@@ -45,6 +45,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from dotenv import load_dotenv
 
 from wb_analysis import _clock
+from wb_analysis._log import log_gap
 
 load_dotenv(PROJECT_ROOT / ".env")
 
@@ -233,8 +234,8 @@ def _compact_series(raw: object, keep: int = 5) -> str:
             if kept:
                 return ("\n".join(s for _, s in kept[:keep])
                         + f"\n⚠ 已剔除未收盘 bar（{dropped_date}，美东尚未收盘）")
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log_gap("collect.compact_series_unclosed_bar", exc)
 
     return "\n".join(s for _, s in kept[:keep])
 
@@ -582,8 +583,8 @@ def _price_summary(csv_text: object) -> tuple[str, dict]:
                     f"   量比偏低属该通道当日 volume 字段不完整（指数尤甚），"
                     f"OHLC 需另用 1 分钟 bar / ETF 代理比值核验。\n"
                 )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log_gap("collect.unclosed_bar_volume_ratio", exc)
 
     close = df["Close"]
     last = float(close.iloc[-1])
@@ -658,8 +659,8 @@ def _extended_hours_block(ticker: str, as_of: str) -> tuple[str, dict]:
                 c = r.get("Close")
                 if c is not None and pd.notna(c):
                     closes[ts.date()] = float(c)
-    except Exception:  # noqa: BLE001 — 参照收盘取不到不阻断本节
-        pass
+    except Exception as exc:  # noqa: BLE001 — 参照收盘取不到不阻断本节
+        log_gap("collect.extended_hours_daily_closes", exc)
 
     rows: list[dict] = []
     for day in sorted(set(df.index.date), reverse=True)[:4]:
@@ -756,8 +757,8 @@ def _realtime_close_block(ticker: str, as_of: str) -> tuple[str, dict]:
         if rt:
             sess_ny = dt.datetime.fromtimestamp(int(rt), tz=dt.timezone.utc).astimezone(ny)
             sess_date = sess_ny.strftime("%Y-%m-%d")
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log_gap("collect.regular_market_time", exc)
 
     # --- 日线序列的最后一根有效 bar ---
     daily_last, daily_close = None, None
@@ -773,8 +774,8 @@ def _realtime_close_block(ticker: str, as_of: str) -> tuple[str, dict]:
         if len(h):
             daily_last = h.index[-1].strftime("%Y-%m-%d")
             daily_close = round(float(h["Close"].iloc[-1]), 2)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log_gap("collect.daily_history_15d", exc)
 
     rt_price = info.get("regularMarketPrice")
     prev_close = info.get("regularMarketPreviousClose")
@@ -801,8 +802,8 @@ def _realtime_close_block(ticker: str, as_of: str) -> tuple[str, dict]:
                     "last_close": round(float(reg["Close"].iloc[-1]), 2),
                     "volume_sum": int(reg["Volume"].sum()),
                 }
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log_gap("collect.intraday_1m", exc)
 
     # --- 未收盘 bar 判据（复用于实时那一日）---
     vol_ratio = None
@@ -813,8 +814,8 @@ def _realtime_close_block(ticker: str, as_of: str) -> tuple[str, dict]:
             avg20 = float(v.iloc[-21:-1].mean())
             if avg20 > 0:
                 vol_ratio = round(float(v.iloc[-1]) / avg20 * 100, 1)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log_gap("collect.volume_ratio_30d", exc)
 
     stats.update({
         "daily_last_bar": daily_last,
