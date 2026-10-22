@@ -34,8 +34,6 @@ import pathlib
 import re
 import sys
 
-from wb_analysis._log import log_gap
-
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -45,6 +43,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 EVID_DIR = ROOT / "wb_analysis" / "evidence"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from wb_analysis._log import log_gap  # noqa: E402
 # westock CLI 的统一接入层（路径解析 + 调用 + 表格解析），与 collect_hk_index.py 共用。
 from wb_analysis._westock import (  # noqa: E402
     WESTOCK,

@@ -49,18 +49,17 @@ import json
 import sys
 from pathlib import Path
 
-from wb_analysis._log import log_gap
-
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-import pandas as pd
-
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from wb_analysis._log import log_gap  # noqa: E402
+import pandas as pd
 
 try:
     import yfinance as yf

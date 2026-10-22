@@ -34,8 +34,6 @@ import re
 import sys
 import time
 
-from wb_analysis._log import gap_entries, log_gap
-
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -47,6 +45,7 @@ EVID_DIR.mkdir(parents=True, exist_ok=True)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from wb_analysis._log import gap_entries, log_gap  # noqa: E402
 from tradingagents.dataflows.interface import route_to_vendor  # noqa: E402
 from wb_analysis._westock import (  # noqa: E402
     WESTOCK,
