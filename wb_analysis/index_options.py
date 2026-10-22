@@ -628,8 +628,10 @@ def fetch_volatility_proxies(as_of: str, days: int = 8,
                 if fill:
                     rows.append({
                         "date": ref,
-                        "open": fill.get("Open"), "high": fill.get("High"),
-                        "low": fill.get("Low"), "close": fill.get("Close"),
+                        "open": round(fill["Open"], 2) if fill.get("Open") is not None else None,
+                        "high": round(fill["High"], 2) if fill.get("High") is not None else None,
+                        "low": round(fill["Low"], 2) if fill.get("Low") is not None else None,
+                        "close": round(fill["Close"], 2) if fill.get("Close") is not None else None,
                         "volume": fill.get("Volume"),
                     })
                     rows.sort(key=lambda b: b["date"])
@@ -732,8 +734,10 @@ def fetch_cross_asset_proxies(as_of: str, ref_date: str | None = None,
                 if fill:
                     rows.append({
                         "date": ref,
-                        "open": fill.get("Open"), "high": fill.get("High"),
-                        "low": fill.get("Low"), "close": fill.get("Close"),
+                        "open": round(fill["Open"], 3) if fill.get("Open") is not None else None,
+                        "high": round(fill["High"], 3) if fill.get("High") is not None else None,
+                        "low": round(fill["Low"], 3) if fill.get("Low") is not None else None,
+                        "close": round(fill["Close"], 3) if fill.get("Close") is not None else None,
                         "volume": fill.get("Volume"),
                     })
                     rows.sort(key=lambda b: b["date"])
