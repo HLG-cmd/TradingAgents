@@ -148,10 +148,48 @@ def patch_nan_ohlcv(df: pd.DataFrame, canonical: str) -> tuple[pd.DataFrame, lis
                 df.loc[mask, col] = row[col]
         patched.append(d)
 
+    # 缺失整行检查（上游 yfinance 偶发整行漏掉而非置 NaN，如 2026-10-21 实测）
+    existing_dates: set[str] = set()
+    if isinstance(df.index, pd.DatetimeIndex):
+        existing_dates = set(df.index.strftime("%Y-%m-%d"))
+    elif "Date" in df.columns:
+        existing_dates = set(pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%Y-%m-%d").dropna())
+
+    today_dt = pd.Timestamp.now(tz="America/New_York").date()
+    missing_patched: list[str] = []
+    for i in range(1, 6):
+        cand = today_dt - dt.timedelta(days=i)
+        if not fut and cand.weekday() >= 5:
+            continue
+        c_str = cand.strftime("%Y-%m-%d")
+        if c_str not in existing_dates:
+            row = agg_1m_daily(canonical, c_str)
+            if row and row.get("Close") is not None:
+                if isinstance(df.index, pd.DatetimeIndex):
+                    ts = pd.Timestamp(c_str).tz_localize(df.index.tz) if getattr(df.index, "tz", None) is not None else pd.Timestamp(c_str)
+                    new_df = pd.DataFrame([row], index=[ts])
+                    for col in df.columns:
+                        if col not in new_df.columns:
+                            new_df[col] = 0.0
+                    df = pd.concat([df, new_df]).sort_index()
+                elif "Date" in df.columns:
+                    row_dict = dict(row)
+                    row_dict["Date"] = c_str
+                    new_df = pd.DataFrame([row_dict])
+                    df = pd.concat([df, new_df], ignore_index=True)
+                    df = df.sort_values(by="Date").reset_index(drop=True)
+                missing_patched.append(c_str)
+                existing_dates.add(c_str)
+
     if patched:
         notes.append(
             f"{canonical} 日线 OHLC 全 NaN 的日期 {', '.join(patched)} 已用同日 1 分钟 bar "
             f"聚合补齐（口径：{calib}；yfinance 日线聚合当日异常，非本项目编造）"
+        )
+    if missing_patched:
+        notes.append(
+            f"{canonical} 缺失整行日线的日期 {', '.join(sorted(missing_patched))} 已用同日 1 分钟 bar "
+            f"聚合补齐（口径：{calib}；yfinance 日线聚合当日漏行，非本项目编造）"
         )
     return df, notes
 
