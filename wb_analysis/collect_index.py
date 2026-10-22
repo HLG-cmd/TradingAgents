@@ -451,7 +451,7 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
     # --- 12. 决议日波动率 / 债券代理（弥补 FRED 的 T+2 lag） ---
     print("  [4/6] 采集波动率与债券代理通道（弥补 FRED 发布滞后）...", flush=True)
     try:
-        vp = fetch_volatility_proxies(as_of)
+        vp = fetch_volatility_proxies(as_of, ref_date=ref_date)
         health["vol_proxies"] = "ok" if vp.get("proxies") else "unavailable"
         vl = []
         for p in vp.get("proxies", []):

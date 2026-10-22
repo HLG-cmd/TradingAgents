@@ -581,10 +581,19 @@ def fetch_option_structure(etf: str = ETF_PROXY_DEFAULT) -> dict:
         return {"error": f"{type(exc).__name__}: {exc}"}
 
 
-def fetch_volatility_proxies(as_of: str, days: int = 8) -> dict:
-    """取 VIX/VXN 及其 ETF 代理、以及债券 ETF 的**日线 OHLC 区间**。"""
+def fetch_volatility_proxies(as_of: str, days: int = 8,
+                             ref_date: str | None = None) -> dict:
+    """取 VIX/VXN 及其 ETF 代理、以及债券 ETF 的**日线 OHLC 区间**。
+
+    ★ 2026-10-22：yfinance 日线对**指数类代码**（^VIX/^VXN/^TNX）不是返回 NaN 行，
+    而是**整行缺失**最新已完成交易日（普通代码是 NaN 行，`patch_nan_ohlcv` 可补）。
+    故对 `last_date < ref_date` 的代码按跨资产通道同范式补行：同日 1 分钟 bar
+    聚合计入（口径进 notes）；补不进则保持现状，由新鲜度提示暴露，不编造。
+    `ref_date` 默认 as_of；调用方应传指数自身最后一根已收盘 bar 的日期。
+    """
     import yfinance as yf
 
+    ref = ref_date or as_of
     out: dict = {"proxies": [], "notes": []}
     tickers = list(VOL_PROXIES) + list(BOND_PROXIES)
     for tkr in tickers:
@@ -595,7 +604,10 @@ def fetch_volatility_proxies(as_of: str, days: int = 8) -> dict:
                 continue
             # ★ 2026-10-22：yfinance 日线聚合曾对最新已完成交易日全天 NaN
             #   （^VIX/^TNX 等指数同样中招）⇒ 1 分钟 bar 聚合计齐，口径进 notes。
-            from tradingagents.dataflows.nan_daily_fix import patch_nan_ohlcv
+            from tradingagents.dataflows.nan_daily_fix import (
+                agg_1m_daily,
+                patch_nan_ohlcv,
+            )
 
             h, _nan_notes = patch_nan_ohlcv(h, tkr)
             out["notes"].extend(_nan_notes)
@@ -609,6 +621,21 @@ def fetch_volatility_proxies(as_of: str, days: int = 8) -> dict:
                     "close": round(float(r["Close"]), 2) if r["Close"] == r["Close"] else None,
                     "volume": int(r["Volume"]) if r["Volume"] == r["Volume"] else None,
                 })
+            # 整行缺失补齐：指数类代码（^VIX/^VXN/^TNX）偶发缺最新已完成交易日整行。
+            # 只补 ref 一个日期（更早的缺行不追——上游通常只丢最新日）。
+            if ref < as_of and rows and not any(b["date"] == ref for b in rows):
+                fill = agg_1m_daily(tkr, ref)
+                if fill:
+                    rows.append({
+                        "date": ref,
+                        "open": fill.get("Open"), "high": fill.get("High"),
+                        "low": fill.get("Low"), "close": fill.get("Close"),
+                        "volume": fill.get("Volume"),
+                    })
+                    rows.sort(key=lambda b: b["date"])
+                    out["notes"].append(
+                        f"{tkr} 缺 {ref} 整行日线，已用同日 1 分钟 bar 聚合补入"
+                        f"（口径：{'当日全部 1 分钟 bar' if tkr.endswith('=F') else '常规时段 09:30–16:00 美东'}）")
             out["proxies"].append({"ticker": tkr, "bars": rows,
                                    "last_date": rows[-1]["date"] if rows else None})
         except Exception as exc:  # noqa: BLE001
