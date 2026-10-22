@@ -42,7 +42,7 @@ jobs:
           Copy-Item .env.example .env
           Add-Content .env "SEC_USER_AGENT=CI_Runner ci_runner@example.com"
       - name: Run test suite
-        run: pytest -q --cov=tradingagents --cov=quant --cov-report=term-missing
+        run: pytest -q --cov=tradingagents --cov=quant --cov=wb_analysis --cov-report=term-missing
 
   lint-whole-repo:
     name: ruff (含 wb_analysis / scripts)

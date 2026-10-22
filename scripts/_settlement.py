@@ -38,7 +38,7 @@ try:
     import yfinance as yf
 except ImportError:
     print("需要 pandas 与 yfinance 进行历史行情结算")
-    raise SystemExit(1)
+    raise SystemExit(1) from None
 
 
 def parse_report_meta(tree_dir: Path) -> dict | None:

@@ -15,7 +15,7 @@
 | 输入 | 来源 | 时点保证 |
 |---|---|---|
 | 价格序列 | `~/.tradingagents/cache/<T>-YFin-data-*.csv` | 逐日 bar，截到基准日 |
-| 股数 | `~/.tradingagents/edgar/facts_<T>_*.json` | 取 `end <= 基准日` 的最新披露（含 `filed` 日期） |
+| 股数 | `~/.tradingagents/edgar/facts_<T>_*.json` | 取 `end <= 基准日` **且 `filed <= 基准日`** 的最新披露 |
 | 报表项（净利/营收/权益） | 调用方传入（来自证据包 §4） | 年报/季报期末 |
 
 ## 用法
@@ -69,7 +69,11 @@ def _edgar_shares(ticker: str, as_of: str) -> tuple[dict | None, dict | None, st
             arr = facts[tax][tag]["units"][unit]
         except KeyError:
             return None
-        ok = [r for r in arr if str(r.get("end", "")) <= as_of]
+        # ★ 2026-10-22：PIT 必须**同时**看披露日 —— 只看 `end` 会选到基准日之后才申报的
+        #   报表（10-K 期末 10-31、申报 12-15，基准日 11-15 那天市场还看不到它）。
+        #   量化上这叫 look-ahead bias，第一原则禁止。缺 `filed` 的条目从宽保留。
+        ok = [r for r in arr
+              if str(r.get("end", "")) <= as_of and str(r.get("filed", "")) <= as_of]
         if not ok:
             return None
         return max(ok, key=lambda x: (x["end"], x.get("filed", "")))

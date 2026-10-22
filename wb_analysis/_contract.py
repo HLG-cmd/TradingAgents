@@ -76,12 +76,17 @@ def _alt(words: tuple[str, ...]) -> str:
     return "|".join(sorted(words, key=len, reverse=True))
 
 
-#: 五档词 —— 大小写不敏感（同时命中 `Buy` 与 `BUY`）。
+#: 五档词 —— 容忍 **Title Case 与全大写**两种形式（`Buy` / `BUY`）。
+#: ⚠️ **不**容忍小写（2026-10-22 收窄）：原先带 `re.IGNORECASE`，范围比本文件
+#:   文档描述的可容忍形式更宽，会把英文正文里正常的 `hold` / `sell` 也判成评级词
+#:   泄露，进而让 `_lint_drafts` 误拦交付。
 #: 用 `(?<![A-Za-z])` / `(?![A-Za-z])` 做词边界，而不是 `\b`：
 #: `\b` 在 `Overweight/Sell` 这种含非字母分隔的串上行为与直觉一致，但
 #: `(?<!...)` 写法更严格，且对 `**SELL**` 与 `SELL，` 都成立。
 FIVE_RE = re.compile(
-    rf"(?<![A-Za-z])({_alt(FIVE_LEVELS)})(?![A-Za-z])", re.IGNORECASE
+    rf"(?<![A-Za-z])"
+    rf"({_alt(FIVE_LEVELS + tuple(w.upper() for w in FIVE_LEVELS))})"
+    rf"(?![A-Za-z])"
 )
 #: 五档词 —— **仅 Title Case**（用于「必须逐字写对大小写」的场合，如 `**Action**: Sell`）
 FIVE_TITLE_RE = re.compile(rf"(?<![A-Za-z])({_alt(FIVE_LEVELS)})(?![A-Za-z])")

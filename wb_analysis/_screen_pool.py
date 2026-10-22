@@ -130,7 +130,9 @@ def analyze(full: pd.DataFrame, label: str, source: str) -> None:
     flags: dict[str, list[str]] = {}
     for _, r in elig.iterrows():
         tk = r.get("Ticker")
-        pe = _row_num(r, "pe"); roe = _row_num(r, "roe"); margin = _row_num(r, "margin")
+        pe = _row_num(r, "pe")
+        roe = _row_num(r, "roe")
+        margin = _row_num(r, "margin")
         rg = _row_num(r, "rev_growth")
         why = []
         pb = pe * roe if (pe and roe) else None
@@ -193,7 +195,8 @@ def analyze(full: pd.DataFrame, label: str, source: str) -> None:
         print(f"{'代码':<7}{'成长':>6}{'估值':>6}{'质量':>6}{'PE':>8}{'PB≈':>7}"
               f"{'ROE%':>7}{'净利率%':>9}{'营收增%':>9}{'60日%':>8}")
         for _, r in clean.head(25).iterrows():
-            pe = _row_num(r, "pe"); roe = _row_num(r, "roe")
+            pe = _row_num(r, "pe")
+            roe = _row_num(r, "roe")
             pb = pe * roe if (pe and roe) else None
             vals = {
                 "growth_score": _num(r.get("growth_score"), 0.0),

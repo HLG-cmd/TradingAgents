@@ -55,9 +55,7 @@ def _is_noise(line: str) -> bool:
     if s.startswith("#"):
         return True
     # 只由分隔符/空白组成（---, ===, ___ 等）
-    if len(set(s)) <= 2 and set(s) <= set("-=|_*· "):
-        return True
-    return False
+    return bool(len(set(s)) <= 2 and set(s) <= set("-=|_*· "))
 
 
 def body_len(lines: list[str]) -> int:

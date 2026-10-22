@@ -68,6 +68,32 @@ MARKET_TZ_NAME: str = "America/New_York"
 REGULAR_SESSION_OPEN_HOUR: float = 9.5      # 09:30 美东
 REGULAR_SESSION_CLOSE_HOUR: float = 16.0    # 16:00 美东
 
+#: 美股**公休日**（NYSE 休市，2024–2027）。周末另由 `weekday() >= 5` 判定。
+#:
+#: ⚠️ 为什么必须内置：`market_session_phase` 原先只排除周末，于是**工作日休市日**
+#:   会被判成 `in_session` ⇒ `option_source_decision` 说「用 yfinance 主源」，
+#:   可那天市场根本没开，yfinance 只会返回残留挂单。
+#:
+#: ⚠️ 每年需按 NYSE 日历续补（本表覆盖到 2027 年底）。规则：元旦 / MLK（1 月第 3 个
+#:   周一）/ 总统日（2 月第 3 个周一）/ 耶稣受难日 / 阵亡将士纪念日（5 月最后一个
+#:   周一）/ 六月节 / 独立日 / 劳动节（9 月第 1 个周一）/ 感恩节（11 月第 4 个周四）/
+#:   圣诞节；落在周六则前移到周五、落在周日则后移到周一。
+#: ⚠️ **不含半日市**（如感恩节次日下午 1 点收盘）—— 那类日子仍按常规 16:00 判定。
+US_MARKET_HOLIDAYS: frozenset[str] = frozenset({
+    # 2024（10 天）
+    "2024-01-01", "2024-01-15", "2024-02-19", "2024-03-29", "2024-05-27",
+    "2024-06-19", "2024-07-04", "2024-09-02", "2024-11-28", "2024-12-25",
+    # 2025（10 天）
+    "2025-01-01", "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
+    "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27", "2025-12-25",
+    # 2026（10 天）
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    # 2027（10 天）
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+})
+
 
 def market_session_phase(now: datetime.datetime | None = None) -> str:
     """返回美股当前所处时段：`in_session` / `pre_market` / `after_hours` / `closed_day`。
@@ -86,7 +112,7 @@ def market_session_phase(now: datetime.datetime | None = None) -> str:
     else:
         now = now.astimezone(zoneinfo.ZoneInfo(MARKET_TZ_NAME))
 
-    if now.weekday() >= 5:
+    if now.weekday() >= 5 or now.strftime("%Y-%m-%d") in US_MARKET_HOLIDAYS:
         return "closed_day"
     h = now.hour + now.minute / 60.0
     if h < REGULAR_SESSION_OPEN_HOUR:

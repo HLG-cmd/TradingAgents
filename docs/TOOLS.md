@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-22 03:00
+- 生成时间：2026-10-22 13:36
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -84,9 +84,6 @@
 
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|
-| `scripts/_apply_round2.py` | 第二轮治理落地（默认干跑）。 | — |
-| `scripts/_apply_round4.py` | 第四轮：A1 log_gap 真实接线 + A4 collect_index 死定义清理 + A2 docstring 漂移。 | — |
-| `scripts/_apply_round5.py` | 第五轮：收尾全部遗留项。 | — |
 | `scripts/_diff_evidence_pack.py` | 证据包等价性比对——用于 collect_index.py 拆分子模块前后的行为回归。 | — |
 | `scripts/_fix_round3.py` | 第三轮收口：修 _thresholds.py 的注解未定义名、修 round2 的 CI 双补丁覆盖 bug、摊开 collect_in | — |
 | `scripts/_health.py` | 项目健康检查：**一条命令看整个项目状态**（把散落的各处门禁汇总成一个入口）。 | ./.venv/Scripts/python.exe scripts/_health.py [--quiet] |
@@ -119,6 +116,11 @@
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|
 | `scripts/_oneoff/_append_oss_assessment.py` | 把开源准备度评估追加进当日记忆（避免 heredoc 转义问题）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_append_oss_assessment.py |
+| `scripts/_oneoff/_apply_decisions_20261022.py` | 按 2026-10-22 拍板的 5 项决策落地。 | TradingAgents 治理 2026-10-22 |
+| `scripts/_oneoff/_apply_round2.py` | 第二轮治理落地（默认干跑）。 | TradingAgents 治理 2026-10-22 |
+| `scripts/_oneoff/_apply_round4.py` | 第四轮：A1 log_gap 真实接线 + A4 collect_index 死定义清理 + A2 docstring 漂移。 | TradingAgents 治理 2026-10-22 |
+| `scripts/_oneoff/_apply_round5.py` | 第五轮：收尾全部遗留项。 | TradingAgents 治理 2026-10-22 |
+| `scripts/_oneoff/_apply_round6.py` | 第六轮：把 wb_analysis 纳入覆盖率观测。 | TradingAgents 治理 2026-10-22 |
 | `scripts/_oneoff/_audit_evidence_sections.py` | （无文档字符串） | 通用（argv 传入 evidence.md） |
 | `scripts/_oneoff/_avgo_edgar_tagprobe.py` | 核查 AVGO FY2025（期末 2025-11-02）的：回购标签、净利标签、权益标签、债务标签。 | — |
 | `scripts/_oneoff/_avgo_fy_end.py` | 列出 AVGO 缓存的 companyfacts 里所有 10-K 的期末日，确定真实财年末。 | — |
@@ -159,6 +161,8 @@
 | `scripts/_oneoff/_fix_rating_words.py` | （无文档字符串） | 2026-09 期若干轮草稿 |
 | `scripts/_oneoff/_fix_reports_layout.py` | 核对并按需修正 `reports/` 的目标布局（幂等；可反复运行）。 | 2026-09-23 一次性布局迁移（8 个标的） |
 | `scripts/_oneoff/_fix_role_files_empty_pass.py` | 修 `_check_role_files.py`：**空草稿目录被判「通过」**（本日第 9 例，已实测复现）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_role_files_empty_pass.py |
+| `scripts/_oneoff/_fix_scorecard_decisive_absent.py` | 修 `_scorecard.py::score_tree` 的一处静默降级。 | TradingAgents 治理 2026-10-22 |
+| `scripts/_oneoff/_fix_strip_verify_caliber.py` | 修 `_strip_stray_ratings.py` 回读校验的口径 —— 它给出过**假的「已清干净」**。 | TradingAgents 治理 2026-10-22 |
 | `scripts/_oneoff/_fix_trader_ratings.py` | （无文档字符串） | 把 GOOG / NFLX 交易员稿正文里的五档英文词改为中文，使 trader.md 全文恰含 1 个五档词 |
 | `scripts/_oneoff/_fix_two_sided_fixture.py` | 修正双向验证夹具：原先我拿「算对的数」当错值（差 0.0005，在容差内）⇒ 误判为「未通过」。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_two_sided_fixture.py |
 | `scripts/_oneoff/_mk_divlowvol_report.py` | 生成《A 股红利低波 ETF 综合对比报告》桌面 HTML（与有色金属 ETF 报告同版式）。 | — |

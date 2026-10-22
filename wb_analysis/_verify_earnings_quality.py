@@ -66,7 +66,7 @@ try:
     import yfinance as yf
 except ImportError:  # pragma: no cover
     print("需要 yfinance")
-    raise SystemExit(1)
+    raise SystemExit(1) from None
 
 # ── 判定阈值 ────────────────────────────────────────────────────────────
 #   硬闸门（FAIL）—— 事实层面确定被扭曲

@@ -104,7 +104,7 @@ def check(draft: Path) -> int:
         residual, quoted = [], []
         for f in files:
             rel = f.relative_to(draft).as_posix()
-            for ln, line in enumerate(open(f, encoding="utf-8").read().split("\n"), 1):
+            for ln, line in enumerate(f.read_text(encoding="utf-8").split("\n"), 1):
                 if old and old in line:
                     # ★ 2026-10-15 修：原写 `if (rel in fixed_in or _classify(line))`，
                     #   而 `_classify(line)` 返回非空字符串 `"疑似残留"`，在布尔上下文中恒为 True，

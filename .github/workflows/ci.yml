@@ -32,7 +32,7 @@ jobs:
           cp .env.example .env
           echo "SEC_USER_AGENT=CI_Runner ci_runner@example.com" >> .env
       - name: Run test suite
-        run: pytest -q --cov=tradingagents --cov=quant --cov-report=term-missing
+        run: pytest -q --cov=tradingagents --cov=quant --cov=wb_analysis --cov-report=term-missing
 
   smoke-install:
     name: clean-install smoke

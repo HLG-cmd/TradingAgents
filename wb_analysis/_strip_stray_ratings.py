@@ -21,7 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # ★ 2026-10-08：契约常量改为**唯一来源** import（见 `_contract.py` 抬头的漂移史）。
 sys.path.insert(0, str(ROOT))
-from wb_analysis._contract import FINAL_PROPOSAL, FIVE_TITLE_RE  # noqa: E402
+# ★ 2026-10-22：回读校验改用 `FIVE_RE`（大小写不敏感），与门禁 `_lint_drafts` 同口径。
+#   此前用 `FIVE_TITLE_RE`（仅 Title Case）⇒ 正文残留 `**BUY**` 时报「0 处」并退出 0，
+#   随后被 `_lint_drafts` 以退出码 2 拦下 —— 两道门禁对同一份文件给出相反结论。
+from wb_analysis._contract import FINAL_PROPOSAL, FIVE_RE  # noqa: E402
 
 # 顺序重要：先长后短，避免 "Overweight/Buy" 被拆坏
 RULES = [
@@ -46,6 +49,18 @@ RULES = [
     ("Hold**（", "维持**（"),
 ]
 
+#: 五档词（Title / 全大写）→ 中文表述。键一律小写，用 `FIVE_RE` 命中的原文查表。
+#: ★ 2026-10-22：兜底改写改由 `_contract.FIVE_RE` 驱动，本表只负责「词 → 中文」，
+#:   于是改写范围与门禁 `_lint_drafts` 的判定范围**永远同一个来源**。
+FIVE_CN = {
+    "buy": "建仓档",
+    "overweight": "增持档",
+    "hold": "维持",
+    "underweight": "减持档",
+    "sell": "退出档",
+}
+
+
 KEEP_LINE_PATTERNS = [
     re.compile(r"^\*\*(Recommendation|Rating)\*\*:"),      # 结论块
     re.compile(rf"^{FINAL_PROPOSAL}:"),
@@ -61,19 +76,18 @@ def main() -> int:
     before = text
 
     out_lines = []
-    for ln, line in enumerate(text.split("\n"), 1):
+    for _ln, line in enumerate(text.split("\n"), 1):
         if any(p.search(line) for p in KEEP_LINE_PATTERNS):
             out_lines.append(line)
             continue
         new = line
         for a, b in RULES:
             new = new.replace(a, b)
-        # 兜底：仍残留的裸五档词按中文档位替换（只在非结论块行上执行）
-        new = re.sub(r"\bOverweight\b", "增持档", new)
-        new = re.sub(r"\bUnderweight\b", "减持档", new)
-        new = re.sub(r"\bBuy\b", "建仓档", new)
-        new = re.sub(r"\bSell\b", "退出档", new)
-        new = re.sub(r"\bHold\b", "维持", new)
+        # 兜底：仍残留的裸五档词按中文档位替换（只在非结论块行上执行）。
+        # ★ 2026-10-22：改用 `_contract.FIVE_RE` 驱动 —— 它容忍 Title 与全大写两种形式，
+        #   所以 `**BUY**` 这类残留也会被清掉（此前只认 Title Case，清不掉却报「0 处」）。
+        #   小写（英文正文里的 `hold` / `sell`）按契约**不算**评级词，不动。
+        new = FIVE_RE.sub(lambda m: FIVE_CN[m.group(0).lower()], new)
         out_lines.append(new)
     text = "\n".join(out_lines)
 
@@ -89,7 +103,7 @@ def main() -> int:
     for ln, line in enumerate(back.split("\n"), 1):
         if any(p.search(line) for p in KEEP_LINE_PATTERNS):
             continue
-        for m in FIVE_TITLE_RE.finditer(line):
+        for m in FIVE_RE.finditer(line):
             hits.append((ln, m.group(0), line[:90]))
     print(f"[strip] 回读：结论块之外的裸五档词 = {len(hits)} 处")
     for h in hits:

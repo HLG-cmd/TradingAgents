@@ -128,7 +128,12 @@ def score_tree(tr: Path, prev_cache: dict[str, dict[str, str]] | None = None) ->
     ch = re.search(r"成功:\s*(\d+)\s*/\s*(\d+)", blob)
     gaps = key.get("gaps") or {}
     decisive = gaps.get("decisive_count")
-    if decisive is None and zp.exists():
+    # ★ 2026-10-22 修：原判据是 `if decisive is None and zp.exists():` —— 审计包在、
+    #   但包里**没有台账**时 `gaps` 是空 dict，`len([])` 会算出 0，
+    #   于是「台账没进包」被记成「本轮 0 条决定性缺口」，读起来像没问题。
+    #   改为「**真读到台账**才算」：读不到就保持 None ⇒ 交给下面的 prev_cache 回填，
+    #   仍无来源则留空（未知），与「确实是 0 条」区分开。
+    if decisive is None and gaps:
         decisive = len([g for g in (gaps.get("gaps") or []) if g.get("decisive")])
     # 关键缺口是否在简报里声明（用台账的 kw 校验，与门禁同一口径）
     gap_declared = ""

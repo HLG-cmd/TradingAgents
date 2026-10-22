@@ -76,10 +76,16 @@ def chk_lifecycle() -> tuple[str, str]:
     #   实测后果：健康检查显示「✗ FAIL 0 个脚本缺 lifecycle 或 serves 标记」，
     #   状态与计数自相矛盾，且真实文件名被掩盖（实际是 2 个 _oneoff 脚本）。
     #   改为「缩进 4 空格且非空」的原始行，与 `_tidy_scripts.py` 的输出格式对齐。
+    # ★ 2026-10-22 修：不再自己给失败原因起标题。
+    #   `_tidy_scripts.py --check` 未通过的原因**不止一种**，最常见的是新脚本还没被
+    #   `--apply` 收进 `docs/TOOLS.md` 索引（脚本本身 `# lifecycle:` 头写得好好的）。
+    #   原先一律报「缺 lifecycle 或 serves 标记」，会把真实原因盖掉 —— 实测被误导两次。
+    #   ⇒ 透传工具自己的输出，它才是唯一知道原因的一方。
+    first = out.strip().splitlines()[0][:80] if out.strip() else "(无输出)"
     bad = [l.strip() for l in out.splitlines()
            if l.startswith("    ") and l.strip()]
-    detail = ("：" + "、".join(bad[:3]) + ("…" if len(bad) > 3 else "")) if bad else ""
-    return "FAIL", f"{len(bad)} 个脚本缺 lifecycle 或 serves 标记{detail}"
+    detail = ("：" + "、".join(bad[:3]) + ("…" if len(bad) > 3 else "")) if bad else f"：{first}"
+    return "FAIL", f"_tidy_scripts.py --check 未通过（rc={rc}）{detail}"
 
 
 def chk_reports() -> tuple[str, str]:
@@ -329,7 +335,7 @@ def chk_quant() -> tuple[str, str]:
     #     ② 成功标记改成**源码回显里不出现**的形式（见 `_MARK`：它由 chr() 拼出，
     #        源码里没有该字面量 ⇒ 失败回显时不会误命中）。
     _MARK = chr(79) + chr(75)   # == "OK"，但源码中无此字面量
-    code = ("import sys; sys.path.insert(0, r'%s');"
+    code = ("import sys; sys.path.insert(0, r'%s');"  # noqa: UP031
             "from quant import screener_engine, stock_pools, edgar_fundamentals, price_history;"
             "ua = edgar_fundamentals.SEC_USER_AGENT;"
             "assert '@' in ua and 'admin@example.com' not in ua, f'SEC 凭证未配置或为默认占位符: {ua}';"
@@ -512,7 +518,14 @@ BASELINE_K = "not DeepSeekLive"
 #    含 TRAder 列走 PROPOSAL_RE 兜底的**已知边界**（已文档化：pick() 不认 Action 标签，
 #    但 scan() 对 47/51 棵有 RUN.json 的树走清单，故真实显示仍是 Title Case）；
 #   ③ 报告树命名契约 TREE_RE 与功能目录 SKIP_DIRS。
-BASELINE_PASSED = 937
+# 2026-10-22：1039 → 1078。新增 4 个门禁测试模块（39 项）：
+#   - tests/test_wb_paths.py（14 项：TREE_RE 命名契约 / FUNC_DIRS / iter_report_trees 枚举）
+#   - tests/test_wb_check_residuals.py（8 项：订正残留分类 / 留痕豁免 / 真残留检出）
+#   - tests/test_wb_check_freshness.py（6 项：骨架判定 / 单调时序校验）
+#   - tests/test_wb_verify_ratings.py（5 项：评级词扫描 / 席位白名单 / 必需字段）
+#   - tests/test_wb_thresholds.py（+1 项：US_MARKET_HOLIDAYS 2024-2027 锚点测试）
+#   - tests/test_wb_contract.py（+5 项：FIVE_RE 小写英文正文不误报）
+BASELINE_PASSED = 1078
 # ★ 2026-10-21（第二次）：935 → 937。依据＝实测 `pytest tests/ -q` 输出「937 passed」，
 #   增量 2 项来自统一网络重试参数化测试：
 #   - test_retry_with_custom_retryable_tuple (支持异常元组)

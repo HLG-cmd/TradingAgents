@@ -113,9 +113,14 @@ def audit_macro(md: str, as_of: str) -> list[dict]:
             try:
                 r = requests.get(
                     "https://api.stlouisfed.org/fred/series/observations",
-                    params=dict(series_id=sid, observation_start="2026-01-01",
-                                observation_end=as_of, sort_order="desc",
-                                api_key=key, file_type="json"),
+                    params={
+                        "series_id": sid,
+                        "observation_start": "2026-01-01",
+                        "observation_end": as_of,
+                        "sort_order": "desc",
+                        "api_key": key,
+                        "file_type": "json",
+                    },
                     timeout=30,
                 )
                 r.raise_for_status()

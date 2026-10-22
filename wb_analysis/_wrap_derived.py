@@ -13,7 +13,7 @@ out = (
     "```\n" + body + "\n```\n"
 )
 Path(dst_path).write_text(out, encoding="utf-8", newline="\n")
-print("wrote %d bytes -> %s" % (len(out.encode("utf-8")), dst_path))
+print(f"wrote {len(out.encode('utf-8'))} bytes -> {dst_path}")
 
 # 自校验：把 md 里的代码块剥回来，必须与原始 stdout 逐字节一致
 back = out.split("```\n", 1)[1].rsplit("\n```", 1)[0] + "\n"
