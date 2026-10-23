@@ -78,7 +78,6 @@ extend-exclude = [
     ".workbuddy-ai",
     ".box-agent",
     ".box-agent-scratch",
-    ".archive_local_backup",
     ".cache",
 ]
 

@@ -236,8 +236,8 @@ wb_analysis/_archive/
 # pytest 定向 basetemp（safe-delete 钩子下绕开 %TEMP% 清理失败的产物）
 .pytest_tmp_bt*/
 
-# ── 本机冷备份与本地 AI 助手环境（绝对不入库）──
-.archive_local_backup/
+# ── 本地 AI 助手环境（绝对不入库）──
+# 注：本机冷备份已迁到项目外 D:/Antigravity/TradingAgents_archive/，故不再需要忽略规则
 .workbuddy-ai/
 .workbuddy-ai/backup/
 .workbuddy/

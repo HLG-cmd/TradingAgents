@@ -34,7 +34,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parents[1]
 PY = sys.executable
-SKIP = {".venv", ".git", "__pycache__", ".pytest_cache", ".cache", "node_modules", ".archive_local_backup"}
+SKIP = {".venv", ".git", "__pycache__", ".pytest_cache", ".cache", "node_modules"}
 
 # ★ 2026-10-10：非 12 角色专用通道的豁免表与 `_reports_index.py` / `_seal_run.py` **同源**
 #   （唯一定义源＝`wb_analysis/_contract.py`）。此前本检查只数文件数、不认豁免，
