@@ -115,16 +115,32 @@ def _nan_dates(df: pd.DataFrame) -> list[str]:
     return out
 
 
-def patch_nan_ohlcv(df: pd.DataFrame, canonical: str) -> tuple[pd.DataFrame, list[str]]:
+def patch_nan_ohlcv(
+    df: pd.DataFrame, canonical: str, as_of: str | None = None
+) -> tuple[pd.DataFrame, list[str]]:
     """补齐日线中 Close 为 NaN 的行。支持 DatetimeIndex 与 'Date' 列两种形态，原形态返回。
 
     只补**美东今天之前**的日期（当天未收盘的 bar 由调用方的未收盘逻辑处理，
     不在此处臆造）。返回 (df, notes)；无 NaN 时原样返回。
+
+    as_of
+    ----
+    **数据基准日**（``YYYY-MM-DD``）。给了就以它为「今天」上限，而不是取真实当前时刻。
+
+    为什么必须有这个参数（2026-10-23 实测）
+    ---------------------------------------
+    原实现一律用 ``pd.Timestamp.now()`` 当上限。于是**回测口径**下（例如
+    ``load_ohlcv("AAPL", "2026-05-08")``）「缺失整行」扫描仍去看 2026-10-19~21，
+    把这些**未来行**追加到调用方已经按 curr_date 过滤好的帧里
+    ⇒ 前瞻泄漏（实测返回 1142 行、末行 2026-10-21，超出 curr_date 3 行）。
+    同时它让本函数不可测：真实时钟使任何历史基准日的用例都去打网络。
+
+    ``None`` 保留原行为（真实今天），供「就是取最新」的调用方使用。
     """
     if df is None or getattr(df, "empty", True) or "Close" not in df.columns:
         return df, []
 
-    today_et = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d")
+    today_et = as_of or pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d")
     notes: list[str] = []
     patched: list[str] = []
     fut = _is_futures(canonical)
@@ -155,7 +171,7 @@ def patch_nan_ohlcv(df: pd.DataFrame, canonical: str) -> tuple[pd.DataFrame, lis
     elif "Date" in df.columns:
         existing_dates = set(pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%Y-%m-%d").dropna())
 
-    today_dt = pd.Timestamp.now(tz="America/New_York").date()
+    today_dt = dt.date.fromisoformat(today_et)
     missing_patched: list[str] = []
     for i in range(1, 6):
         cand = today_dt - dt.timedelta(days=i)
@@ -177,6 +193,11 @@ def patch_nan_ohlcv(df: pd.DataFrame, canonical: str) -> tuple[pd.DataFrame, lis
                     row_dict["Date"] = c_str
                     new_df = pd.DataFrame([row_dict])
                     df = pd.concat([df, new_df], ignore_index=True)
+                    # ★ 补进来的这一行 Date 是字符串，而既有行经 `_clean_dataframe`
+                    #   已是 datetime64 ⇒ concat 后整列降级成 object（混合 Timestamp/str），
+                    #   `sort_values` 会抛 TypeError: '<' not supported between 'str'
+                    #   and 'Timestamp'。必须先统一 dtype 再排序。
+                    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
                     df = df.sort_values(by="Date").reset_index(drop=True)
                 missing_patched.append(c_str)
                 existing_dates.add(c_str)

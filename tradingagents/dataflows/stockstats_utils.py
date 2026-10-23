@@ -334,9 +334,15 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     #   同日 1 分钟 bar 聚合计齐（口径：股票/指数=常规时段 09:30–16:00 美东）。
     from .nan_daily_fix import patch_nan_ohlcv
 
-    data, _nan_notes = patch_nan_ohlcv(data, canonical)
+    # as_of=curr_date：补救范围必须止于数据基准日，否则回测口径会被追加
+    # 「最近 5 个自然日」的未来行（前瞻泄漏，见 patch_nan_ohlcv 的 docstring）。
+    data, _nan_notes = patch_nan_ohlcv(data, canonical, as_of=curr_date)
     if _nan_notes:
         logger.warning("load_ohlcv 补齐 NaN 日线 %s: %s", canonical, _nan_notes)
+
+    # 补救可能追加行 ⇒ 过滤要再走一遍，保证「返回帧不越过 curr_date」这条契约
+    # 不依赖补救实现是否守规矩。
+    data = data[data["Date"] <= curr_date_dt]
 
     # A closeless newest bar is an unsettled session, not a symbol without data.
     # _fill_price_gaps below drops it, here and mid-series alike, so the frame

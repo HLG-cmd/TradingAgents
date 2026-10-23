@@ -44,7 +44,7 @@ def get_YFin_data_online(
     #   铁律 3 形态）。补救：同日 1 分钟 bar 聚合计齐，口径写进 CSV 头。
     from .nan_daily_fix import patch_nan_ohlcv as _patch_nan_ohlcv
 
-    data, _nan_notes = _patch_nan_ohlcv(data, canonical)
+    data, _nan_notes = _patch_nan_ohlcv(data, canonical, as_of=end_date)
 
     # Empty result means the symbol is unknown/delisted. Raise a typed error
     # instead of returning prose: the routing layer turns it into a single
@@ -235,16 +235,9 @@ def _get_stock_stats_bulk(
     """
     from stockstats import wrap
 
-    # ★ 2026-10-22：load_ohlcv 的磁盘缓存会沉淀 NaN 日线行（上游日线聚合异常），
-    #   指标由 stockstats 在这份数据上计算 ⇒ 必须在 wrap 之前打补丁，
-    #   否则 10-21 的 SMA/MACD/RSI 全是 NaN 或被前值填充。
-    from .nan_daily_fix import patch_nan_ohlcv as _patch_nan_ohlcv
-    from .symbol_utils import normalize_symbol as _normalize_symbol
-
+    # ★ 2026-10-23：load_ohlcv 内部已在返回前调用 patch_nan_ohlcv(..., as_of=curr_date)
+    #   并完成 Date <= curr_date 截断（见 stockstats_utils.py），此处无需二次重复打补丁。
     data = load_ohlcv(symbol, curr_date)
-    data, _nan_notes = _patch_nan_ohlcv(data, _normalize_symbol(symbol))
-    if _nan_notes:
-        logger.warning("patched NaN daily bars for %s: %s", symbol, _nan_notes)
     df = wrap(data)
     df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
 
