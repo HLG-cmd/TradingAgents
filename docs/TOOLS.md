@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-24 02:09
+- 生成时间：2026-10-24 02:38
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -116,7 +116,7 @@
 
 ## oneoff —— 为某次结论临时写的探针
 
-> **`_oneoff/` 是本地审计收件箱（`.gitignore` 忽略，不入对外仓库）**：探针服务的那一轮交付并封存后，会**随案卷进 `reports/<标的>/<时间戳>/_source.zip`**，`_oneoff/` 于是回到空 —— **看到它空是正常的**。治理类一次性脚本（如 `_fix_round3.py`）则同步留存于**项目外**的本机冷备份 `D:/Antigravity/TradingAgents_archive/` 及历史 commit 中。
+> **`_oneoff/` 是本地审计收件箱（`.gitignore` 忽略，不入对外仓库）**：探针服务的那一轮交付并封存后，会**随案卷进 `reports/<标的>/<时间戳>/_source.zip`**，`_oneoff/` 于是回到空 —— **看到它空是正常的**。治理类一次性脚本（如 `_fix_round3.py`）同步留存于**历史 commit** 中；确需长期冷备份时放**项目外**（与仓库平级），不得在仓库内建备份目录。
 
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|

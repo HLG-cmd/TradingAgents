@@ -804,7 +804,7 @@ StockTwits 的 Bullish/Bearish 是发帖人对**整条消息**的态度，而该
 1. **严禁在项目内新建任何非白名单 AI 工具目录**：
    本地智能体辅助目录仅限 `.box-agent` 与 `.box-agent-scratch` 两者。绝对禁止以任何理由在项目根目录或子目录下新建 `.workbuddy-ai`、`.workbuddy`、`.codebuddy` 或其他第三方工具目录；
 2. **严禁在项目树内建立任何隐式备份/归档目录**：
-   中间产物一律封存入对应报告树内的 `_source.zip`；**需要长期保留的冷备份放在项目外**（本机约定：`D:/Antigravity/TradingAgents_archive/`，与仓库平级），严禁在项目工作区内新建非标备份目录（历史反例：`.archive_local_backup/`、`reports/_archive/` —— 前者已于 2026-10-24 迁出并删除忽略规则）；
+   中间产物一律封存入对应报告树内的 `_source.zip`；**需要长期保留的冷备份放在项目外**（与仓库平级的位置，目录名自取；2026-10-24 已把历史遗留的冷备份连同 `D:/Antigravity/TradingAgents_archive/` 一并删除），严禁在项目工作区内新建非标备份目录（历史反例：`.archive_local_backup/`、`reports/_archive/` —— 前者已于 2026-10-24 迁出项目外并删除（忽略规则同步移除））；
 3. **架构不可动摇**：
    项目生命周期、目录职责与白名单已经闭环收敛，任何运行脚本、测试用例或外部调用者必须严格遵守已有目录契约，不得擅自新增目录架构。
 
