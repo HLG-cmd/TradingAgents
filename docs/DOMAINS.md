@@ -9,7 +9,7 @@
 > 二者同住本地私有记忆目录 `.workbuddy-ai/memory/`。该目录**已移出对外仓库**
 > （开源形态下不再分发本地运行痕迹）⇒ 上文所指的 `MEMORY.md` **不在本仓库中**。
 >
-> 本仓库的**常驻规则**现落在 [`docs/RULES.md`](RULES.md)（51 条工程铁律全文）；
+> 本仓库的**常驻规则**现落在 [`docs/RULES.md`](RULES.md)（工程铁律全文，条数以该文档自报为准）；
 > 本文继续承担「按标的 / 子系统查阅的口径与陷阱」。
 > ⚠️ 两者同源，**改任一边都要跑 `wb_analysis/_selftest.py`**（该约束不变）。
 
@@ -74,7 +74,7 @@
 
 ### 载体判定：非美股会**结构性**缺失整个维度
 韩股实测：⛔ **无期权链**（`option_structure=error`，且 `option_iv`/`option_skew`/`option_quote_freshness`
-三通道**根本不存在**，通道总数 **32**，美股是 **35**）；⛔ 无社媒；⛔ 无内部人交易；
+三通道**根本不存在**，较美股少期权与盘中分时等专属通道；当前通道基数以采集器自报为准）；⛔ 无社媒；⛔ 无内部人交易；
 ⛔ 无机构持股明细（`info` 的 `heldPercentInsiders`/`heldPercentInstitutions` 仍可用）；
 ⛔ 无 TTM 估值倍数（`trailingPE`/`priceToBook`/`trailingEps` 均为 None）；✅ **三大报表完整**。
 ⇒ **选标的时先数通道数**；缺的正好是「期权市场内部结构」这个本项目**最核心的独立验证维度**。

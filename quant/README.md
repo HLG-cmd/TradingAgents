@@ -7,10 +7,10 @@
 
 | 文件 | 作用 | 角色 |
 |---|---|---|
-| `screener_engine.py` | 多因子打分与量化筛选引擎 | **库**（被引 11 处） |
-| `stock_pools.py` | 股票池定义与成分拉取（NDX / SP500 / SP1500） | **库**（被引 13 处） |
-| `edgar_fundamentals.py` | SEC EDGAR 财报取数（XBRL，含 point-in-time、TTM、多年 CAGR） | **库**（被引 8 处） |
-| `price_history.py` | 长周期价格历史加载（回测用，可拉到 2000 年） | **库**（被引 5 处） |
+| `screener_engine.py` | 多因子打分与量化筛选引擎 | **库**（被上层入口与测试 import） |
+| `stock_pools.py` | 股票池定义与成分拉取（NDX / SP500 / SP1500） | **库**（被选股、回测与指数采集器 import） |
+| `edgar_fundamentals.py` | SEC EDGAR 财报取数（XBRL，含 point-in-time、TTM、多年 CAGR） | **库**（被基本面回测与增长复核 import） |
+| `price_history.py` | 长周期价格历史加载（回测用，可拉到 2000 年） | **库**（被因子与基本面回测 import） |
 | `smart_screener.py` | **入口**：四维 GARP 选股漏斗 + 对抗辩论 | 直接运行 |
 | `wb_deep_dive.py` | **入口**：单标的深度尽调 | 直接运行 |
 | `factor_backtest.py` | **入口**：因子逐年稳健性回测（`--watch` 看不重叠双样本 t 检验） | 直接运行 |
@@ -44,8 +44,8 @@ from quant.stock_pools import NASDAQ_100, get_latest_sp500
 ## 改代码前的回归清单
 
 ```bash
-./.venv/Scripts/python.exe -m pytest tests/ -q              # 全量测试（基线 725 passed / 1 skipped）
-./.venv/Scripts/python.exe -m pytest tests/quant/test_screener_engine.py tests/quant/test_edgar_fundamentals.py -q   # 与本包直接相关（48 条）
+./.venv/Scripts/python.exe -m pytest tests/ -q -k "not DeepSeekLive"    # 全量确定性测试（基线以 scripts/_health.py 的 BASELINE_PASSED 为准）
+./.venv/Scripts/python.exe -m pytest tests/quant/ -q                    # 只跑本包专属单元测试
 ./.venv/Scripts/python.exe -c "from quant import edgar_fundamentals as ef; print(ef.SEC_USER_AGENT)"     # 凭证仍从根 .env 读到
 ```
 第三条是**防静默失效**的关键：`edgar_fundamentals` 按自己所在目录找 `.env`，

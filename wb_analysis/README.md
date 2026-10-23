@@ -6,9 +6,9 @@
 
 | 文件 | 作用 |
 |---|---|
-| `collect.py` / `collect_index.py` | 采集器：个股 / 指数，各约 35 项数据 |
+| `collect.py` / `collect_index.py` / `collect_a_etf.py` / `collect_a_stock.py` / `collect_hk_index.py` | 采集器：美股个股 / 指数 / A 股 ETF / A 股个股 / 港股指数（精确通道数以证据包末尾健康度汇总为准） |
 | `_option_source.py` | **期权数据源适配器**：CBOE 官方延迟报价 → yfinance 同形接口。**盘前/盘后自动启用**（拿的是「上一时段收盘快照」，非实时报价；**仅美股个股与主要 ETF 有效**） |
-| `_derive_stock.py` / `_derive_ndx.py` | 派生指标（均线、ATR、分位、聚合估值等） |
+| `_derive_stock.py` / `_derive_ndx.py` / `_derive_a_etf.py`（落盘器：`_gen_derived_stock.py` / `_gen_derived_ndx.py`） | 派生指标（均线、ATR、分位、聚合估值、折溢价等） |
 | `assemble.py` | 渲染器：12 个角色的 md → 报告树 |
 | `_precheck.py` | **交付门禁**（项数以脚本自报为准；含缺口台账、小节正文、快照自洽、收益质量、评级契约、口径对账、数字溯源、时序、报告树反读） |
 | `_selftest.py` | 门禁自检（双向夹具，确认门禁本身没坏；项数以脚本自报为准） |

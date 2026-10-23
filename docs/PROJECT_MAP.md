@@ -26,7 +26,7 @@
 | **`reports/`** | **产出**：每个标的一个目录，里面是最终报告 + 审计包 | 新增一棵树 |
 | `tradingagents/` | 上游引擎（多智能体框架本体） | 不动 |
 | `cli/` | 上游的命令行界面 | 不动 |
-| `tests/` | 上游的单元测试 | 不动 |
+| `tests/` | 单元测试（含上游框架与自建流水线/量化/门禁测试） | 不动 |
 | `docs/` | **说明文档**（运行手册、选股手册、RULES.md 门禁准则、DOMAINS.md 领域口径规范） | 不动 |
 
 ### 自建代码都在 `quant/`（2026-09-23 起）
@@ -77,10 +77,10 @@
 
 | 子目录/文件 | 是什么 | 生命周期 |
 |---|---|---|
-| `collect.py` | **采集器**：美股个股 / ETF，抓 35~37 个免费通道 | 代码，长期 |
+| `collect.py` | **采集器**：美股个股 / ETF 多通道免费数据（精确通道数以证据包末尾健康度汇总为准） | 代码，长期 |
 | `collect_index.py` | **采集器**：美股指数（`NDX` / `SPX`） | 代码，长期 |
 | `collect_a_etf.py` | **采集器**：A 股 ETF（`--mode industry\|strategy\|commodity`，走 westock CLI） | 代码，长期 |
-| `collect_a_stock.py` | **采集器**：A 股个股（`--ticker 601899.SS`，走 westock CLI，23 通道） | 代码，长期 |
+| `collect_a_stock.py` | **采集器**：A 股个股（`--ticker 601899.SS`，走 westock CLI） | 代码，长期 |
 | `collect_hk_index.py` | **采集器**：港股指数（走 westock CLI） | 代码，长期 |
 | `collect_treasury.py` | **采集器**：美债专题（宏观曲线，不服务单一标的） | 代码，长期 |
 | `_option_source.py` | **期权数据源适配器**：把 CBOE 官方延迟报价适配成 yfinance 同形接口。**盘前/盘后自动启用**（见下方 §3.1） | 代码，长期 |
@@ -238,6 +238,8 @@ reports/
 ```bash
 # ★ 一条命令看整个项目状态（推荐每次开工/收工跑一次）
 ./.venv/Scripts/python.exe scripts/_health.py
+#   预算类检查（堆积预算 / 长函数预算）只做两件事：让占用**可见**、让指标**只减不增**；
+#   它们不追求「清零」—— 长函数要拆也得先有可测性，硬拆只会把风险从「难测」变成「易错」。
 
 # 工具索引（自动生成：所有脚本 + 用途 + 用法）
 #   → docs/TOOLS.md
