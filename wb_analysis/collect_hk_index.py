@@ -40,7 +40,6 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import pathlib
 import re
@@ -59,6 +58,8 @@ if str(ROOT) not in sys.path:
 # ★ 2026-10-10：本文件与 `collect_a_etf.py` 曾**逐字各存一份** run_westock/parse_md_table，
 #   且各自硬编码 `<用户主目录>\.local\bin\westock.exe`（机器特定）⇒ 抽出共享模块。
 from wb_analysis import _clock
+from wb_analysis._channel import ok_of  # noqa: E402
+from wb_analysis._integrity import write_manifest  # noqa: E402
 from wb_analysis._westock import WESTOCK, parse_md_table, run_westock  # noqa: E402
 
 
@@ -87,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     ]:
         sub = cmd[0].split() + cmd[1:] if " " in cmd[0] else cmd
         raw[name] = run_westock(sub)
-        ok = "<westock" not in raw[name] and raw[name].strip()
+        ok = ok_of(raw[name])
         print(f"  {'✓' if ok else '✗'} {name:12} {len(raw[name])} 字符")
 
     # --- 指数行情 ---
@@ -249,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
     out_md = OUT_DIR / f"{idx.upper()}_{date}.md"
     out_js = OUT_DIR / f"{idx.upper()}_{date}.json"
     out_md.write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
+    write_manifest(out_md)   # 只读清单：防角色回改证据包（AGENT_PROTOCOL §6）
     out_js.write_text(json.dumps(
         {"index": idx, "date": date, "quote": quote, "components": rows,
          "aggregate": agg, "fund_flow_usable": fund_usable, "raw": raw},

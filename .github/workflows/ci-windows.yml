@@ -55,11 +55,5 @@ jobs:
       - name: Install ruff
         run: pip install "ruff>=0.15"
       - name: Lint the repository
-        # ci.yml 的 lint job 声称"仓库在严格 select 下完全干净，所以 lint 全部"，
-        # 但 pyproject.toml 的 extend-exclude 排除了 wb_analysis / scripts ——
-        # 也就是自研核心与全部脚本从未被 lint 过。
-        # 这里显式只针对这两个目录跑，先把存量问题暴露出来。
-        # 初次接入必然报很多条：建议先在 pyproject 用 [tool.ruff.lint.per-file-ignores]
-        # 分阶段放宽（先只开 F / E9 / B），清零后删掉 continue-on-error。
-        continue-on-error: true
+        # 显式针对自研核心 wb_analysis / scripts 跑严格 lint 门禁。
         run: ruff check wb_analysis scripts

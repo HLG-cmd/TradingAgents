@@ -18,13 +18,13 @@ yfinance 的 point-in-time 接口对**历史日期**会拒答 profile fundamenta
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import yfinance as yf
 
 ROOT = Path(__file__).resolve().parents[1]
-# ⚠️ 2026-10-10：`timezone(timedelta(hours=-4))` 只在夏令时（EDT）成立，冬季应为 UTC−5 ⇒ 改用 IANA 时区名。
-ET = ZoneInfo("America/New_York")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from wb_analysis._clock import MARKET_TZ as ET  # noqa: E402
 
 FIELDS = [
     ("Market Cap", "marketCap"),

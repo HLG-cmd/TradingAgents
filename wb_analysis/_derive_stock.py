@@ -132,8 +132,13 @@ def report(ticker: str, date: str) -> None:
                 out.append((mm.group(1), float(mm.group(2))))
         return out
 
-    ind_latest_date = series("close_50_sma")
-    ind_latest_date = ind_latest_date[0][0] if ind_latest_date else "?"
+    # ★ 2026-10-23 修：原来只从 `close_50_sma` 取日期 —— 该通道一旦为空（bulk 计算瞬时失败后
+    #   静默降级到 per-day，SMA-50 全 N/A），这里就退化成 `?`，打印出
+    #   「日线末日收盘 320.76 @ ?；指标最新 ?」，下游无法判断该收盘价属于哪一天。
+    #   实测 GOOG_2026-10-23 正是这种情形（其余 11 个指标都有值）。
+    #   ⇒ 按优先级扫多个指标，取第一个有值序列的日期；全空才回退到命令行基准日。
+    _DATE_PROBE = ("close_200_sma", "close_10_ema", "rsi", "boll", "atr", "close_50_sma")
+    ind_latest_date = next((s[0][0] for n in _DATE_PROBE if (s := series(n))), date)
 
     # ★ K 线表只在全文解析一次（B/C 段与铁律 24 自检复用），避免多处扫描漂移
     rows = parse_bars(md)
@@ -413,9 +418,9 @@ def report(ticker: str, date: str) -> None:
         #    而证据包 §8 实际有 **150 行 / 44 笔 / $77,494,297**（差 22 倍）。
         #    两位分析师各自独立复核后才发现 ⇒ 已作为铁律 6 的实例记档。
         #    ⇒ 凡是"截断输出"，都必须在**输出内**标明，不能靠读者猜到。
-        lines = [l for l in body.splitlines() if l.strip()]
+        lines = [line for line in body.splitlines() if line.strip()]
         LIMIT = 22
-        print("\n".join("  " + l.strip() for l in lines[:LIMIT]))
+        print("\n".join("  " + line.strip() for line in lines[:LIMIT]))
         if len(lines) > LIMIT:
             print(f"  ... [TRUNCATED: 仅显示前 {LIMIT} 行，本节共 {len(lines)} 行]")
             print(f"  ... [完整内容见 {p.name} §8 —— **不要据本截断视图下结论**（本行的存在就是为了防这一点）]")

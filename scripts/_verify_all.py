@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -63,7 +65,8 @@ def read(p: Path) -> str:
 
 # ---------------------------------------------------------------- 1/2 pytest
 def check_pytest(quick: bool) -> None:
-    rc, out = run([sys.executable, "-m", "pytest", "-q",
+    bt = Path(tempfile.gettempdir()) / f"ta-verify-bt-{os.getpid()}"
+    rc, out = run([sys.executable, "-m", "pytest", "-q", "--basetemp", str(bt),
                    "tests/test_no_naive_clock.py", "tests/test_retry_behaviour.py"])
     n = re.search(r"(\d+) passed", out)
     f = re.search(r"(\d+) (failed|error)", out)
@@ -74,17 +77,6 @@ def check_pytest(quick: bool) -> None:
 
     if quick:
         rec("SKIP", "全量回归：--quick 跳过")
-        return
-    rc, out = run([sys.executable, "-m", "pytest", "-q"])
-    n = re.search(r"(\d+) passed", out)
-    s = re.search(r"(\d+) skipped", out)
-    f = re.search(r"(\d+) (failed|error)", out)
-    if rc == 0 and n:
-        got = int(n.group(1))
-        detail = f"{got} passed / {s.group(1) if s else 0} skipped（基线 {BASELINE_PASSED}）"
-        rec("OK" if got == BASELINE_PASSED else "WARN", "全量回归", detail)
-    else:
-        rec("FAIL", "全量回归未通过", (f.group(0) if f else f"rc={rc}") + " | " + out.strip()[-600:])
 
 
 # ---------------------------------------------------------------- 3 时区扫描
@@ -198,6 +190,10 @@ def check_health() -> None:
         rec("SKIP", "scripts/_health.py 不存在")
         return
     rc, out = run([sys.executable, "scripts/_health.py"], timeout=900)
+    m_reg = re.search(r"回归基线\s+[✓△✗]\s+(PASS|WARN|FAIL)\s+([^\n]+)", out)
+    if m_reg:
+        lv, detail = m_reg.group(1), m_reg.group(2).strip()
+        rec("OK" if lv == "PASS" else lv, "全量回归（复用 _health 回归基线）", detail)
     tail = [x for x in out.strip().splitlines() if x.strip()][-6:]
     rec("OK" if rc == 0 else "FAIL", f"_health.py 退出码 {rc}", " / ".join(tail)[:500])
 

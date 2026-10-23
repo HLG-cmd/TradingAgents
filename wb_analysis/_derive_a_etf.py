@@ -56,8 +56,13 @@ MA_WINDOWS = {"MA_5": 5, "MA_10": 10, "MA_20": 20, "MA_60": 60, "MA_120": 120, "
 NUM_RE = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?")
 
 
-def fnum(v, default=None):
-    """取字符串里**第一个**数值 token；`1.424 (偏离度: +0.56%)` → 1.424。"""
+def first_num(v, default=None):
+    """取字符串里**第一个**数值 token；`1.424 (偏离度: +0.56%)` → 1.424。
+
+    ★ 刻意**不叫** `fnum`（2026-10-23）：`wb_analysis._fmt.fnum` 是「整串转 float」，
+      两者语义不同 —— 同一包里出现两个同名不同义的 `fnum`，正是口径事故的温床。
+      本函数服务于「从带单位/带括号说明的表格单元格里抠出数字」，故独立命名。
+    """
     if v is None:
         return default
     if isinstance(v, (int, float)):
@@ -81,7 +86,7 @@ def parse_tables(text: str) -> list[tuple[list[str], list[list[str]]]]:
             while i < len(lines) and lines[i].strip().startswith("|"):
                 block.append(lines[i].strip())
                 i += 1
-            cells = [[c.strip() for c in l.strip().strip("|").split("|")] for l in block]
+            cells = [[c.strip() for c in line.strip().strip("|").split("|")] for line in block]
             if len(cells) >= 2:
                 tables.append((cells[0], cells[1:]))
         else:
@@ -138,18 +143,18 @@ def build(ticker: str, date: str) -> int:
     if b_k:
         ilast, ihigh, ilow, idate = h_k.index("last"), h_k.index("high"), h_k.index("low"), h_k.index("date")
         for r in reversed(b_k):  # 表按时间倒序 ⇒ 反转为由旧到新
-            c = fnum(r[ilast])
+            c = first_num(r[ilast])
             if c is None:
                 continue
             closes.append(c)
             dates.append(r[idate])
-            hi, lo = fnum(r[ihigh]), fnum(r[ilow])
+            hi, lo = first_num(r[ihigh]), first_num(r[ilow])
             if hi is not None:
                 highs.append(hi)
             if lo is not None:
                 lows.append(lo)
 
-    close = fnum(quote.get("收盘价"))
+    close = first_num(quote.get("收盘价"))
     L: list[str] = []
     L.append(f"# {ticker} 派生指标（由 wb_analysis/_derive_a_etf.py 生成，可直接引用）")
     L.append("")
@@ -174,7 +179,7 @@ def build(ticker: str, date: str) -> int:
     ma: dict[str, float | None] = {}
     flagged: list[str] = []
     for name, win in MA_WINDOWS.items():
-        claim = fnum(tech.get(name))
+        claim = first_num(tech.get(name))
         ma[name] = claim
         if claim is None:
             L.append(f"   · {name} ({win}): 证据包未取到该字段")
@@ -208,7 +213,7 @@ def build(ticker: str, date: str) -> int:
                 L.append(f"   {name:8s} {m:<12.6g} 距现价 {(close - m) / m * 100:+7.3f}%{dead}")
     ts = {"上轨": None, "中轨": None, "下轨": None}
     for k in ts:
-        ts[k] = fnum(tech.get(k))
+        ts[k] = first_num(tech.get(k))
     bu, bm, bl = ts["上轨"], ts["中轨"], ts["下轨"]
     if None not in (bu, bm, bl) and bu != bl:
         L.append(f"   布林: 上 {bu:.6g} / 中 {bm:.6g} / 下 {bl:.6g}")
@@ -239,9 +244,9 @@ def build(ticker: str, date: str) -> int:
         for w in (5, 10, 20, 60):
             if len(closes) > w:
                 r = (closes[-1] / closes[-(w + 1)] - 1) * 100
-                q = fnum(quote.get(f"涨跌幅_{w}日") or quote.get(f"{w}日涨跌幅") or quote.get(f"chg_{w}d"))
+                q = first_num(quote.get(f"涨跌幅_{w}日") or quote.get(f"{w}日涨跌幅") or quote.get(f"chg_{w}d"))
                 if q is None:
-                    q = fnum(quote.get(f"{w}日涨跌幅"))
+                    q = first_num(quote.get(f"{w}日涨跌幅"))
                 cross = (f"  ｜ quote={q:+g}%  {'一致' if abs(q - r) < 0.6 else '**不一致**'}"
                          if q is not None else "")
                 L.append(f"   近 {w:>3} 日: {r:+8.3f}%（{dates[-(w + 1)]} → {dates[-1]}）{cross}")
@@ -264,8 +269,8 @@ def build(ticker: str, date: str) -> int:
 
     # ---- F. 筹码 ----
     if chip:
-        cac, pr = fnum(chip.get("筹码平均成本")), fnum(chip.get("获利盘比例"))
-        c70, c90 = fnum(chip.get("70% 筹码集中度")), fnum(chip.get("90% 筹码集中度"))
+        cac, pr = first_num(chip.get("筹码平均成本")), first_num(chip.get("获利盘比例"))
+        c70, c90 = first_num(chip.get("70% 筹码集中度")), first_num(chip.get("90% 筹码集中度"))
         L.append("F. 筹码（取自证据包 chip 段，未复算）")
         if cac and close:
             L.append(f"   筹码平均成本: {cac:.6g}（现价相对 {(close - cac) / cac * 100:+.3f}%）")

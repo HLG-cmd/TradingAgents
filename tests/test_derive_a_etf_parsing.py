@@ -14,7 +14,7 @@
 
 后者正是典型「不报错、只是悄悄不出数」的缺陷，只能靠测试抓。
 本文件锁定解析层的三个契约：
-  · `fnum`     —— 从「1.424 (偏离度: +0.56%)」这类混合串里取**第一个**数值
+  · `first_num`     —— 从「1.424 (偏离度: +0.56%)」这类混合串里取**第一个**数值
   · `kv_from_block` —— 容忍 `- ` 前缀与中英文冒号
   · `find_kv`  —— **跨块合并**必须可行（否则永远解空）
 并显式验证「格式漂移会被检出」（字段计数为 0 时应能被上层判为不可信）。
@@ -33,7 +33,7 @@ if str(ROOT) not in sys.path:
 from wb_analysis._derive_a_etf import (  # noqa: E402
     find_kv,
     find_table,
-    fnum,
+    first_num,
     kv_from_block,
     parse_code_blocks,
     parse_tables,
@@ -41,8 +41,8 @@ from wb_analysis._derive_a_etf import (  # noqa: E402
 
 
 @pytest.mark.unit
-class TestFnum:
-    """`fnum` 取**第一个**数值 token —— 顺序错了会把偏离度当成指标值。"""
+class TestFirstNum:
+    """`first_num` 取**第一个**数值 token —— 顺序错了会把偏离度当成指标值。"""
 
     @pytest.mark.parametrize("raw,expected", [
         ("1.424 (偏离度: +0.56%)", 1.424),   # 关键：取 1.424 而不是 0.56
@@ -54,41 +54,41 @@ class TestFnum:
         ("1.4464", 1.4464),
     ])
     def test_first_number_wins(self, raw, expected):
-        assert fnum(raw) == pytest.approx(expected)
+        assert first_num(raw) == pytest.approx(expected)
 
     @pytest.mark.parametrize("raw", ["abc", "", None, "无"])
     def test_non_numeric_returns_default(self, raw):
-        assert fnum(raw) is None
-        assert fnum(raw, default=-1) == -1
+        assert first_num(raw) is None
+        assert first_num(raw, default=-1) == -1
 
     def test_numeric_passthrough(self):
-        assert fnum(1.5) == 1.5
-        assert fnum(2) == 2.0
+        assert first_num(1.5) == 1.5
+        assert first_num(2) == 2.0
 
     def test_value_with_parens_keeps_first_number(self):
         """值形如 `1.436 (偏离度: -0.07%)` 时必须取 1.436（第一个数），而不是 -0.07。"""
-        assert fnum("1.436 (偏离度: -0.07%)") == pytest.approx(1.436)
+        assert first_num("1.436 (偏离度: -0.07%)") == pytest.approx(1.436)
 
-    def test_label_with_digits_breaks_fnum_documented_invariant(self):
-        """★ 不变量：**调用方必须先剥离标签**再交给 fnum。
+    def test_label_with_digits_breaks_first_num_documented_invariant(self):
+        """★ 不变量：**调用方必须先剥离标签**再交给 first_num。
 
-        反例（本测试锁定其行为）：`fnum("MA_5: 1.436 …")` 会取到标签里的 **5.0**，
+        反例（本测试锁定其行为）：`first_num("MA_5: 1.436 …")` 会取到标签里的 **5.0**，
         因为 `NUM_RE.search` 匹配到的是 `MA_5` 的 `5`。
 
         为什么这不是「随便写的怪用例」：
-          · `_derive_a_etf.build()` 走的是 `fnum(tech.get(name))`，而 `tech` 来自
+          · `_derive_a_etf.build()` 走的是 `first_num(tech.get(name))`，而 `tech` 来自
             `kv_from_block()` —— **标签已被剥离**，所以生产路径安全；
-          · 但若将来有人把「整行」直接喂给 fnum（例如图省事解析新通道），
+          · 但若将来有人把「整行」直接喂给 first_num（例如图省事解析新通道），
             就会静默取到标签数字，产出**看起来正常实则错误**的指标值。
-          ⇒ 此用例把该不变量固化下来：fnum 只负责「取第一个数」，
+          ⇒ 此用例把该不变量固化下来：first_num 只负责「取第一个数」，
              **不负责识别哪个数是值**。剥离标签是调用方的责任。
         """
-        assert fnum("MA_5: 1.436 (偏离度: -0.07%)") == 5.0
-        assert fnum("MA_250: 1.4338") == 250.0
+        assert first_num("MA_5: 1.436 (偏离度: -0.07%)") == 5.0
+        assert first_num("MA_250: 1.4338") == 250.0
         # 正确用法对照：先剥标签
         from wb_analysis._derive_a_etf import kv_from_block
         kv = kv_from_block("MA_5: 1.436 (偏离度: -0.07%)")
-        assert fnum(kv["MA_5"]) == pytest.approx(1.436)
+        assert first_num(kv["MA_5"]) == pytest.approx(1.436)
 
 
 @pytest.mark.unit
@@ -112,7 +112,7 @@ class TestKvFromBlock:
         assert kv_from_block("收盘价：1.435")["收盘价"] == "1.435"
 
     def test_value_keeps_trailing_parenthetical(self):
-        """值里带括号说明时应整段保留（由 fnum 负责取数）。"""
+        """值里带括号说明时应整段保留（由 first_num 负责取数）。"""
         kv = kv_from_block("MA_5:   1.436 (偏离度: -0.07%)")
         assert kv["MA_5"].startswith("1.436")
 
@@ -167,7 +167,7 @@ class TestParseTables:
         # ⚠️ 分隔行 `| --- |` **会进 body**（共 3 行：分隔行 + 2 数据行）。
         #    这是 `parse_tables` 的真实契约：它只做「连续 | 行分组」，不做分隔行剔除。
         #    调用方（build / find_table 的使用者）靠**列名索引**取值，
-        #    分隔行的单元格（'---'）过不了 fnum 而被跳过 —— 见下一条测试。
+        #    分隔行的单元格（'---'）过不了 first_num 而被跳过 —— 见下一条测试。
         assert len(body) == 3
         assert body[0][0] == "---", "分隔行应位于 body[0]"
 
@@ -175,8 +175,8 @@ class TestParseTables:
         """分隔行不产出数值 ⇒ 调用方的 `if c is None: continue` 会跳过它。"""
         text = "| date | last |\n| --- | --- |\n| 2026-01-01 | 1.5 |\n"
         _, body = parse_tables(text)[0]
-        assert fnum(body[0][1]) is None, "分隔行不该产出数值"
-        assert fnum(body[1][1]) == 1.5
+        assert first_num(body[0][1]) is None, "分隔行不该产出数值"
+        assert first_num(body[1][1]) == 1.5
 
     def test_find_table_by_required_columns(self):
         text = "\n".join([
@@ -197,12 +197,12 @@ class TestParseTables:
         """分隔行 `| --- |` 会进 body —— 调用方需按列名索引而非按位置硬取。
 
         这里锁定「不会把分隔行误当数据行解析出数字」的行为：其单元格非数值，
-        fnum 返回 None，调用方用 `if c is None: continue` 跳过。
+        first_num 返回 None，调用方用 `if c is None: continue` 跳过。
         """
         text = "| date | last |\n| --- | --- |\n| 2026-01-01 | 1.5 |\n"
         _, body = parse_tables(text)[0]
-        assert fnum(body[0][1]) is None, "分隔行不该产出数值"
-        assert fnum(body[1][1]) == 1.5
+        assert first_num(body[0][1]) is None, "分隔行不该产出数值"
+        assert first_num(body[1][1]) == 1.5
 
 
 @pytest.mark.unit

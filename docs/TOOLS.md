@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-22 13:36
+- 生成时间：2026-10-24 01:55
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -23,12 +23,14 @@
 | `quant/price_history.py` | 长周期价格历史（10~20 年）—— 解开长周期回测的硬瓶颈。 | ./.venv/Scripts/python.exe quant/price_history.py |
 | `quant/screener_engine.py` | 多因子量化选股雷达引擎 (Multi-Factor GARP Screener Engine) | ./.venv/Scripts/python.exe quant/screener_engine.py |
 | `quant/smart_screener.py` | （无文档字符串） | ./.venv/Scripts/python.exe quant/smart_screener.py |
+| `quant/stats_utils.py` | 量化因子回测统计函数的**唯一定义源**（IC / ICIR / t-stat / 胜率 / 五分位收益差）。 | from quant.stats_utils import spearman, summarize, quintile_spread   （库；被回测脚本 import，不单独运行） |
 | `quant/stock_pools.py` | 美股核心股票池定义与动态获取模块。 | ./.venv/Scripts/python.exe quant/stock_pools.py |
 | `quant/wb_deep_dive.py` | 零成本深度投研流水线 —— 一站式自动化入口。 | ./.venv/Scripts/python.exe quant/wb_deep_dive.py |
 | `scripts/_settlement.py` | 历史决策回溯结算工具（吸收上游 TauricResearch v0.6.0 settlement 思想） | ./.venv/Scripts/python.exe scripts/_settlement.py |
 | `scripts/_verify_pack_tree.py` | 验证「交付树」与「审计包 _source.zip」**逐项内容一致**（通用版）。 | 任意标的 / 任意轮次 |
 | `scripts/run_nasdaq_premarket_task.py` | 纳指100（NDX）盘前利好利空情报汇总与开盘走势预判自动化任务。 | ./.venv/Scripts/python.exe scripts/run_nasdaq_premarket_task.py [--date YYYY-MM-DD] |
 | `wb_analysis/_audit_empty_sections.py` | 审计证据包的「**小节正文为空**」—— 抓「通道全绿但内容是空」这类静默失败。 | ./.venv/Scripts/python.exe wb_analysis/_audit_empty_sections.py <evidence.md> [--strict] |
+| `wb_analysis/_channel.py` | 采集通道健康度判据的**唯一定义源**（Single source of truth for channel ok_of）。 | from wb_analysis._channel import ok_of   （库；被各采集器 import，不单独运行） |
 | `wb_analysis/_check_residuals.py` | 订正残留检查：防止「改了上游、忘了回头清下游」。 | ./.venv/Scripts/python.exe wb_analysis/_check_residuals.py <草稿目录> |
 | `wb_analysis/_check_role_files.py` | 角色文件体检：篇幅 / 裸五档英文词 / 越界 PROPOSAL / 合规声明 / 必需小节。 | ./.venv/Scripts/python.exe wb_analysis/_check_role_files.py |
 | `wb_analysis/_clock.py` | 唯一时间源（Single source of truth for time）。 | — |
@@ -38,11 +40,14 @@
 | `wb_analysis/_derive_ndx.py` | 派生指标计算器：从指数证据包导出所有「需要算术推导」的二级指标（支持 NDX / SPX）。 | ./.venv/Scripts/python.exe wb_analysis/_derive_ndx.py |
 | `wb_analysis/_derive_stock.py` | 个股派生指标计算器：从个股证据包导出所有「需要算术推导」的二级指标。 | ./.venv/Scripts/python.exe wb_analysis/_derive_stock.py |
 | `wb_analysis/_erp_retry.py` | ERP 计算的重试包装器。 | ./.venv/Scripts/python.exe wb_analysis/_erp_retry.py |
+| `wb_analysis/_fmt.py` | 采集/派生层共用的**纯格式化工具**（唯一定义源）。 | from wb_analysis._fmt import fnum, pct_str, ystr, wcode_of, compact_series   （库；不单独运行） |
 | `wb_analysis/_gen_derived_ndx.py` | 把 _derive_ndx.py 的 stdout 落盘（避免 shell 重定向写中文 + /tmp 路径问题）。 | ./.venv/Scripts/python.exe wb_analysis/_gen_derived_ndx.py |
 | `wb_analysis/_gen_derived_stock.py` | 把 _derive_stock.py 的 stdout 落成证据包同级文件（避免 shell 重定向写中文）。 | ./.venv/Scripts/python.exe wb_analysis/_gen_derived_stock.py |
 | `wb_analysis/_gen_meta.py` | 为草稿目录生成 `meta.json`（`assemble.py --from-dir` 的**必备**输入）。 | ./.venv/Scripts/python.exe wb_analysis/_gen_meta.py GOOG_2026-10-01 [NDX_2026-10-01 ...] |
 | `wb_analysis/_gen_supplement.py` | 生成 `<TICKER>_<date>.supplement.md`：证据包 §3 被上游扣留时的**一等替代证据源**。 | ./.venv/Scripts/python.exe wb_analysis/_gen_supplement.py <TICKER> <YYYY-MM-DD> |
 | `wb_analysis/_insider_agg.py` | 从证据包 §8 内部人交易 CSV 段落聚合买卖统计（回原始样本重数，不依赖任何摘要）。 | ./.venv/Scripts/python.exe wb_analysis/_insider_agg.py |
+| `wb_analysis/_integrity.py` | 证据包**只读性**校验：采集时落一份 sha256 清单，交付门禁时比对。 | from wb_analysis._integrity import write_manifest, verify   （库；不单独运行） |
+| `wb_analysis/_length.py` | 角色稿篇幅门禁的**唯一定义源**。 | from wb_analysis._length import MIN_CHARS_ANALYST, MIN_CHARS_DECISION, MAX_CHARS   （库；不单独运行） |
 | `wb_analysis/_log.py` | 流水线日志与"降级留痕"。 | — |
 | `wb_analysis/_nasdaq_official.py` | 拉 Nasdaq 官方 API 的日线并打印，用于人工对照 NDX 证据包 §1。 | ./.venv/Scripts/python.exe wb_analysis/_nasdaq_official.py |
 | `wb_analysis/_net.py` | 统一的网络重试。 | — |
@@ -64,7 +69,7 @@
 | `wb_analysis/_verify_growth_edgar.py` | 用 SEC EDGAR 的**多年营收 CAGR** 复核量化榜单的「成长」维度。 | ./.venv/Scripts/python.exe wb_analysis/_verify_growth_edgar.py |
 | `wb_analysis/_verify_snapshot_consistency.py` | 快照**内部自洽性**检测 —— 专门抓「通道报 ok，但数值与同一份快照的基点矛盾」。 | ./.venv/Scripts/python.exe wb_analysis/_verify_snapshot_consistency.py NVDA 2026-10-09 |
 | `wb_analysis/_westock.py` | `westock` CLI 的统一接入层 —— 可执行文件定位 + 调用 + 表格解析。 | from wb_analysis._westock import WESTOCK, run_westock, parse_md_table   （库；不单独运行） |
-| `wb_analysis/_wrap_derived.py` | （无文档字符串） | ./.venv/Scripts/python.exe wb_analysis/_wrap_derived.py |
+| `wb_analysis/_wrap_derived.py` | 把 _derive_ndx.py 的 stdout 包成 md 代码块，覆写 0_derived.md。 | ./.venv/Scripts/python.exe wb_analysis/_wrap_derived.py <src_path> <dst_path> |
 | `wb_analysis/_writeback_analysis.py` | 把草稿目录的 12 个角色文件回写 `wb_analysis/analysis/<T>_<date>.json`。 | ./.venv/Scripts/python.exe wb_analysis/_writeback_analysis.py |
 | `wb_analysis/assemble.py` | 报告树组装器 —— 把分析层产出的 JSON 渲染成与上游同构的报告树。 | ./.venv/Scripts/python.exe wb_analysis/assemble.py |
 | `wb_analysis/collect.py` | 免费证据采集器 —— 全程不调用任何 LLM。 | ./.venv/Scripts/python.exe wb_analysis/collect.py |
@@ -85,9 +90,9 @@
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|
 | `scripts/_diff_evidence_pack.py` | 证据包等价性比对——用于 collect_index.py 拆分子模块前后的行为回归。 | — |
-| `scripts/_fix_round3.py` | 第三轮收口：修 _thresholds.py 的注解未定义名、修 round2 的 CI 双补丁覆盖 bug、摊开 collect_in | — |
 | `scripts/_health.py` | 项目健康检查：**一条命令看整个项目状态**（把散落的各处门禁汇总成一个入口）。 | ./.venv/Scripts/python.exe scripts/_health.py [--quiet] |
 | `scripts/_memory_index.py` | 为本地运行痕迹目录（`.workbuddy-ai/memory/`）生成**主题索引**（`_INDEX.md`）。 | ./.venv/Scripts/python.exe scripts/_memory_index.py [--check] |
+| `scripts/_normalize_eol.py` | 把工作区里被误写成 CRLF 的**文本文件**恢复为 LF（.bat/.ps1 例外，规范要求 crlf）。 | python scripts/_oneoff/_normalize_eol.py   （把误写成 CRLF 的文本文件恢复为 LF） |
 | `scripts/_oneoff/_apply_governance.py` | 治理落地总执行器（默认干跑）。 | — |
 | `scripts/_oneoff/_codemod_clock.py` | 一次性 codemod：把 wb_analysis 里的裸本地时间改为走 wb_analysis/_clock.py。 | — |
 | `scripts/_probe_baseline.py` | （无文档字符串） | — |
@@ -111,7 +116,7 @@
 
 ## oneoff —— 为某次结论临时写的探针
 
-> **`_oneoff/` 是收件箱**：探针服务的那一轮交付并封存后，会**随案卷进 `reports/<标的>/<时间戳>/_source.zip`**，`_oneoff/` 于是回到空 —— **看到它空是正常的**。
+> **`_oneoff/` 是本地审计收件箱（`.gitignore` 忽略，不入对外仓库）**：探针服务的那一轮交付并封存后，会**随案卷进 `reports/<标的>/<时间戳>/_source.zip`**，`_oneoff/` 于是回到空 —— **看到它空是正常的**。治理类一次性脚本（如 `_fix_round3.py`）则同步留存于本机冷备份 `.archive_local_backup/` 及历史 commit 中。
 
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|
@@ -161,6 +166,7 @@
 | `scripts/_oneoff/_fix_rating_words.py` | （无文档字符串） | 2026-09 期若干轮草稿 |
 | `scripts/_oneoff/_fix_reports_layout.py` | 核对并按需修正 `reports/` 的目标布局（幂等；可反复运行）。 | 2026-09-23 一次性布局迁移（8 个标的） |
 | `scripts/_oneoff/_fix_role_files_empty_pass.py` | 修 `_check_role_files.py`：**空草稿目录被判「通过」**（本日第 9 例，已实测复现）。 | ./.venv/Scripts/python.exe scripts/_oneoff/_fix_role_files_empty_pass.py |
+| `scripts/_oneoff/_fix_round3.py` | 第三轮收口：修 _thresholds.py 的注解未定义名、修 round2 的 CI 双补丁覆盖 bug、摊开 collect_in | governance 2026-10-22 |
 | `scripts/_oneoff/_fix_scorecard_decisive_absent.py` | 修 `_scorecard.py::score_tree` 的一处静默降级。 | TradingAgents 治理 2026-10-22 |
 | `scripts/_oneoff/_fix_strip_verify_caliber.py` | 修 `_strip_stray_ratings.py` 回读校验的口径 —— 它给出过**假的「已清干净」**。 | TradingAgents 治理 2026-10-22 |
 | `scripts/_oneoff/_fix_trader_ratings.py` | （无文档字符串） | 把 GOOG / NFLX 交易员稿正文里的五档英文词改为中文，使 trader.md 全文恰含 1 个五档词 |
@@ -183,7 +189,7 @@
 | `scripts/_oneoff/_probe_goog_shares.py` | Alphabet 的 GOOG(Class C) / GOOGL(Class A) 在 yfinance 上会给出不同口径的股数。 | GOOG 2026-09-29 —— Alphabet 三类股（A/B/C）股数双口径探针（铁律 23） |
 | `scripts/_oneoff/_probe_goog_ttm.py` | 为什么需要这个探针：证据包 §3 基本面快照被时点闸门扣留，且只给了年度报表。 | GOOG 2026-09-29 —— TTM 拆解探针 |
 | `scripts/_oneoff/_probe_goog_untraced.py` | 为什么需要这个探针：`_lint_drafts.py` 的「未溯源数字」清单**只打印前 25 个**， | GOOG 2026-09-29 —— 未溯源数字全量导出探针（数字溯源审计） |
-| `scripts/_oneoff/_probe_health_all.py` | 对抗性实测：`_health.py` **全部 13 个检查器**逐个注入坏条件，看谁能被绕过。 | ./.venv/Scripts/python.exe scripts/_oneoff/_probe_health_all.py |
+| `scripts/_oneoff/_probe_health_all.py` | 对抗性实测：`_health.py` **全部检查器**逐个注入坏条件（项数以 `_health.py` 自报为准，勿写死），看谁能被绕 | ./.venv/Scripts/python.exe scripts/_oneoff/_probe_health_all.py |
 | `scripts/_oneoff/_probe_ndx_formulas.py` | 逐条复算 6 份 NDX 草稿里显式写出的算式（a − b = c / a ÷ b = c / a × b = c），找出算错的数。 | — |
 | `scripts/_oneoff/_probe_ndx_untraced.py` | 一次性探针：导出 NDX_2026-09-29 草稿的全部「未溯源数字」（带行号与原文）， | ./.venv/Scripts/python.exe scripts/_oneoff/_probe_ndx_untraced.py |
 | `scripts/_oneoff/_probe_nflx_baseline.py` | （无文档字符串） | NFLX 基线探针 |

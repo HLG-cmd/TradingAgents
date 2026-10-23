@@ -10,6 +10,10 @@ import pytest
 
 from tradingagents.llm_clients import anthropic_client as mod
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:Model .* is not in the known model list:RuntimeWarning"
+)
+
 
 def _capture_kwargs(monkeypatch):
     captured: dict = {}

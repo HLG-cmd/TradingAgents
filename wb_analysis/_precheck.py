@@ -59,6 +59,11 @@ HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
 PY = sys.executable
 
+# ★ 2026-10-24：以 `python wb_analysis/_precheck.py` 直接运行时，sys.path[0] 是 `wb_analysis/`，
+#   `import wb_analysis._integrity` 会 ModuleNotFoundError（实测）。补一次 ROOT 引导。
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 
 def run(cmd: list[str]) -> tuple[int, str]:
     """在**项目根**下运行子工具。
@@ -140,6 +145,27 @@ def caliber_conflicts(evidence: list[Path]) -> list[dict]:
     return out
 
 
+def _num_overlap(a: Path, b: Path) -> float | None:
+    """两稿数字 token 的 Jaccard 重合率（%）。无可比数字时返回 None。"""
+    def nums(p: Path) -> set[str]:
+        t = p.read_text(encoding="utf-8")
+        return set(re.findall(r"\d+\.\d{2,}", t)) | set(re.findall(r"\b\d{2,4}\b", t))
+    na, nb = nums(a), nums(b)
+    if not na or not nb:
+        return None
+    union = na | nb
+    return len(na & nb) / len(union) * 100 if union else None
+
+
+def _integrity_verify(md: Path) -> tuple[bool, str]:
+    """证据包 sha256 与采集时清单比对（`wb_analysis/_integrity.py`）。"""
+    try:
+        from wb_analysis._integrity import verify
+    except Exception as exc:  # noqa: BLE001
+        return False, f"完整性模块不可用（{type(exc).__name__}）⇒ 无法校验，按 WARN 处理"
+    return verify(md)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="交付前统一门禁")
     ap.add_argument("draft_dir")
@@ -193,7 +219,7 @@ def main() -> int:
     if crashed(out):
         add("运行卫生", "WARN", "检查器自身报错（见单独运行 _reports_index.py 的输出）")
     else:
-        n = sum(1 for l in out.splitlines() if l.strip().startswith("- ["))
+        n = sum(1 for line in out.splitlines() if line.strip().startswith("- ["))
         if n == 0:
             add("运行卫生", "PASS", "无孤儿产物、无顶层散落、无缺草稿的报告树")
         else:
@@ -216,11 +242,11 @@ def main() -> int:
             if crashed(out):
                 add("数据缺口台账", "FAIL", "台账工具自身报错")
             elif rc == 1:
-                miss = [l.strip() for l in out.splitlines() if l.strip().startswith("✗ 未声明")]
+                miss = [line.strip() for line in out.splitlines() if line.strip().startswith("✗ 未声明")]
                 add("数据缺口台账", "FAIL", f"决定性缺口未在简报中声明 {len(miss)} 条：" +
                     "；".join(x.replace("✗ 未声明：", "")[:50] for x in miss[:3]))
             elif rc == 0:
-                n = next((l for l in out.splitlines() if "决定性缺口" in l and "条" in l), "")
+                n = next((line for line in out.splitlines() if "决定性缺口" in line and "条" in line), "")
                 add("数据缺口台账", "PASS", n.strip().replace("[门禁] ", "") or "决定性缺口均已声明")
             else:
                 add("数据缺口台账", "WARN", f"非预期退出码 {rc}")
@@ -312,7 +338,7 @@ def main() -> int:
             if declared_eq:
                 add("收益质量硬闸门", "PASS", "报表净利虽含非经常项，但简报已穿透并改用经营性/扣非口径")
             else:
-                fail_lines = [l.strip() for l in out.splitlines() if "FAIL:" in l]
+                fail_lines = [line.strip() for line in out.splitlines() if "FAIL:" in line]
                 summary_err = fail_lines[0] if fail_lines else "报表净利失真"
                 add("收益质量硬闸门", "FAIL", f"命中硬闸门未在简报穿透声明：{summary_err[:60]}")
     elif tk:
@@ -325,7 +351,7 @@ def main() -> int:
     elif rc == 0:
         add("评级词/契约字段", "PASS", "五个档位英文词与必需字段全部合规")
     else:
-        bad = [l.strip() for l in out.splitlines() if l.strip().startswith("结论：✗")]
+        bad = [line.strip() for line in out.splitlines() if line.strip().startswith("结论：✗")]
         add("评级词/契约字段", "FAIL", bad[0][:90] if bad else "存在不合规项")
 
     # ---- 2. 口径一致性（旧值残留 + 同字段多值冲突）----
@@ -340,7 +366,7 @@ def main() -> int:
         elif rc == 0:
             add("口径一致性", "PASS", "无旧值残留，分项求和自洽")
         else:
-            n = sum(1 for l in out.splitlines() if l.strip().startswith("L") and "[" in l)
+            n = sum(1 for line in out.splitlines() if line.strip().startswith("L") and "[" in line)
             add("口径一致性", "FAIL", f"存在旧值残留或不自洽（约 {n} 处命中）")
         _blk_done = True
     if not _blk_done:
@@ -371,8 +397,8 @@ def main() -> int:
                     if cand.exists() and cand not in expanded_ev:
                         expanded_ev.append(cand)
         rc, out = run([PY, str(HERE / "_lint_drafts.py"), str(draft)] + [str(e) for e in expanded_ev])
-        viol = [l.strip() for l in out.splitlines() if l.strip().startswith("✗")]
-        untraced = [l.strip() for l in out.splitlines() if "未溯源数字" in l]
+        viol = [line.strip() for line in out.splitlines() if line.strip().startswith("✗")]
+        untraced = [line.strip() for line in out.splitlines() if "未溯源数字" in line]
         if crashed(out):
             add("数字溯源/契约", "FAIL", "校验器自身报错")
         elif rc == 2:
@@ -388,7 +414,7 @@ def main() -> int:
 
     # ---- 4. 时序新鲜度（默认只作提示）----
     rc, out = run([PY, str(HERE / "_check_freshness.py"), str(draft)])
-    line = next((l.strip() for l in out.splitlines() if l.strip().startswith(("✓", "✗"))), "")
+    line = next((row.strip() for row in out.splitlines() if row.strip().startswith(("✓", "✗"))), "")
     if crashed(out):
         add("时序新鲜度", "FAIL", "校验器自身报错")
     elif rc == 0:
@@ -396,6 +422,41 @@ def main() -> int:
     else:
         lvl = "FAIL" if args.strict_freshness else "INFO"
         add("时序新鲜度", lvl, (line or "有文件早于简报") + " ← 需用**内容比对**确认，见铁律 7")
+
+    # ---- 4b. 证据包只读性（2026-10-24 新增）----
+    #   AGENT_PROTOCOL §6 明令「子智能体不得修改证据包」，但此前**没有任何检查**：
+    #   角色把某个数字改成自己想引用的值后，`_lint_drafts` 的数字溯源反而以被改后的证据包为基准
+    #   ⇒ 自我印证，编造数字变成「可溯源」。这是门禁链上唯一的无防护面。
+    _base_ev = next((p for p in evidence if p.name.endswith(".md") and "supplement" not in p.name), None)
+    if _base_ev is None:
+        add("证据包只读", "WARN", "未提供基线证据包 md，跳过")
+    else:
+        _ok, _why = _integrity_verify(_base_ev)
+        if not _ok and "无法校验" in _why:
+            add("证据包只读", "WARN", _why)
+        elif not _ok:
+            add("证据包只读", "FAIL", _why)
+        elif "无完整性清单" in _why:
+            add("证据包只读", "WARN", _why)
+        else:
+            add("证据包只读", "PASS", _why)
+
+    # ---- 4c. 辩论独立性（2026-10-24 新增）----
+    #   依据 AGENT_PROTOCOL §4：牛熊两稿引用的证据集合重合率 >70% ⇒ 判本轮拆分失败。
+    #   此前该判据只写在文档里、靠人眼判断；这里把它变成可计算的数（数字 token 的 Jaccard）。
+    #   ⚠️ 只报 WARN：同一份证据包天然共享一部分数字（实测健康轮 45.4%），FAIL 会误伤。
+    _bull, _bear = draft / "2_research" / "bull.md", draft / "2_research" / "bear.md"
+    if not (_bull.exists() and _bear.exists()):
+        add("辩论独立性", "WARN", "缺 bull.md 或 bear.md，跳过")
+    else:
+        _jb = _num_overlap(_bull, _bear)
+        if _jb is None:
+            add("辩论独立性", "WARN", "两稿无可提取数字，无法计算重合率")
+        elif _jb > 70.0:
+            add("辩论独立性", "WARN",
+                f"牛熊数字重合率 {_jb:.1f}%（>70%）⇒ 判本轮 R1 拆分失败，须换独立上下文重跑两稿")
+        else:
+            add("辩论独立性", "PASS", f"牛熊数字重合率 {_jb:.1f}%（阈值 70%）")
 
     # ---- 5. 报告树反读（可选）----
     if args.report:
@@ -423,7 +484,7 @@ def main() -> int:
         print(f"结论：✗ {len(fails)} 项 FAIL —— {'、'.join(fails)}")
         print("      ⇒ 修正后重跑本脚本，全绿再渲染。")
         return 1
-    warns = [n for n, l, _ in results if l == "WARN"]
+    warns = [n for n, lvl, _ in results if lvl == "WARN"]
     print("结论：✓ 无阻断项" + (f"（{len(warns)} 项待人工过目：{'、'.join(warns)}）" if warns else ""))
     return 0
 

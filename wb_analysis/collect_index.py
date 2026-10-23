@@ -46,14 +46,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import math
 import os
 import re
-import statistics
 import sys
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -65,8 +62,9 @@ from dotenv import load_dotenv
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-from quant.stock_pools import NASDAQ_100, get_latest_sp500
-from wb_analysis._thresholds import HUMP_MIN_PP, MAX_QUOTE_AGE_DAYS  # noqa: E402
+from quant.stock_pools import NASDAQ_100, get_latest_sp500  # noqa: E402
+from wb_analysis._integrity import write_manifest  # noqa: E402
+from wb_analysis._log import log_gap  # noqa: E402
 from wb_analysis.collect import (  # noqa: E402
     MACRO_ALIASES,
     PREDICTION_TOPICS,
@@ -74,6 +72,7 @@ from wb_analysis.collect import (  # noqa: E402
     _compact_macro,
     _compact_series,
     _get_router,
+    _indicator_health,
     _price_summary,
     _reddit_block,
     _safe_call,
@@ -158,18 +157,18 @@ _UNIVERSE_WORKERS = 8
 # ----------------------------------------------------------------------------
 # 领域子模块 re-export（解耦后保持 100% 向下兼容）
 # ----------------------------------------------------------------------------
-from wb_analysis._thresholds import option_source_decision
-from wb_analysis.index_breadth import (
+from wb_analysis._thresholds import option_source_decision  # noqa: F401  # re-export
+from wb_analysis.index_breadth import (  # noqa: F401  # re-export
     _download_close_chunked,
     compute_breadth,
 )
-from wb_analysis.index_math import (
+from wb_analysis.index_math import (  # noqa: F401  # re-export
     _bs_delta,
     _bs_price,
     _implied_vol,
     _norm_cdf,
 )
-from wb_analysis.index_options import (
+from wb_analysis.index_options import (  # noqa: F401  # re-export
     BOND_PROXIES,
     CROSS_ASSET_GROUPS,
     VOL_PROXIES,
@@ -182,7 +181,7 @@ from wb_analysis.index_options import (
     fetch_volatility_proxies,
     probe_option_freshness,
 )
-from wb_analysis.index_valuation import (
+from wb_analysis.index_valuation import (  # noqa: F401  # re-export
     _CURRENT,
     DEFAULT_INDEX,
     ETF_PROXY,
@@ -214,6 +213,90 @@ def fetch_option_structure(etf: str = ETF_PROXY) -> dict:
     #     freshness["cboe_fallback_failed"] = True
     """
     return _fetch_option_structure_impl(etf=etf)
+
+
+def _render_valuation_block(val: dict, holdings: list, display: str, index_key: str) -> str:
+    """§5 成分结构与聚合估值（纯渲染：只依赖已取到的 dict/list，不做任何 IO）。"""
+    if val.get("error"):
+        return (f"## 5. 成分结构聚合\n\n(不可用: {val['error']})")
+    else:
+        sec_txt = "\n".join(f"  {name:<34} {w:>6.2f}%" for name, w in val["sector_weights"])
+        hold_txt = "\n".join(
+            f"  {h['symbol']:<6} {h['name'][:38]:<38} {h['weight_pct']:>6.2f}%" for h in holdings
+        ) or "  (不可用)"
+        hold_sum = round(sum(h["weight_pct"] for h in holdings), 2) if holdings else None
+        top10_txt = "\n".join(
+            f"  {r['ticker']:<6} {r['name'][:30]:<30} 权重 {r['weight_pct']:>5.2f}%  "
+            f"市值 {r['marketCap']/1e9:>8.1f}B  PE {str(r['pe'] or 'N/A'):>9}  FwdPE {str(r['fpe'] or 'N/A'):>8}  PB {str(r['pb'] or 'N/A'):>7}"
+            for r in val["top10_by_weight"]
+        )
+        return (
+            "## 5. 成分结构与聚合估值\n\n"
+            f"### 5.1 {ETF_PROXY} 真实持仓权重（前十大，ETF 跟踪 {index_key}）\n```\n"
+            f"{hold_txt}\n```\n\n"
+            "### 5.2 市值加权聚合估值（调和口径：Σ市值 / Σ盈利）\n"
+            f"- **聚合 PE (TTM): {val['agg_pe']}**（基于 {val['n_pe_used']} 只有正盈利的成分股）\n"
+            f"- **聚合 Forward PE: {val['agg_forward_pe']}**\n"
+            f"- **聚合 PB: {val['agg_pb']}**\n"
+            f"- **聚合 PS: {val['agg_ps']}**\n"
+            f"- **盈利收益率（1/PE）: {val['earnings_yield_pct']}%**\n"
+            f"- 聚合股息率: {val['agg_div_yield_pct']}%\n"
+            f"- 聚合 ROE: {val['agg_roe_pct']}%（口径：Σ净利 / Σ净资产）\n"
+            f"- 聚合净利率: {val['agg_net_margin_pct']}%（加权毛利率 {val['agg_gross_margin_pct']}%，加权营业利润率 {val['agg_op_margin_pct']}%）\n"
+            f"- 加权营收增速: {val['agg_rev_growth_pct']}%（成分股中位数 {val['agg_rev_growth_median_pct']}%）\n"
+            f"- 加权盈利增速: {val['agg_eps_growth_pct']}%（成分股中位数 {val['agg_eps_growth_median_pct']}%）\n"
+            f"- 加权 Beta: {val['agg_beta']}（成分股中位数 {val['median_beta']}）\n"
+            f"- 无正盈利被剔除: {len(val['excluded_pe_tickers'])} 只 {val['excluded_pe_tickers']}\n"
+            f"- 数据缺失: {val['n_missing']} 只 {val['missing']}\n\n"
+            "### 5.3 集中度（两种口径必须区分）\n"
+            f"- 参与聚合总市值: {val['total_market_cap']/1e12:.3f} 万亿美元\n"
+            f"- **【官方口径】{ETF_PROXY} 前十大权重合计: {hold_sum}%**（修正市值加权，对超大权重设上限）\n"
+            f"- 【推算口径】纯市值加权前十大合计: {val['top10_weight_pct']}%（若不设权重上限）\n"
+            f"- 纯市值加权前二十大合计: {val['top20_weight_pct']}%\n"
+            f"- HHI 集中度指数（纯市值口径）: {val['hhi']}\n"
+            f"- 说明: 两个口径的差额，反映 {display}「修正市值加权」机制人为压制集中度的程度。\n\n"
+            "### 5.4 前十大成分股（按市值）\n```\n"
+            f"{top10_txt}\n```\n\n"
+            "### 5.5 行业权重（按市值）\n```\n"
+            f"{sec_txt}\n```"
+        )
+
+
+def _render_breadth_block(breadth: dict) -> str:
+    """§4 市场广度（纯渲染：只依赖 compute_breadth 的返回值，不做任何 IO）。"""
+    if breadth.get("error"):
+        return (f"## 4. 市场广度\n\n(不可用: {breadth['error']})")
+    else:
+        cands = sorted(
+            [c for c in breadth["candidates"] if c.get("ret20") is not None],
+            key=lambda c: -c["ret20"],
+        )
+        rows_txt = "\n".join(
+            f"  {c['ticker']:<6} 20日 {c['ret20']:>7.2f}%  60日 {(c['ret60'] or 0):>7.2f}%  "
+            f"120日 {(c['ret120'] or 0):>8.2f}%  {'>200SMA' if c['above_200'] else '      '}  {'>50SMA' if c['above_50'] else ''}"
+            for c in cands[:15]
+        )
+        bottom_txt = "\n".join(
+            f"  {c['ticker']:<6} 20日 {c['ret20']:>7.2f}%  60日 {(c['ret60'] or 0):>7.2f}%  "
+            f"120日 {(c['ret120'] or 0):>8.2f}%"
+            for c in cands[-10:]
+        )
+        return (
+            "## 4. 市场广度（成分股聚合）\n\n"
+            f"- 有效样本: {breadth['n_valid']} 只"
+            f"（成分股池 {breadth.get('n_universe', '?')} 只，覆盖率 "
+            f"{round(breadth['n_valid'] / breadth['n_universe'] * 100, 1) if breadth.get('n_universe') else '?'}%）\n"
+            f"- **站上 200SMA 比例: {breadth['pct_above_200sma']}%**\n"
+            f"- **站上 50SMA 比例: {breadth['pct_above_50sma']}%**\n"
+            f"- 20 日收涨家数占比: {breadth['pct_up_20d']}%\n"
+            f"- 60 日收涨家数占比: {breadth['pct_up_60d']}%\n"
+            f"- 120 日收涨家数占比: {breadth['pct_up_120d']}%\n"
+            f"- 成分股 20 日收益中位数: {breadth['median_ret20']}%（等权均值 {breadth['equal_weight_ret20']}%）\n"
+            f"- 成分股 60 日收益中位数: {breadth['median_ret60']}%（等权均值 {breadth['equal_weight_ret60']}%）\n"
+            f"- 20 日收益离散度（标准差）: {breadth['dispersion_ret20']}%\n\n"
+            f"### 20 日涨幅前 15 名\n```\n{rows_txt}\n```\n\n"
+            f"### 20 日涨幅后 10 名\n```\n{bottom_txt}\n```"
+        )
 
 
 def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: bool,
@@ -258,8 +341,14 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
     ind_lines = []
     for ind in TECH_INDICATORS:
         st, txt = _safe_call("get_indicators", router, "get_indicators", INDEX_TICKER, ind, as_of, _INDICATOR_LOOKBACK)
+        compact = _compact_series(txt)
+        raw_st = st
+        st = _indicator_health(st, compact)   # 空序列不得记 ok（铁律 3 假绿，判据同 collect.py）
+        if raw_st == "ok" and st == "unavailable":
+            log_gap(f"collect_index.indicator_empty:{ind}",
+                    f"{ind} 通道返回正文但无有效数据行（已降级 unavailable）")
         health[f"index:indicator:{ind}"] = st
-        ind_lines.append(f"### {ind}\n```\n{_compact_series(txt)}\n```")
+        ind_lines.append(f"### {ind}\n```\n{compact}\n```")
     blocks.append("## 2. 指数技术指标\n\n" + "\n\n".join(ind_lines))
 
     # --- 3. ETF 代理估值 ---
@@ -276,39 +365,8 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
         breadth = {"error": f"{type(exc).__name__}: {exc}"}
         health["breadth"] = "fail"
 
-    if breadth.get("error"):
-        blocks.append(f"## 4. 市场广度\n\n(不可用: {breadth['error']})")
-    else:
-        cands = sorted(
-            [c for c in breadth["candidates"] if c.get("ret20") is not None],
-            key=lambda c: -c["ret20"],
-        )
-        rows_txt = "\n".join(
-            f"  {c['ticker']:<6} 20日 {c['ret20']:>7.2f}%  60日 {(c['ret60'] or 0):>7.2f}%  "
-            f"120日 {(c['ret120'] or 0):>8.2f}%  {'>200SMA' if c['above_200'] else '      '}  {'>50SMA' if c['above_50'] else ''}"
-            for c in cands[:15]
-        )
-        bottom_txt = "\n".join(
-            f"  {c['ticker']:<6} 20日 {c['ret20']:>7.2f}%  60日 {(c['ret60'] or 0):>7.2f}%  "
-            f"120日 {(c['ret120'] or 0):>8.2f}%"
-            for c in cands[-10:]
-        )
-        blocks.append(
-            "## 4. 市场广度（成分股聚合）\n\n"
-            f"- 有效样本: {breadth['n_valid']} 只"
-            f"（成分股池 {breadth.get('n_universe', '?')} 只，覆盖率 "
-            f"{round(breadth['n_valid'] / breadth['n_universe'] * 100, 1) if breadth.get('n_universe') else '?'}%）\n"
-            f"- **站上 200SMA 比例: {breadth['pct_above_200sma']}%**\n"
-            f"- **站上 50SMA 比例: {breadth['pct_above_50sma']}%**\n"
-            f"- 20 日收涨家数占比: {breadth['pct_up_20d']}%\n"
-            f"- 60 日收涨家数占比: {breadth['pct_up_60d']}%\n"
-            f"- 120 日收涨家数占比: {breadth['pct_up_120d']}%\n"
-            f"- 成分股 20 日收益中位数: {breadth['median_ret20']}%（等权均值 {breadth['equal_weight_ret20']}%）\n"
-            f"- 成分股 60 日收益中位数: {breadth['median_ret60']}%（等权均值 {breadth['equal_weight_ret60']}%）\n"
-            f"- 20 日收益离散度（标准差）: {breadth['dispersion_ret20']}%\n\n"
-            f"### 20 日涨幅前 15 名\n```\n{rows_txt}\n```\n\n"
-            f"### 20 日涨幅后 10 名\n```\n{bottom_txt}\n```"
-        )
+    blocks.append(_render_breadth_block(breadth))
+
 
     # --- 5. 成分结构与聚合估值 ---
     print(f"  [2/6] 拉取 {len(universe)} 只成分股基本面（约 20s）...", flush=True)
@@ -322,49 +380,8 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
     holdings = fetch_top_holdings()
     health["etf:top_holdings"] = "ok" if holdings else "unavailable"
 
-    if val.get("error"):
-        blocks.append(f"## 5. 成分结构聚合\n\n(不可用: {val['error']})")
-    else:
-        sec_txt = "\n".join(f"  {name:<34} {w:>6.2f}%" for name, w in val["sector_weights"])
-        hold_txt = "\n".join(
-            f"  {h['symbol']:<6} {h['name'][:38]:<38} {h['weight_pct']:>6.2f}%" for h in holdings
-        ) or "  (不可用)"
-        hold_sum = round(sum(h["weight_pct"] for h in holdings), 2) if holdings else None
-        top10_txt = "\n".join(
-            f"  {r['ticker']:<6} {r['name'][:30]:<30} 权重 {r['weight_pct']:>5.2f}%  "
-            f"市值 {r['marketCap']/1e9:>8.1f}B  PE {str(r['pe'] or 'N/A'):>9}  FwdPE {str(r['fpe'] or 'N/A'):>8}  PB {str(r['pb'] or 'N/A'):>7}"
-            for r in val["top10_by_weight"]
-        )
-        blocks.append(
-            "## 5. 成分结构与聚合估值\n\n"
-            f"### 5.1 {ETF_PROXY} 真实持仓权重（前十大，ETF 跟踪 {index_key}）\n```\n"
-            f"{hold_txt}\n```\n\n"
-            "### 5.2 市值加权聚合估值（调和口径：Σ市值 / Σ盈利）\n"
-            f"- **聚合 PE (TTM): {val['agg_pe']}**（基于 {val['n_pe_used']} 只有正盈利的成分股）\n"
-            f"- **聚合 Forward PE: {val['agg_forward_pe']}**\n"
-            f"- **聚合 PB: {val['agg_pb']}**\n"
-            f"- **聚合 PS: {val['agg_ps']}**\n"
-            f"- **盈利收益率（1/PE）: {val['earnings_yield_pct']}%**\n"
-            f"- 聚合股息率: {val['agg_div_yield_pct']}%\n"
-            f"- 聚合 ROE: {val['agg_roe_pct']}%（口径：Σ净利 / Σ净资产）\n"
-            f"- 聚合净利率: {val['agg_net_margin_pct']}%（加权毛利率 {val['agg_gross_margin_pct']}%，加权营业利润率 {val['agg_op_margin_pct']}%）\n"
-            f"- 加权营收增速: {val['agg_rev_growth_pct']}%（成分股中位数 {val['agg_rev_growth_median_pct']}%）\n"
-            f"- 加权盈利增速: {val['agg_eps_growth_pct']}%（成分股中位数 {val['agg_eps_growth_median_pct']}%）\n"
-            f"- 加权 Beta: {val['agg_beta']}（成分股中位数 {val['median_beta']}）\n"
-            f"- 无正盈利被剔除: {len(val['excluded_pe_tickers'])} 只 {val['excluded_pe_tickers']}\n"
-            f"- 数据缺失: {val['n_missing']} 只 {val['missing']}\n\n"
-            "### 5.3 集中度（两种口径必须区分）\n"
-            f"- 参与聚合总市值: {val['total_market_cap']/1e12:.3f} 万亿美元\n"
-            f"- **【官方口径】{ETF_PROXY} 前十大权重合计: {hold_sum}%**（修正市值加权，对超大权重设上限）\n"
-            f"- 【推算口径】纯市值加权前十大合计: {val['top10_weight_pct']}%（若不设权重上限）\n"
-            f"- 纯市值加权前二十大合计: {val['top20_weight_pct']}%\n"
-            f"- HHI 集中度指数（纯市值口径）: {val['hhi']}\n"
-            f"- 说明: 两个口径的差额，反映 {display}「修正市值加权」机制人为压制集中度的程度。\n\n"
-            "### 5.4 前十大成分股（按市值）\n```\n"
-            f"{top10_txt}\n```\n\n"
-            "### 5.5 行业权重（按市值）\n```\n"
-            f"{sec_txt}\n```"
-        )
+    blocks.append(_render_valuation_block(val, holdings, display, index_key))
+
 
     # --- 6. 成分股内部人聚合 ---
     print(f"  [3/6] 聚合前 {top_insiders} 大权重股内部人交易 ...", flush=True)
@@ -757,6 +774,7 @@ def collect_index(as_of: str, lookback_days: int, with_news: bool, with_social: 
     md_path = EV_DIR / f"{index_key}_{as_of}.md"
     json_path = EV_DIR / f"{index_key}_{as_of}.json"
     md_path.write_text(md, encoding="utf-8")
+    write_manifest(md_path)   # 只读清单：防角色回改证据包（AGENT_PROTOCOL §6）
     json_path.write_text(
         json.dumps(
             {

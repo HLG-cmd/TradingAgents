@@ -34,7 +34,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # 只为字符串注解提供名字，运行时不导入
     import datetime
 
-from wb_analysis import _clock
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 期权报价新鲜度

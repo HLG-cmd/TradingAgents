@@ -131,8 +131,10 @@ def write_index(tagged: list[tuple[Path, dict]], exempt: list[Path]) -> Path:
         ("reusable", "reusable —— 每次分析都可能用到", ""),
         ("maintenance", "maintenance —— 项目维护（门禁 / 清理 / 索引）", ""),
         ("oneoff", "oneoff —— 为某次结论临时写的探针",
-         "> **`_oneoff/` 是收件箱**：探针服务的那一轮交付并封存后，会**随案卷进 "
-         "`reports/<标的>/<时间戳>/_source.zip`**，`_oneoff/` 于是回到空 —— **看到它空是正常的**。"),
+         "> **`_oneoff/` 是本地审计收件箱（`.gitignore` 忽略，不入对外仓库）**："
+         "探针服务的那一轮交付并封存后，会**随案卷进 "
+         "`reports/<标的>/<时间戳>/_source.zip`**，`_oneoff/` 于是回到空 —— **看到它空是正常的**。"
+         "治理类一次性脚本（如 `_fix_round3.py`）则同步留存于本机冷备份 `.archive_local_backup/` 及历史 commit 中。"),
     ):
         L += ["", f"## {title}", ""]
         if note:

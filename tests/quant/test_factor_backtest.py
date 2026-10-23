@@ -87,3 +87,13 @@ def test_factors_at_history_too_short():
     V = pd.DataFrame({"AAPL": [1000] * 100})
     res = fb.factors_at(C, V, 50)
     assert res.empty
+
+
+def test_stats_functions_single_source_of_truth():
+    """factor_backtest 与 fundamental_backtest 必须共用 quant.stats_utils 的同一份统计函数。"""
+    import quant.fundamental_backtest as fbt
+    import quant.stats_utils as su
+
+    assert fb.spearman is su.spearman and fbt.spearman is su.spearman
+    assert fb.summarize is su.summarize and fbt.summarize is su.summarize
+    assert fb.quintile_spread is su.quintile_spread and fbt.quintile_spread is su.quintile_spread

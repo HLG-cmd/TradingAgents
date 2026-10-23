@@ -51,6 +51,16 @@ from wb_analysis._paths import SKIP_ARCHIVE_DIRS  # noqa: E402
 
 NUM_RE = re.compile(r"\d[\d,]*\.?\d*")
 
+# ── 篇幅门禁 ──
+# ★ 2026-10-24：常量与分档理由统一放在 `wb_analysis/_length.py`（唯一定义源），
+#   `_role_prompt.py` 生成提示词时读同一份，避免两处各写 4,000/6,000 的漂移。
+from wb_analysis._length import (  # noqa: E402
+    DECISION_ROLE_FILES,
+    MAX_CHARS,
+    MIN_CHARS_ANALYST,
+    MIN_CHARS_DECISION,
+)
+
 #: 二元算式：`a op b = c`（纯数字，不含 % / 单位 / 括号）。用于 4b 算式自洽校验。
 _FORMULA_RE = re.compile(
     r"(?<![\d.])(-?\d[\d,]*(?:\.\d+)?)\s*([+\-−×xX*÷/])\s*(-?\d[\d,]*(?:\.\d+)?)\s*=\s*(-?\d[\d,]*(?:\.\d+)?)(?![\d.])"
@@ -85,7 +95,12 @@ def expand(nums: set[str]) -> set[str]:
         except ValueError:
             continue
         out.add(s)
-        for scale, _suf in ((1e3, ""), (1e6, ""), (1e9, ""), (1e12, "")):
+        # 缩放档位：1e3(千) / 1e4(万) / 1e6(百万) / 1e8(亿) / 1e9(十亿) / 1e12(万亿)
+        # ★ 2026-10-23 补 1e4 与 1e8：本项目的金额几乎都用「亿元」「万元」
+        #   （`_fmt.ystr` 默认 scale=1e8）。实测原表（缺 1e4/1e8）下，
+        #   源值 12,345,000,000 展开后**不含** "123.45" ⇒ 草稿里合法的
+        #   「123.45 亿元」会被 4b 节点判成编造数字（假红）。
+        for scale in (1e3, 1e4, 1e6, 1e8, 1e9, 1e12):
             if abs(v) >= scale:
                 out.add(f"{v / scale:.4f}".rstrip("0").rstrip("."))
                 out.add(f"{v / scale:.3f}".rstrip("0").rstrip("."))
@@ -203,10 +218,10 @@ def main() -> int:
         #    因为它是「越界行检测器」：宁可宽一点抓出来，也不要漏掉。
         #    故只把**前缀字符串**换成常量，不动它的宽松量词。
         real_fin, mentions = [], []
-        for i, l in enumerate(text.splitlines(), 1):
-            if FINAL_PROPOSAL not in l:
+        for i, line in enumerate(text.splitlines(), 1):
+            if FINAL_PROPOSAL not in line:
                 continue
-            if re.search(rf"{FINAL_PROPOSAL}\s*[:：]\s*[\*`\s]*(BUY|HOLD|SELL)", l, re.I):
+            if re.search(rf"{FINAL_PROPOSAL}\s*[:：]\s*[\*`\s]*(BUY|HOLD|SELL)", line, re.I):
                 real_fin.append(i)
             else:
                 mentions.append(i)
@@ -222,10 +237,10 @@ def main() -> int:
         #    若不排除则每一份合规的 trader.md 都会被判违规（实测：NDX 交易员稿被判 1 处）。
         #    第 2 项检查已对「该行是否越界/是否恰一次」单独负责，此处不再重复计。
         fin_lines = set(real_fin) | set(mentions)
-        hits = [(i, l.strip()[:70]) for i, l in enumerate(text.splitlines(), 1)
-                if RATING_RE.search(l) and i not in fin_lines]
+        hits = [(i, line.strip()[:70]) for i, line in enumerate(text.splitlines(), 1)
+                if RATING_RE.search(line) and i not in fin_lines]
         if f.name == "sentiment.md":
-            hits = [(i, l) for i, l in hits if "Overall Sentiment" not in l]
+            hits = [(i, line) for i, line in hits if "Overall Sentiment" not in line]
         # ⚠️ 2026-10-01 修正（门禁盲区）：三个风险席位原先**同时**满足
         #    「在 RATING_ALLOWED_FILES 里」与「不在 {manager, portfolio_manager} 里」，
         #    于是两个分支都进不去 ⇒ 这条检查对 aggressive/conservative/neutral **从未运行过**。
@@ -251,13 +266,13 @@ def main() -> int:
             #    本检查全程静默，只有另一套 `_check_role_files.py`（RATING_OK 期望恰 1 个）抓到了。
             #    trader.md 的结论块以 `**Action**` 打头（不是 Recommendation/Rating），故一并纳入前缀识别。
             body = text.splitlines()
-            head = next((i for i, l in enumerate(body, 1)
-                         if l.strip().startswith(("**Recommendation**", "**Rating**",
-                                                  "**Action**"))), None)
+            head = next((i for i, line in enumerate(body, 1)
+                         if line.strip().startswith(("**Recommendation**", "**Rating**",
+                                                     "**Action**"))), None)
             # 交易员的结论块有 5 个字段（Action/Reasoning/Entry/Stop/Position Sizing），
             # 比 manager/PM 的 3 行宽，故容差放宽到 +5。
             slack = 5 if f.name == "trader.md" else 3
-            bad = [(i, l) for i, l in hits if head is None or i > head + slack]
+            bad = [(i, line) for i, line in hits if head is None or i > head + slack]
             if bad:
                 issues.append(f"  ✗ 结论块之外出现五档英文词 {len(bad)} 处：{bad[:3]}")
 
@@ -364,16 +379,24 @@ def main() -> int:
         if _dup:
             issues.append(f"  ⚠ 重复表述 {len(_dup)} 处（同一句出现 ≥2 次）：{_dup[0][:40]}…")
 
-        # --- 5. 篇幅 ---
-        # ★ 2026-10-19 调整：下限 6000 → 4000（用户口径：4,000 已是上限要求）。
-        #   6000 对中文角色稿过高 —— 实测两轮首稿各 11/12 份低于 6000、返工 3–4 轮，
-        #   补进去的内容有相当比例是「把结论换个说法再列一遍」，密度反而下降。
-        #   4,000 足以容纳 5 个必需小节 + 3 条反证 + 算式；超过 6,000 反向提示偏长。
+        # --- 5. 篇幅（分档）---
+        # ★ 2026-10-19：下限 6000 → 4000（6000 对中文稿过高，返工 3–4 轮，补进去的多是复述）。
+        # ★ 2026-10-24：**分档**。实测 GOOG_2026-10-23 的 12 份稿全部落在 4,151–4,797，
+        #   距下限的中位余量只有 401 字符（10%）—— 下限成了"binding"，在驱动长度而不是信息驱动；
+        #   而 manager 的自然产出是 3,226 字符，为过 4,000 补了 925 字（内容虽实，但若无材料可补
+        #   就会滑向复述，与铁律 53「篇幅看信息密度」自相矛盾）。
+        #   ⇒ 分析师/牛熊职责是「铺证据」，保持 4,000；决策类职责是「在既有证据上判断」，降到 3,000。
+        #   上限统一 6,000 → 5,000（实测最大 4,797，6,000 等于没有上限）。
         n = len(text)
-        if n < 4000:
-            issues.append(f"  ⚠ 篇幅偏短（{n:,} 字符）——各角色下限 4,000（建议 4,000–4,800）")
-        elif n > 6000:
-            issues.append(f"  ⚠ 篇幅偏长（{n:,} 字符）——超过 6,000 请自查是否重复论述")
+        _min_chars = MIN_CHARS_DECISION if f.name in DECISION_ROLE_FILES else MIN_CHARS_ANALYST
+        _tier = "决策类" if f.name in DECISION_ROLE_FILES else "分析师/辩论"
+        if n < _min_chars:
+            issues.append(
+                f"  ⚠ 篇幅偏短（{n:,} 字符）——{_tier}下限 {_min_chars:,}"
+                f"（建议 {_min_chars:,}–{_min_chars + 800:,}）"
+            )
+        elif n > MAX_CHARS:
+            issues.append(f"  ⚠ 篇幅偏长（{n:,} 字符）——超过 {MAX_CHARS:,} 请自查是否重复论述")
 
         # --- 6. 截断检测 ---
         # 实测（2026-09-17）：子智能体写文件时可能在句子中途停笔，
@@ -385,7 +408,7 @@ def main() -> int:
         # `FINAL TRANSACTION PROPOSAL: **Hold**` 以 `**` 收尾，
         # 以及各风险席位末尾的 `**评级：增持。主张：…**` 加粗汇总句。
         # 二者都是**要求**的格式，不是截断。故把 `*` / `_` 补入白名单。
-        body_lines = [l.rstrip() for l in text.rstrip().splitlines() if l.strip()]
+        body_lines = [line.rstrip() for line in text.rstrip().splitlines() if line.strip()]
         if body_lines:
             last = body_lines[-1]
             # 完整收尾的合法形态：句末标点、加粗/斜体标记、表格行、代码块围栏、右括号

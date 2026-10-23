@@ -67,7 +67,7 @@ def run_westock(args: list[str], timeout: int = 180) -> str:
 
 def parse_md_table(text: str) -> tuple[list[str], list[list[str]]]:
     """解析 CLI 输出的 markdown 表格 → (表头, 数据行)。非表格返回空。"""
-    rows = [l.strip() for l in text.splitlines() if l.strip().startswith("|")]
+    rows = [line.strip() for line in text.splitlines() if line.strip().startswith("|")]
     if len(rows) < 2:
         return [], []
 

@@ -44,6 +44,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from quant.screener_engine import MARGINAL_T, SIGNIFICANT_T  # noqa: E402
+from quant.stats_utils import quintile_spread, spearman, summarize  # noqa: E402
 from quant.stock_pools import NASDAQ_100
 
 MAX_WORKERS = 5
@@ -136,46 +137,7 @@ def composite_trend_score(f: pd.DataFrame) -> pd.Series:
 
 
 # ─────────────────────────── 统计工具 ───────────────────────────
-
-def spearman(x: pd.Series, y: pd.Series) -> float:
-    m = x.notna() & y.notna()
-    if m.sum() < 8:
-        return np.nan
-    rx = x[m].rank().values
-    ry = y[m].rank().values
-    if np.std(rx) == 0 or np.std(ry) == 0:
-        return np.nan
-    return float(np.corrcoef(rx, ry)[0, 1])
-
-
-def summarize(ic: pd.Series) -> dict:
-    ic = ic.dropna()
-    n = len(ic)
-    if n < 6:
-        return {"IC": np.nan, "ICIR": np.nan, "t": np.nan, "胜率": np.nan, "N": n}
-    mean, sd = ic.mean(), ic.std(ddof=1)
-    return {
-        "IC": mean,
-        "ICIR": mean / sd if sd else np.nan,
-        "t": mean / (sd / np.sqrt(n)) if sd else np.nan,
-        "胜率": (ic > 0).mean(),
-        "N": n,
-    }
-
-
-def quintile_spread(f: pd.DataFrame, fwd: pd.Series, col: str) -> float:
-    """最高 20% 组 − 最低 20% 组的平均前瞻收益。"""
-    s = f[col].dropna()
-    common = s.index.intersection(fwd.dropna().index)
-    if len(common) < 10:
-        return np.nan
-    s = s[common]
-    r = fwd[common]
-    hi = s >= s.quantile(0.8)
-    lo = s <= s.quantile(0.2)
-    if hi.sum() == 0 or lo.sum() == 0:
-        return np.nan
-    return float(r[hi].mean() - r[lo].mean())
+# spearman / summarize / quintile_spread 已收敛至 quant.stats_utils（唯一定义源）
 
 
 # ─────────────────────────── 监测模式 ───────────────────────────

@@ -31,7 +31,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import datetime as dt  # noqa: E402
 
 from quant.screener_engine import export_radar_csv, run_quant_screening
 from quant.stock_pools import get_latest_sp500

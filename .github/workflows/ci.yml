@@ -63,7 +63,4 @@ jobs:
       - name: Lint the repository
         # The repo is fully clean under the strict select, so we lint everything
         # (generated results/ is excluded via pyproject extend-exclude).
-        # 分阶段放宽：wb_analysis/scripts 刚解除排除，存量问题清零前先不阻断。
-        # 清零后删掉这一行 continue-on-error。
-        continue-on-error: true
         run: ruff check .

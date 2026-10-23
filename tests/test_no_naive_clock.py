@@ -89,3 +89,39 @@ def test_no_new_naive_local_clock():
         "now() / market_date() / iso_today()：\n"
         + "\n".join(f"  {f}: 行 {offenders[f]}" for f in new)
     )
+
+
+def test_no_hardcoded_zoneinfo_literals_outside_clock():
+    """ZoneInfo("America/New_York" / "Asia/Shanghai") 字面量只允许出现在 wb_analysis/_clock.py。"""
+    bad: list[str] = []
+    for d in ("wb_analysis", "quant", "scripts"):
+        base = ROOT / d
+        if not base.exists():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            if path.name in ALLOW_FILES or SKIP_PARTS & set(path.parts):
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                name = (
+                    func.id
+                    if isinstance(func, ast.Name)
+                    else (func.attr if isinstance(func, ast.Attribute) else "")
+                )
+                if name == "ZoneInfo" and node.args:
+                    arg0 = node.args[0]
+                    if isinstance(arg0, ast.Constant) and arg0.value in {
+                        "America/New_York",
+                        "Asia/Shanghai",
+                    }:
+                        bad.append(f"{path.relative_to(ROOT).as_posix()}:{node.lineno}")
+    assert not bad, (
+        "以下文件直接硬编码了 ZoneInfo 时区字面量，请改用 wb_analysis._clock.MARKET_TZ / CN_TZ：\n"
+        + "\n".join(f"  {b}" for b in bad)
+    )

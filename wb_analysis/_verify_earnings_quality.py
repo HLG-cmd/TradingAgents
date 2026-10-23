@@ -58,8 +58,9 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from wb_analysis._log import log_gap  # noqa: E402
 import pandas as pd
+
+from wb_analysis._log import log_gap  # noqa: E402
 
 try:
     import yfinance as yf

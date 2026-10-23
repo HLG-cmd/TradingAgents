@@ -44,7 +44,6 @@
 ## 退出码
 0 = 无未同步残留；1 = 有（阻断交付，与 `_lint_drafts.py` 同语义）。
 """
-import io
 import json
 import re
 import sys

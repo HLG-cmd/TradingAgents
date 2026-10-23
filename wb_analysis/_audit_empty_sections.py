@@ -60,7 +60,7 @@ def _is_noise(line: str) -> bool:
 
 def body_len(lines: list[str]) -> int:
     """严格正文长度：剔除 Link/URL/围栏/分隔线/空行后的字符数。"""
-    return sum(len(l.strip()) for l in lines if not _is_noise(l))
+    return sum(len(line.strip()) for line in lines if not _is_noise(line))
 
 
 def split_sections(text: str) -> list[tuple[str, list[str]]]:

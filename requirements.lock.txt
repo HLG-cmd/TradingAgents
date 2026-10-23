@@ -1,6 +1,6 @@
 # TradingAgents 依赖锁定快照（第三方依赖，精确版本）
 #
-# 生成：2026-10-16，Python 3.13.7，.venv 实测可用组合（回归基线 766 passed）
+# 生成：2026-10-16，Python 3.13.7，.venv 实测可用组合（回归基线以 scripts/_health.py 的 BASELINE_PASSED 为准）
 # 用法：pip install -r requirements.lock.txt
 #
 # 说明：本项目自身不在此文件内（它是 editable 安装，指向本地目录而非 git）。

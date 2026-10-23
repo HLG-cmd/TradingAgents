@@ -217,445 +217,496 @@ def load_assemble():
     return load_module("_asm", "assemble.py")
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="门禁自检")
-    ap.add_argument("-v", "--verbose", action="store_true", help="打印各夹具的完整输出")
-    args = ap.parse_args()
+class _Ctx:
+    """自检上下文：临时目录、好/坏夹具、结果收集器。"""
 
-    results: list[tuple[str, bool, str]] = []
+    def __init__(self, tmp: Path, verbose: bool) -> None:
+        self.tmp = tmp
+        self.verbose = verbose
+        self.good: Path = build_fixture(tmp, broken=False)
+        self.bad: Path = build_fixture(tmp, broken=True)
+        self.ev: Path = tmp / "evidence.md"
+        self.results: list[tuple[str, bool, str]] = []
 
-    def check(name: str, ok: bool, detail: str = "") -> None:
-        results.append((name, ok, detail))
+    def check(self, name: str, ok: bool, detail: str = "") -> None:
+        self.results.append((name, ok, detail))
 
-    with tempfile.TemporaryDirectory(prefix="wb_selftest_") as tmp:
-        tmp = Path(tmp)
-        good = build_fixture(tmp, broken=False)
-        bad = build_fixture(tmp, broken=True)
-        ev = tmp / "evidence.md"
 
-        # ---- 1. 数字溯源 / 契约（lint）----
-        g_rc, g_out = rc([PY, str(HERE / "_lint_drafts.py"), str(good), str(ev)], tmp)
-        b_rc, b_out = rc([PY, str(HERE / "_lint_drafts.py"), str(bad), str(ev)], tmp)
-        detail = (f"good_rc={g_rc} bad_rc={b_rc}")
-        check("lint: 好夹具零违规且 rc=0", g_rc == 0 and "✗" not in g_out, detail)
-        check("lint: 坏夹具被检出且 rc≠0", b_rc != 0 and "✗" in b_out, detail)
+def _chk_01(ctx: _Ctx) -> None:
+    """1. 数字溯源 / 契约（lint）"""
+    # ---- 1. 数字溯源 / 契约（lint）----
+    g_rc, g_out = rc([PY, str(HERE / "_lint_drafts.py"), str(ctx.good), str(ctx.ev)], ctx.tmp)
+    b_rc, b_out = rc([PY, str(HERE / "_lint_drafts.py"), str(ctx.bad), str(ctx.ev)], ctx.tmp)
+    detail = (f"good_rc={g_rc} bad_rc={b_rc}")
+    ctx.check("lint: 好夹具零违规且 rc=0", g_rc == 0 and "✗" not in g_out, detail)
+    ctx.check("lint: 坏夹具被检出且 rc≠0", b_rc != 0 and "✗" in b_out, detail)
+    ctx.lint_verbose = (g_out, b_out)
 
-        # ---- 2. 评级词 / 契约字段 ----
-        g_rc, g_out = rc([PY, str(HERE / "_verify_ratings.py"), str(good)], tmp)
-        b_rc, b_out = rc([PY, str(HERE / "_verify_ratings.py"), str(bad)], tmp)
-        check("verify_ratings: 好夹具 rc=0", g_rc == 0, f"good_rc={g_rc}")
-        check("verify_ratings: 坏夹具 rc≠0", b_rc != 0, f"bad_rc={b_rc}")
 
-        # ---- 3. 口径一致性 ----
-        bl = str(bad / "_value_blacklist.json")
-        g_rc, g_out = rc([PY, str(HERE / "_audit_values.py"), str(good), "--stale", bl], tmp)
-        b_rc, b_out = rc([PY, str(HERE / "_audit_values.py"), str(bad), "--stale", bl], tmp)
-        check("audit_values: 好夹具 rc=0", g_rc == 0, f"good_rc={g_rc}")
-        check("audit_values: 坏夹具 rc≠0（检出旧值）", b_rc != 0, f"bad_rc={b_rc}")
 
-        # ---- 3b. 订正残留检查器（_check_residuals 双边夹具）----
-        try:
-            cr_mod = load_module("_cr_mod", "_check_residuals.py")
-            res_good = tmp / "res_good"
-            res_bad = tmp / "res_bad"
-            for d_r, line_txt in (
-                (res_good, "订正说明：原写 -5.02% 已改为 -5.365%。\n"),
-                (res_bad, "昨日跳空幅度为 -5.02%，显示恐慌。\n"),
-            ):
-                (d_r / "1_analysts").mkdir(parents=True, exist_ok=True)
-                (d_r / "_corrections.json").write_text(json.dumps({
-                    "corrections": [{"old": "-5.02%", "new": "-5.365%", "fixed_in": ["0_brief.md"]}]
-                }), encoding="utf-8")
-                (d_r / "1_analysts" / "sentiment.md").write_text(line_txt, encoding="utf-8")
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                rc_rg = cr_mod.check(res_good)
-                rc_rb = cr_mod.check(res_bad)
-            check("check_residuals: 留痕不误报(rc=0) / 真残留必检出(rc=1)",
-                  rc_rg == 0 and rc_rb == 1, f"good_rc={rc_rg} bad_rc={rc_rb}")
-        except Exception as e:  # noqa: BLE001
-            check("check_residuals: 留痕不误报(rc=0) / 真残留必检出(rc=1)", False, f"加载失败 {e}")
+def _chk_02(ctx: _Ctx) -> None:
+    """2. 评级词 / 契约字段 """
+    # ---- 2. 评级词 / 契约字段 ----
+    g_rc, g_out = rc([PY, str(HERE / "_verify_ratings.py"), str(ctx.good)], ctx.tmp)
+    b_rc, b_out = rc([PY, str(HERE / "_verify_ratings.py"), str(ctx.bad)], ctx.tmp)
+    ctx.check("verify_ratings: 好夹具 rc=0", g_rc == 0, f"good_rc={g_rc}")
+    ctx.check("verify_ratings: 坏夹具 rc≠0", b_rc != 0, f"bad_rc={b_rc}")
 
-        # ---- 4. 交付前统一门禁 ----
-        g_rc, g_out = rc([PY, str(HERE / "_precheck.py"), str(good), "--evidence", str(ev)], tmp)
-        b_rc, b_out = rc([PY, str(HERE / "_precheck.py"), str(bad), "--evidence", str(ev)], tmp)
-        check("precheck: 好夹具 rc=0", g_rc == 0, f"good_rc={g_rc}")
-        check("precheck: 坏夹具 rc=1", b_rc == 1, f"bad_rc={b_rc}")
 
-        # ---- 4b. cwd 无关性（回归测试）----
-        # 实测过一次真实缺陷：`_check_freshness.py` 把 evidence 目录写成**相对路径**，
-        # 于是换个目录调用就误报「证据包缺失」。
-        # ⇒ 钉一条断言：同一输入在**不同工作目录**下必须得到同样的结论。
-        elsewhere = tmp / "elsewhere"
-        elsewhere.mkdir()
-        e_rc, e_out = rc([PY, str(HERE / "_precheck.py"), str(good), "--evidence", str(ev)], elsewhere)
-        consistent = (e_rc == g_rc)
-        check("precheck: 换工作目录后结论一致", consistent,
-              f"根目录 rc={g_rc} / 其他目录 rc={e_rc}")
-        if not consistent and args.verbose:
-            print("\n----- 换目录后的输出 -----\n" + e_out[-800:])
 
-        # ---- 5. 渲染器的空正文硬门禁（单元级）----
-        asm = load_assemble()
-        empty_skeleton = {"ticker": "X", "as_of": "2026-01-01", "ratings": {},
-                          "analysts": {"market": "", "sentiment": "", "news": "", "fundamentals": ""},
-                          "research": {"bull": "", "bear": "", "manager": ""},
-                          "trading": {"trader": ""},
-                          "risk": {"aggressive": "", "conservative": "", "neutral": "", "portfolio_manager": ""}}
-        full = {"analysts": {"market": "a", "sentiment": "b", "news": "c", "fundamentals": "d"},
-                "research": {"bull": "e", "bear": "f", "manager": "g"},
-                "trading": {"trader": "h"},
-                "risk": {"aggressive": "i", "conservative": "j", "neutral": "k", "portfolio_manager": "l"}}
-        n_empty = len(asm.check_completeness(empty_skeleton))
-        n_full = len(asm.check_completeness(full))
-        check("assemble: 空骨架被识别（12 个空小节）", n_empty == 12, f"检出 {n_empty}")
-        check("assemble: 完整数据不误报", n_full == 0, f"检出 {n_full}")
+def _chk_03(ctx: _Ctx) -> None:
+    """3. 口径一致性 """
+    # ---- 3. 口径一致性 ----
+    bl = str(ctx.bad / "_value_blacklist.json")
+    g_rc, g_out = rc([PY, str(HERE / "_audit_values.py"), str(ctx.good), "--stale", bl], ctx.tmp)
+    b_rc, b_out = rc([PY, str(HERE / "_audit_values.py"), str(ctx.bad), "--stale", bl], ctx.tmp)
+    ctx.check("audit_values: 好夹具 rc=0", g_rc == 0, f"good_rc={g_rc}")
+    ctx.check("audit_values: 坏夹具 rc≠0（检出旧值）", b_rc != 0, f"bad_rc={b_rc}")
 
-        # ---- 6. 两处「五档词白名单」必须一致（防漂移）----
-        # 实测过一次真实不一致：`_lint_drafts.py` 允许 6 个席位用五档词，
-        # 而 `_verify_ratings.py` 只允许 3 个 ⇒ **同一份草稿会得到两种结论**。
-        # 这类「两个工具对同一契约判断相反」的漂移必须钉住。
-        try:
-            lint_mod = load_module("_lint2", "_lint_drafts.py")
-            vr_mod = load_module("_vr2", "_verify_ratings.py")
-            a = set(lint_mod.RATING_ALLOWED_FILES)
-            b = {Path(x).name for x in vr_mod.FIVE_ALLOWED}
-            check("白名单一致：lint 与 verify_ratings", a == b,
-                  f"仅 lint 有={sorted(a - b)} 仅 vr 有={sorted(b - a)}")
-        except Exception as e:                                   # noqa: BLE001
-            check("白名单一致：lint 与 verify_ratings", False, f"加载失败 {e}")
 
-        # ---- 7. 健康检查的「堆积预算」检测器（双边；防退化成恒 PASS 或恒 WARN）----
-        # 前身是「编译缓存」单项检查 —— 2026-09-23 实测它曾因判据恒真而**恒 PASS**
-        #（82 个 .pyc 报「无残留」），这正是本文件要防的「看着在工作、其实什么也没检」。
-        # 现改为整体堆积预算 ⇒ 双边夹具改为：超预算必 WARN（且消息带处置命令）、
-        # 预算内必 PASS（且消息带各项尺寸 —— **占用可见性本身是功能**，PASS 也不能只说"正常"）。
-        # 夹具刻意用**合成预算表**（含相对 + 绝对两种路径），不依赖真实机器的磁盘状态——
-        # 否则真实磁盘一旦合法超预算，自检会跟着假红。
-        try:
-            h = load_module("_health_h", str(HERE.parent / "scripts" / "_health.py"))
-            fake = tmp / "fakeproj"
-            (fake / ".workbuddy-ai" / "backup").mkdir(parents=True)
-            (fake / ".workbuddy-ai" / "backup" / "b.zip").write_bytes(b"\x00" * 4096)
 
-            orig_root, orig_budgets = h.ROOT, h.DISK_BUDGETS
-            h.ROOT = fake
-            # 反例：预算 0.001MB ⇒ 4096 字节的包也必须被拦下（相对路径命中）
-            h.DISK_BUDGETS = [
-                ("backup", ".workbuddy-ai/backup", 0.001, "scripts/_prune_backup.py"),
-                ("外部缓存", str(fake / ".tradingagents"), 0.001, "quant/cleanup_cache.py"),
-            ]
-            lvl_bad, msg_bad = h.chk_disk_budget()
-            # 正例：同一夹具、真实量级的预算 ⇒ 必须安静通过且报尺寸（绝对路径不存在的目录 ⇒ 0.0MB）
-            h.DISK_BUDGETS = [
-                ("backup", ".workbuddy-ai/backup", 30.0, "scripts/_prune_backup.py"),
-                ("外部缓存", str(fake / ".tradingagents"), 1024.0, "quant/cleanup_cache.py"),
-            ]
-            lvl_ok, msg_ok = h.chk_disk_budget()
-            h.ROOT, h.DISK_BUDGETS = orig_root, orig_budgets
+def _chk_04(ctx: _Ctx) -> None:
+    """3b. 订正残留检查器（_check_residuals 双边夹具）"""
+    # ---- 3b. 订正残留检查器（_check_residuals 双边夹具）----
+    try:
+        cr_mod = load_module("_cr_mod", "_check_residuals.py")
+        res_good = ctx.tmp / "res_good"
+        res_bad = ctx.tmp / "res_bad"
+        for d_r, line_txt in (
+            (res_good, "订正说明：原写 -5.02% 已改为 -5.365%。\n"),
+            (res_bad, "昨日跳空幅度为 -5.02%，显示恐慌。\n"),
+        ):
+            (d_r / "1_analysts").mkdir(parents=True, exist_ok=True)
+            (d_r / "_corrections.json").write_text(json.dumps({
+                "corrections": [{"old": "-5.02%", "new": "-5.365%", "fixed_in": ["0_brief.md"]}]
+            }), encoding="utf-8")
+            (d_r / "1_analysts" / "sentiment.md").write_text(line_txt, encoding="utf-8")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc_rg = cr_mod.check(res_good)
+            rc_rb = cr_mod.check(res_bad)
+        ctx.check("check_residuals: 留痕不误报(rc=0) / 真残留必检出(rc=1)",
+              rc_rg == 0 and rc_rb == 1, f"good_rc={rc_rg} bad_rc={rc_rb}")
+    except Exception as e:  # noqa: BLE001
+        ctx.check("check_residuals: 留痕不误报(rc=0) / 真残留必检出(rc=1)", False, f"加载失败 {e}")
 
-            check("health: 超预算必 WARN 且带处置",
-                  lvl_bad == "WARN" and "_prune_backup" in msg_bad,
-                  f"{lvl_bad} / {msg_bad[:60]}")
-            check("health: 预算内 PASS 且报尺寸",
-                  lvl_ok == "PASS" and "backup" in msg_ok and "外部缓存" in msg_ok,
-                  f"{lvl_ok} / {msg_ok[:60]}")
-        except Exception as e:                                   # noqa: BLE001
-            check("health: chk_disk_budget 双边", False, f"加载失败 {e}")
 
-        # ---- 6.5 文档漂移检测器：扩面 + 行号规则（2026-10-10 新增）----
-        # 背景：`chk_doc_drift` 原先只扫 `docs/*.md`（5 份），`.workbuddy-ai/memory/**` 与 skill 文档
-        # **完全在门禁外** ⇒ 实测 13 处陈旧断言（IRONLAWS 的「8 个标签」、DOMAINS 的「21.5x」
-        # 「collect.py:686」…）长期零告警。扩面后新增第 ④ 类规则「行号引用」。
-        # 夹具**脱离真实文件系统**（检测逻辑已抽成纯函数 `scan_doc_text`）——
-        # 否则真实文档一旦合法，自检会跟着假绿（这正是本文件存在的理由）。
-        try:
-            h2 = load_module("_health_dd", str(HERE.parent / "scripts" / "_health.py"))
-            pkg = {"wb_deep_dive", "smart_screener"}
-            bad = ("共 508 个单元测试。\n"
-                   "见 `collect.py:686` 与 L459。\n"
-                   "运行 python wb_deep_dive.py 即可。\n")
-            good = ("> 历史教训：本表曾写「508 个单元测试」，早已过时。\n"
-                    "⚠️ 正文里禁止写行号（`xxx.py:123` 必漂移）。\n"
-                    "**刻意不写行号** —— 原文给的行号实测均已漂移。\n"
-                    "运行 python quant/wb_deep_dive.py 即可。\n")
-            hit_bad = h2.scan_doc_text("BAD.md", bad, pkg)
-            hit_good = h2.scan_doc_text("GOOD.md", good, pkg)
-            kinds = " ".join(hit_bad)
-            check("doc_drift: 坏夹具必检出（计数+旧路径+行号）",
-                  len(hit_bad) == 4 and "计数" in kinds and "旧路径" in kinds and "行号引用" in kinds,
-                  f"命中 {len(hit_bad)}：{kinds[:70]}")
-            check("doc_drift: 告诫语境与 quant/ 正路径不误报",
-                  hit_good == [], f"命中 {len(hit_good)}：{str(hit_good)[:60]}")
-            scope = {p.name for p in h2._doc_drift_scope()}
-            check("doc_drift: 扫描面已含规范与 SKILL.md",
-                  ({"RULES.md", "DOMAINS.md", "SKILL.md"} <= scope)
-                  or ({"IRONLAWS.md", "DOMAINS.md", "MEMORY.md", "SKILL.md"} <= scope),
-                  f"{len(scope)} 份：{sorted(scope)[:6]}")
-        except Exception as e:                                   # noqa: BLE001
-            check("doc_drift: 双边夹具", False, f"加载失败 {e}")
 
-        # ---- 7. 契约常量的「唯一来源」没有被绕过（2026-10-08 新增）----
-        # 背景：同一个契约曾被 8 个文件各自定义，大小写容忍度还不一致 ——
-        # 于是同一个 trader.md 在两道门禁里被判成**不同事实**，只能靠人来回试到收敛。
-        # `_contract.py` 建好后，**唯一的失败模式就是有人又手写一遍正则**。
-        # 这条断言把那条路堵死：逐个扫描消费方，若发现它们**没有 import `_contract`**，
-        # 就直接判失败（比"记得改同步"可靠得多 —— 纪律会忘，断言不会）。
-        # ★ 2026-10-10 升级：名单**扩充**到所有实际持有契约常量的消费方
-        #   （`assemble.py` / `_verify_report.py` / `_reports_index.py` 此前**完全不在守护范围内**），
-        #   判据也从「字符串里有没有 import」升级为「**有没有用字面量重写**」——
-        #   后者才是真判据：import 了再抄一份同样制造第二个来源。
-        CONSUMERS = [
-            "_lint_drafts.py", "_verify_ratings.py", "_gen_meta.py",
-            "_check_role_files.py", "_strip_stray_ratings.py",
-            "assemble.py", "_verify_report.py", "_reports_index.py",
+def _chk_05(ctx: _Ctx) -> None:
+    """4. 交付前统一门禁 """
+    # ---- 4. 交付前统一门禁 ----
+    g_rc, g_out = rc([PY, str(HERE / "_precheck.py"), str(ctx.good), "--evidence", str(ctx.ev)], ctx.tmp)
+    b_rc, b_out = rc([PY, str(HERE / "_precheck.py"), str(ctx.bad), "--evidence", str(ctx.ev)], ctx.tmp)
+    ctx.check("precheck: 好夹具 rc=0", g_rc == 0, f"good_rc={g_rc}")
+    ctx.check("precheck: 坏夹具 rc=1", b_rc == 1, f"bad_rc={b_rc}")
+
+    # ---- 4b. cwd 无关性（回归测试）----
+    # 实测过一次真实缺陷：`_check_freshness.py` 把 evidence 目录写成**相对路径**，
+    # 于是换个目录调用就误报「证据包缺失」。
+    # ⇒ 钉一条断言：同一输入在**不同工作目录**下必须得到同样的结论。
+    elsewhere = ctx.tmp / "elsewhere"
+    elsewhere.mkdir()
+    e_rc, e_out = rc([PY, str(HERE / "_precheck.py"), str(ctx.good), "--evidence", str(ctx.ev)], elsewhere)
+    consistent = (e_rc == g_rc)
+    ctx.check("precheck: 换工作目录后结论一致", consistent,
+          f"根目录 rc={g_rc} / 其他目录 rc={e_rc}")
+    if not consistent and ctx.verbose:
+        print("\n----- 换目录后的输出 -----\n" + e_out[-800:])
+
+
+
+def _chk_06(ctx: _Ctx) -> None:
+    """5. 渲染器的空正文硬门禁（单元级）"""
+    # ---- 5. 渲染器的空正文硬门禁（单元级）----
+    asm = load_assemble()
+    empty_skeleton = {"ticker": "X", "as_of": "2026-01-01", "ratings": {},
+                      "analysts": {"market": "", "sentiment": "", "news": "", "fundamentals": ""},
+                      "research": {"bull": "", "bear": "", "manager": ""},
+                      "trading": {"trader": ""},
+                      "risk": {"aggressive": "", "conservative": "", "neutral": "", "portfolio_manager": ""}}
+    full = {"analysts": {"market": "a", "sentiment": "b", "news": "c", "fundamentals": "d"},
+            "research": {"bull": "e", "bear": "f", "manager": "g"},
+            "trading": {"trader": "h"},
+            "risk": {"aggressive": "i", "conservative": "j", "neutral": "k", "portfolio_manager": "l"}}
+    n_empty = len(asm.check_completeness(empty_skeleton))
+    n_full = len(asm.check_completeness(full))
+    ctx.check("assemble: 空骨架被识别（12 个空小节）", n_empty == 12, f"检出 {n_empty}")
+    ctx.check("assemble: 完整数据不误报", n_full == 0, f"检出 {n_full}")
+
+
+
+def _chk_07(ctx: _Ctx) -> None:
+    """6. 两处「五档词白名单」必须一致（防漂移）"""
+    # ---- 6. 两处「五档词白名单」必须一致（防漂移）----
+    # 实测过一次真实不一致：`_lint_drafts.py` 允许 6 个席位用五档词，
+    # 而 `_verify_ratings.py` 只允许 3 个 ⇒ **同一份草稿会得到两种结论**。
+    # 这类「两个工具对同一契约判断相反」的漂移必须钉住。
+    try:
+        lint_mod = load_module("_lint2", "_lint_drafts.py")
+        vr_mod = load_module("_vr2", "_verify_ratings.py")
+        a = set(lint_mod.RATING_ALLOWED_FILES)
+        b = {Path(x).name for x in vr_mod.FIVE_ALLOWED}
+        ctx.check("白名单一致：lint 与 verify_ratings", a == b,
+              f"仅 lint 有={sorted(a - b)} 仅 vr 有={sorted(b - a)}")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("白名单一致：lint 与 verify_ratings", False, f"加载失败 {e}")
+
+
+
+def _chk_08(ctx: _Ctx) -> None:
+    """7. 健康检查的「堆积预算」检测器（双边；防退化成恒 PASS 或恒 WARN）"""
+    # ---- 7. 健康检查的「堆积预算」检测器（双边；防退化成恒 PASS 或恒 WARN）----
+    # 前身是「编译缓存」单项检查 —— 2026-09-23 实测它曾因判据恒真而**恒 PASS**
+    #（82 个 .pyc 报「无残留」），这正是本文件要防的「看着在工作、其实什么也没检」。
+    # 现改为整体堆积预算 ⇒ 双边夹具改为：超预算必 WARN（且消息带处置命令）、
+    # 预算内必 PASS（且消息带各项尺寸 —— **占用可见性本身是功能**，PASS 也不能只说"正常"）。
+    # 夹具刻意用**合成预算表**（含相对 + 绝对两种路径），不依赖真实机器的磁盘状态——
+    # 否则真实磁盘一旦合法超预算，自检会跟着假红。
+    try:
+        h = load_module("_health_h", str(HERE.parent / "scripts" / "_health.py"))
+        fake = ctx.tmp / "fakeproj"
+        (fake / ".workbuddy-ai" / "backup").mkdir(parents=True)
+        (fake / ".workbuddy-ai" / "backup" / "b.zip").write_bytes(b"\x00" * 4096)
+
+        orig_root, orig_budgets = h.ROOT, h.DISK_BUDGETS
+        h.ROOT = fake
+        # 反例：预算 0.001MB ⇒ 4096 字节的包也必须被拦下（相对路径命中）
+        h.DISK_BUDGETS = [
+            ("backup", ".workbuddy-ai/backup", 0.001, "scripts/_prune_backup.py"),
+            ("外部缓存", str(fake / ".tradingagents"), 0.001, "quant/cleanup_cache.py"),
         ]
-        not_importing, redefined = [], []
-        protected: set[str] = set()
-        try:
-            c0 = load_module("_contract_p", "_contract.py")
-            protected = set(getattr(c0, "__all__", ()))
-        except Exception:                                        # noqa: BLE001
-            pass
-        for fn in CONSUMERS:
-            src = (HERE / fn).read_text(encoding="utf-8")
-            if "_contract import" not in src and "from wb_analysis._contract" not in src:
-                not_importing.append(fn)
-            for ln, nm in literal_redefinitions(src, protected):
-                redefined.append(f"{fn}:{ln}:{nm}")
-        check("契约常量：消费方均 import _contract（防手写正则复发）", not not_importing,
-              f"未 import 的={not_importing}" if not_importing else f"{len(CONSUMERS)}/{len(CONSUMERS)}")
-        check("契约常量：消费方不得用**字面量**重写契约常量（防「import 了再抄一份」）",
-              not redefined,
-              "；".join(redefined) if redefined else f"0 处（受保护名 {len(protected)} 个）")
-
-        # ---- 上述检测器的**双向夹具**（否则它可能是「恒通过」的空转检测器）----
-        try:
-            bad_src = 'RATING_ALLOWED_FILES = {"manager.md", "portfolio_manager.md", "x.md"}\n'
-            bad2_src = 'DOC_FILES: frozenset = frozenset({"0_brief.md", "0_derived.md", "_c.md"})\n'
-            good_src = ('from wb_analysis._contract import DOC_FILES as _DOC_ALL\n'
-                        'DOC_FILES = {f for f in _DOC_ALL if f.startswith("_")}\n'
-                        'FIVE = list(_DOC_ALL)\n'
-                        'def f():\n    RATING_ALLOWED_FILES = {"x.md"}\n')
-            hits_bad = literal_redefinitions(bad_src, protected)
-            hits_bad2 = literal_redefinitions(bad2_src, protected)
-            hits_good = literal_redefinitions(good_src, protected)
-            check("契约重写检测器：手抄值必检出 / 派生与局部变量不误报",
-                  len(hits_bad) == 1 and len(hits_bad2) == 1 and hits_good == [],
-                  f"bad={hits_bad} / wrapped={hits_bad2} / good={hits_good}")
-        except Exception as e:                                   # noqa: BLE001
-            check("契约重写检测器：手抄值必检出 / 派生与局部变量不误报", False, f"加载失败 {e}")
-
-        # ---- 项目侧契约 vs **上游**评级词表：必须逐字一致 ----
-        # 背景：`_verify_report.py` 从上游 `tradingagents.agents.utils.rating` 取 `RATINGS_5_TIER`，
-        # 而项目侧门禁用 `_contract.FIVE_LEVELS`。两者若分叉，同一份稿会在
-        # 「上游解析器」与「项目门禁」之间得到不同评级 —— 正是 2026-10-08 那次漂移的翻版。
-        try:
-            sys.path.insert(0, str(HERE.parent))
-            from tradingagents.agents.utils.rating import RATINGS_5_TIER as _UP  # noqa: E402
-            same = tuple(_UP) == tuple(c0.FIVE_LEVELS) if protected else False
-            check("契约常量：项目侧 FIVE_LEVELS == 上游 RATINGS_5_TIER",
-                  same, f"upstream={tuple(_UP)} / contract={tuple(c0.FIVE_LEVELS)}"
-                  if protected else "未能加载 _contract")
-        except Exception as e:                                   # noqa: BLE001
-            check("契约常量：项目侧 FIVE_LEVELS == 上游 RATINGS_5_TIER", False, f"加载失败 {e}")
-
-        # ---- 8. `_contract` 内部自洽（词表 ↔ 正则 ↔ 白名单）----
-        try:
-            c = load_module("_contract_c", "_contract.py")
-            problems = []
-            # 8a. `FIVE_RE`（大小写不敏感）必须命中词表里每个词的大小写两种写法
-            for w in c.FIVE_LEVELS:
-                if not c.FIVE_RE.search(f" {w} ") or not c.FIVE_RE.search(f" {w.upper()} "):
-                    problems.append(f"FIVE_RE 漏 {w}")
-            # 8b. `FIVE_TITLE_RE` 必须**只**命中 Title Case（这是它与 FIVE_RE 的分工）
-            if c.FIVE_TITLE_RE.search(" SELL ") or c.FIVE_TITLE_RE.search(" BUY "):
-                problems.append("FIVE_TITLE_RE 误命中全大写")
-            # 8c. 契约行正则必须能解析出末行档位
-            if not c.PROPOSAL_RE.search("FINAL TRANSACTION PROPOSAL: **HOLD**"):
-                problems.append("PROPOSAL_RE 解析失败")
-            # 8d. `Action` 标签必须**同时**容忍 Title Case 与大写（这正是历史事故的修复点）
-            for variant in ("**Action**: Sell", "**Action**: SELL"):
-                if not c.LABEL_PATTERNS["Action"].search(variant):
-                    problems.append(f"Action 标签漏掉 {variant}")
-            # 8e. 五档标签用**长词优先**，`Overweight` 不能被 `Sell` 一类短词抢先截断
-            m = c.LABEL_PATTERNS["Recommendation"].search("**Recommendation**: Underweight")
-            if not m or m.group(1) != "Underweight":
-                problems.append(f"长词优先失效：{m.group(1) if m else None}")
-            check("契约常量：词表↔正则↔标签自洽", not problems,
-                  "；".join(problems) if problems else "5 项检查通过")
-        except Exception as e:                                   # noqa: BLE001
-            check("契约常量：词表↔正则↔标签自洽", False, f"加载失败 {e}")
-
-        # ---- 9. 非 12 角色专用通道的豁免：判据同源 + 双向判别力（2026-10-10 新增）----
-        # 背景：豁免表原先只有 `_reports_index.py` 认识，而 `_seal_run.py --orphans`
-        # 与 `_health.chk_transient_empty` 都不认识 ⇒ 三处对同一份 `TREASURY_<date>.*`
-        # 给出相反结论，其中 `--orphans --apply` 会**真的把它删掉**（删除雷）。
-        # 修法＝把豁免表上提为唯一定义源。**本断言守住「下一个人又本地重定义一遍」**——
-        # 纪律会忘，断言不会（与第 7 节同一思路）。
-        excl_consumers = [
-            HERE / "_reports_index.py",
-            HERE / "_seal_run.py",
-            HERE.parent / "scripts" / "_health.py",
+        lvl_bad, msg_bad = h.chk_disk_budget()
+        # 正例：同一夹具、真实量级的预算 ⇒ 必须安静通过且报尺寸（绝对路径不存在的目录 ⇒ 0.0MB）
+        h.DISK_BUDGETS = [
+            ("backup", ".workbuddy-ai/backup", 30.0, "scripts/_prune_backup.py"),
+            ("外部缓存", str(fake / ".tradingagents"), 1024.0, "quant/cleanup_cache.py"),
         ]
-        excl_bad = []
-        for p in excl_consumers:
-            src = p.read_text(encoding="utf-8")
-            if "is_non_tree_artifact" not in src:
-                excl_bad.append(f"{p.name}:未用豁免工具")
-            if re.search(r"^\s*NON_TREE_PREFIXES\s*=", src, re.M):
-                excl_bad.append(f"{p.name}:又本地定义 NON_TREE_PREFIXES")
-        check("豁免表同源：三消费方均用 _contract 且无本地重定义", not excl_bad,
-              "；".join(excl_bad) if excl_bad else "3/3")
+        lvl_ok, msg_ok = h.chk_disk_budget()
+        h.ROOT, h.DISK_BUDGETS = orig_root, orig_budgets
 
-        try:
-            ce = load_module("_contract_ex", "_contract.py")
-            t_ok = ce.is_non_tree_artifact("TREASURY_2026-10-09.md") is True
-            f_ok = ce.is_non_tree_artifact("NVDA_2026-10-09.md") is False
-            check("is_non_tree_artifact：专用通道 True / 12 角色标的 False", t_ok and f_ok,
-                  f"TREASURY→{ce.is_non_tree_artifact('TREASURY_2026-10-09.md')} / "
-                  f"NVDA→{ce.is_non_tree_artifact('NVDA_2026-10-09.md')}")
-        except Exception as e:                                   # noqa: BLE001
-            check("is_non_tree_artifact：专用通道 True / 12 角色标的 False", False, f"加载失败 {e}")
+        ctx.check("health: 超预算必 WARN 且带处置",
+              lvl_bad == "WARN" and "_prune_backup" in msg_bad,
+              f"{lvl_bad} / {msg_bad[:60]}")
+        ctx.check("health: 预算内 PASS 且报尺寸",
+              lvl_ok == "PASS" and "backup" in msg_ok and "外部缓存" in msg_ok,
+              f"{lvl_ok} / {msg_ok[:60]}")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("health: chk_disk_budget 双边", False, f"加载失败 {e}")
 
-        # `_health.chk_transient_empty` 双边：仅豁免件 ⇒ PASS；混入真散件 ⇒ WARN
-        try:
-            ht = load_module("_health_t", str(HERE.parent / "scripts" / "_health.py"))
-            fx = tmp / "fakeproj_transient"
-            evx = fx / "wb_analysis" / "evidence"
-            evx.mkdir(parents=True)
-            (evx / "TREASURY_2026-10-09.md").write_text("x", encoding="utf-8")
-            orig_root = ht.ROOT
-            ht.ROOT = fx
-            lvl_a, msg_a = ht.chk_transient_empty()
-            (evx / "FOO_2026-01-01.md").write_text("x", encoding="utf-8")
-            lvl_b, msg_b = ht.chk_transient_empty()
-            ht.ROOT = orig_root
-            check("health 瞬态：仅豁免件 PASS（且报豁免数）/ 真散件 WARN",
-                  lvl_a == "PASS" and "豁免" in msg_a and lvl_b == "WARN",
-                  f"{lvl_a} / {lvl_b} :: {msg_a[:40]}")
-        except Exception as e:                                   # noqa: BLE001
-            check("health 瞬态：仅豁免件 PASS（且报豁免数）/ 真散件 WARN", False, f"加载失败 {e}")
 
-        # `_seal_run.orphans` 双边：豁免件不得被判孤儿；真孤儿必须被检出（这是删除雷的对偶）
-        try:
-            so = load_module("_seal_o", "_seal_run.py")
-            fy = tmp / "fakeproj_orphan"
-            (fy / "wb_analysis" / "drafts").mkdir(parents=True)
-            (fy / "wb_analysis" / "analysis").mkdir(parents=True)
-            (fy / "reports").mkdir(parents=True)
-            evy = fy / "wb_analysis" / "evidence"
-            evy.mkdir(parents=True)
-            (evy / "TREASURY_2026-10-09.md").write_text("x", encoding="utf-8")
-            # ★ 连 `ROOT` 一起换：`orphans()` 用 `f.relative_to(ROOT)` 生成归档名（L294），
-            #   只换 EVID/DRAFTS/... 而留 ROOT 指向真项目根 ⇒ 临时路径**不在 ROOT 之下**，
-            #   `relative_to` 抛 ValueError（2026-10-10 首跑即撞此坑）。夹具＝模拟一个完整假项目根。
-            saved = (so.ROOT, so.REPORTS, so.EVID, so.DRAFTS, so.ANALYSIS, so.ONEOFF)
-            so.ROOT = fy
-            so.REPORTS, so.EVID = fy / "reports", evy
-            so.DRAFTS = fy / "wb_analysis" / "drafts"
-            so.ANALYSIS = fy / "wb_analysis" / "analysis"
-            so.ONEOFF = fy / "scripts" / "_oneoff"
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                so.orphans(False)
-            out_a = buf.getvalue()
-            (evy / "FOO_2026-01-01.md").write_text("x", encoding="utf-8")
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                so.orphans(False)
-            out_b = buf.getvalue()
-            (so.ROOT, so.REPORTS, so.EVID,
-             so.DRAFTS, so.ANALYSIS, so.ONEOFF) = saved
-            check("seal --orphans：豁免件不报孤儿 / 真孤儿必被检出",
-                  "无孤儿产物" in out_a and "发现 1 组孤儿" in out_b and "FOO" in out_b,
-                  f"a={out_a.strip()[:24]} / b={out_b.strip()[:34]}")
-        except Exception as e:                                   # noqa: BLE001
-            check("seal --orphans：豁免件不报孤儿 / 真孤儿必被检出", False, f"加载失败 {e}")
 
-        # ---- 10. `reports/` 布局常量同源（2026-10-10 新增）----
-        # 背景：`TREE_RE` 3 份、功能目录集 4 份、`ALLOWED_TOP` 1 份（函数内局部字面量）、
-        # 归档跳过表 4 份 —— 共 **11 处**各写一遍，已上提为 `wb_analysis/_paths.py`。
-        # 本条守住「下一个人又本地抄一遍」。**纪律会忘，断言不会**（与第 7 / 9 节同一思路）。
-        #
-        # ★ 判据拆成两层，且**扫描面自动枚举**（不写死路径）：
-        #   ① 全活跃面（`wb_analysis/*.py` + `scripts/*.py`）—— **任何**文件都不得用字面量
-        #      重写这些常量。自动枚举 ⇒ 日后归档/新增脚本都不会让本条失效
-        #      （首版写死 `scripts/_reorg_reports.py`，该文件一归档本条就 FileNotFoundError）。
-        #   ② 显式消费方名单 —— 必须真的 `import _paths`（防「删了重写但也没接上单一来源」，
-        #      即第 7 节所说「import 了再抄一份」的对偶形态）。
-        #   ⚠️ 两个**自豁免**，二者都必要：
-        #      · `_paths.py` = 常量定义处（本该有字面量）；
-        #      · `_selftest.py` = **检测器自身** —— 它的 `_FUNC_DIR_KEYS` 与双边夹具里
-        #        必然出现同样的字面量，自指检测器不排除自己就会恒红（首跑即撞此坑，30 项里红 1 项）。
-        #        检测器「是不是活的」由后面的双边夹具证明，不靠扫自己。
-        #   注：`_oneoff/**` **不扫** —— 那是冻结的历史快照，本就该保留当时的字面量。
-        SELF_EXEMPT = {"_paths.py", "_selftest.py"}
-        p_bad: list[str] = []
-        live = [p for p in sorted(HERE.glob("*.py")) if p.name not in SELF_EXEMPT]
-        live += sorted((HERE.parent / "scripts").glob("*.py"))
-        for p in live:
-            for hit in paths_literal_definitions(p.read_text(encoding="utf-8")):
-                p_bad.append(f"{p.name}:{hit}")
-        check(f"布局常量：全活跃面（{len(live)} 个 .py）无本地字面量重写", not p_bad,
-              "；".join(p_bad[:4]) if p_bad else "0 处（已豁免定义处 + 检测器自身）")
+def _chk_09(ctx: _Ctx) -> None:
+    """6.5 文档漂移检测器：扩面 + 行号规则（2026-10-10 新增）"""
+    # ---- 6.5 文档漂移检测器：扩面 + 行号规则（2026-10-10 新增）----
+    # 背景：`chk_doc_drift` 原先只扫 `docs/*.md`（5 份），`.workbuddy-ai/memory/**` 与 skill 文档
+    # **完全在门禁外** ⇒ 实测 13 处陈旧断言（IRONLAWS 的「8 个标签」、DOMAINS 的「21.5x」
+    # 「collect.py:686」…）长期零告警。扩面后新增第 ④ 类规则「行号引用」。
+    # 夹具**脱离真实文件系统**（检测逻辑已抽成纯函数 `scan_doc_text`）——
+    # 否则真实文档一旦合法，自检会跟着假绿（这正是本文件存在的理由）。
+    try:
+        h2 = load_module("_health_dd", str(HERE.parent / "scripts" / "_health.py"))
+        pkg = {"wb_deep_dive", "smart_screener"}
+        ctx.bad = ("共 508 个单元测试。\n"
+               "见 `collect.py:686` 与 L459。\n"
+               "运行 python wb_deep_dive.py 即可。\n")
+        ctx.good = ("> 历史教训：本表曾写「508 个单元测试」，早已过时。\n"
+                "⚠️ 正文里禁止写行号（`xxx.py:123` 必漂移）。\n"
+                "**刻意不写行号** —— 原文给的行号实测均已漂移。\n"
+                "运行 python quant/wb_deep_dive.py 即可。\n")
+        hit_bad = h2.scan_doc_text("BAD.md", ctx.bad, pkg)
+        hit_good = h2.scan_doc_text("GOOD.md", ctx.good, pkg)
+        kinds = " ".join(hit_bad)
+        ctx.check("doc_drift: 坏夹具必检出（计数+旧路径+行号）",
+              len(hit_bad) == 4 and "计数" in kinds and "旧路径" in kinds and "行号引用" in kinds,
+              f"命中 {len(hit_bad)}：{kinds[:70]}")
+        ctx.check("doc_drift: 告诫语境与 quant/ 正路径不误报",
+              hit_good == [], f"命中 {len(hit_good)}：{str(hit_good)[:60]}")
+        scope = {p.name for p in h2._doc_drift_scope()}
+        ctx.check("doc_drift: 扫描面已含规范与 SKILL.md",
+              ({"RULES.md", "DOMAINS.md", "SKILL.md"} <= scope)
+              or ({"IRONLAWS.md", "DOMAINS.md", "MEMORY.md", "SKILL.md"} <= scope),
+              f"{len(scope)} 份：{sorted(scope)[:6]}")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("doc_drift: 双边夹具", False, f"加载失败 {e}")
 
-        p_consumers = [
-            HERE / "_reports_index.py", HERE / "_scorecard.py", HERE / "_seal_run.py",
-            HERE / "_audit_values.py", HERE / "_check_residuals.py",
-            HERE / "_check_role_files.py", HERE / "_lint_drafts.py",
-        ]
-        p_miss = [p.name for p in p_consumers
-                  if "_paths import" not in p.read_text(encoding="utf-8")]
-        check("布局常量：7 消费方均真的 import _paths", not p_miss,
-              f"未接上单一来源={p_miss}" if p_miss else f"{len(p_consumers)}/{len(p_consumers)}")
 
-        try:
-            pb = load_module("_paths_p", "_paths.py")
-            same = (set(pb.FUNC_DIRS) == {"_datasets", "_other", "_archive", "_audit"}
-                    and set(pb.ALLOWED_TOP) == {"INDEX.md", "README.md", "QUALITY.csv"}
-                    and tuple(pb.SKIP_ARCHIVE_DIRS) == ("_stale", "_archive"))
-            check("布局常量取值：功能目录 / 顶层白名单 / 归档跳过表均未漂移", same,
-                  f"FUNC={sorted(pb.FUNC_DIRS)} / SKIP={tuple(pb.SKIP_ARCHIVE_DIRS)}")
-        except Exception as e:                                   # noqa: BLE001
-            check("布局常量取值：功能目录 / 顶层白名单 / 归档跳过表均未漂移", False, f"加载失败 {e}")
 
-        try:
-            bad_src = ('TREE_RE = re.compile(r"^([A-Za-z0-9.\\-]+)_(\\d{8})_(\\d{6})$")\n'
-                       'SKIP_DIRS = {"_datasets", "_other", "_archive", "_audit"}\n'
-                       'ap.add_argument("--exclude", default=["_stale", "_archive"])\n')
-            good_src = ('from wb_analysis._paths import FUNC_DIRS, SKIP_ARCHIVE_DIRS\n'
-                        'SKIP_DIRS = FUNC_DIRS\n'
-                        'excludes = list(SKIP_ARCHIVE_DIRS)\n'
-                        '# 历史：这里曾写 ["_stale", "_archive"]，已收敛到 _paths\n')
-            hb = paths_literal_definitions(bad_src)
-            hg = paths_literal_definitions(good_src)
-            check("布局重写检测器：手抄值必检出 / 派生与注释留痕不误报",
-                  len(hb) == 3 and hg == [], f"bad={hb} / good={hg}")
-        except Exception as e:                                   # noqa: BLE001
-            check("布局重写检测器：手抄值必检出 / 派生与注释留痕不误报", False, f"加载失败 {e}")
+def _chk_10(ctx: _Ctx) -> None:
+    """7. 契约常量的「唯一来源」没有被绕过（2026-10-08 新增）"""
+    # ---- 7. 契约常量的「唯一来源」没有被绕过（2026-10-08 新增）----
+    # 背景：同一个契约曾被 8 个文件各自定义，大小写容忍度还不一致 ——
+    # 于是同一个 trader.md 在两道门禁里被判成**不同事实**，只能靠人来回试到收敛。
+    # `_contract.py` 建好后，**唯一的失败模式就是有人又手写一遍正则**。
+    # 这条断言把那条路堵死：逐个扫描消费方，若发现它们**没有 import `_contract`**，
+    # 就直接判失败（比"记得改同步"可靠得多 —— 纪律会忘，断言不会）。
+    # ★ 2026-10-10 升级：名单**扩充**到所有实际持有契约常量的消费方
+    #   （`assemble.py` / `_verify_report.py` / `_reports_index.py` 此前**完全不在守护范围内**），
+    #   判据也从「字符串里有没有 import」升级为「**有没有用字面量重写**」——
+    #   后者才是真判据：import 了再抄一份同样制造第二个来源。
+    CONSUMERS = [
+        "_lint_drafts.py", "_verify_ratings.py", "_gen_meta.py",
+        "_check_role_files.py", "_strip_stray_ratings.py",
+        "assemble.py", "_verify_report.py", "_reports_index.py",
+    ]
+    not_importing, redefined = [], []
+    protected: set[str] = set()
+    try:
+        c0 = load_module("_contract_p", "_contract.py")
+        protected = set(getattr(c0, "__all__", ()))
+    except Exception:                                        # noqa: BLE001
+        pass
+    for fn in CONSUMERS:
+        src = (HERE / fn).read_text(encoding="utf-8")
+        if "_contract import" not in src and "from wb_analysis._contract" not in src:
+            not_importing.append(fn)
+        for ln, nm in literal_redefinitions(src, protected):
+            redefined.append(f"{fn}:{ln}:{nm}")
+    ctx.check("契约常量：消费方均 import _contract（防手写正则复发）", not not_importing,
+          f"未 import 的={not_importing}" if not_importing else f"{len(CONSUMERS)}/{len(CONSUMERS)}")
+    ctx.check("契约常量：消费方不得用**字面量**重写契约常量（防「import 了再抄一份」）",
+          not redefined,
+          "；".join(redefined) if redefined else f"0 处（受保护名 {len(protected)} 个）")
 
-        # ---- 10b. `iter_report_trees` 与 `_scorecard` 排除二级 `_archive` 回归守卫 ----
-        try:
-            sc_mod = load_module("_sc_mod", "_scorecard.py")
-            fake_rep = tmp / "fake_reports"
-            (fake_rep / "SKHY" / "SKHY_20261013_204423").mkdir(parents=True)
-            (fake_rep / "SKHY" / "_archive").mkdir(parents=True)
-            orig_rep, orig_csv = sc_mod.REPORTS, sc_mod.CSV
-            sc_mod.REPORTS = fake_rep
-            sc_mod.CSV = fake_rep / "QUALITY.csv"
-            sc_rows = sc_mod.collect()
-            sc_mod.REPORTS, sc_mod.CSV = orig_rep, orig_csv
-            check("scorecard: 二级 _archive 不入表（防空 ticker 幽灵行）",
-                  len(sc_rows) == 1 and sc_rows[0]["ticker"] == "SKHY",
-                  f"rows={[r['tree'] for r in sc_rows]}")
-        except Exception as e:  # noqa: BLE001
-            check("scorecard: 二级 _archive 不入表（防空 ticker 幽灵行）", False, f"加载失败 {e}")
+    # ---- 上述检测器的**双向夹具**（否则它可能是「恒通过」的空转检测器）----
+    try:
+        bad_src = 'RATING_ALLOWED_FILES = {"manager.md", "portfolio_manager.md", "x.md"}\n'
+        bad2_src = 'DOC_FILES: frozenset = frozenset({"0_brief.md", "0_derived.md", "_c.md"})\n'
+        good_src = ('from wb_analysis._contract import DOC_FILES as _DOC_ALL\n'
+                    'DOC_FILES = {f for f in _DOC_ALL if f.startswith("_")}\n'
+                    'FIVE = list(_DOC_ALL)\n'
+                    'def f():\n    RATING_ALLOWED_FILES = {"x.md"}\n')
+        hits_bad = literal_redefinitions(bad_src, protected)
+        hits_bad2 = literal_redefinitions(bad2_src, protected)
+        hits_good = literal_redefinitions(good_src, protected)
+        ctx.check("契约重写检测器：手抄值必检出 / 派生与局部变量不误报",
+              len(hits_bad) == 1 and len(hits_bad2) == 1 and hits_good == [],
+              f"bad={hits_bad} / wrapped={hits_bad2} / good={hits_good}")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("契约重写检测器：手抄值必检出 / 派生与局部变量不误报", False, f"加载失败 {e}")
 
-        if args.verbose:
-            print("\n----- lint 好夹具输出 -----\n" + g_out[-800:])
-            print("\n----- lint 坏夹具输出 -----\n" + b_out[-800:])
+    # ---- 项目侧契约 vs **上游**评级词表：必须逐字一致 ----
+    # 背景：`_verify_report.py` 从上游 `tradingagents.agents.utils.rating` 取 `RATINGS_5_TIER`，
+    # 而项目侧门禁用 `_contract.FIVE_LEVELS`。两者若分叉，同一份稿会在
+    # 「上游解析器」与「项目门禁」之间得到不同评级 —— 正是 2026-10-08 那次漂移的翻版。
+    try:
+        sys.path.insert(0, str(HERE.parent))
+        from tradingagents.agents.utils.rating import RATINGS_5_TIER as _UP  # noqa: E402
+        same = tuple(_UP) == tuple(c0.FIVE_LEVELS) if protected else False
+        ctx.check("契约常量：项目侧 FIVE_LEVELS == 上游 RATINGS_5_TIER",
+              same, f"upstream={tuple(_UP)} / contract={tuple(c0.FIVE_LEVELS)}"
+              if protected else "未能加载 _contract")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("契约常量：项目侧 FIVE_LEVELS == 上游 RATINGS_5_TIER", False, f"加载失败 {e}")
 
+
+
+def _chk_11(ctx: _Ctx) -> None:
+    """8. `_contract` 内部自洽（词表 ↔ 正则 ↔ 白名单）"""
+    # ---- 8. `_contract` 内部自洽（词表 ↔ 正则 ↔ 白名单）----
+    try:
+        c = load_module("_contract_c", "_contract.py")
+        problems = []
+        # 8a. `FIVE_RE`（大小写不敏感）必须命中词表里每个词的大小写两种写法
+        for w in c.FIVE_LEVELS:
+            if not c.FIVE_RE.search(f" {w} ") or not c.FIVE_RE.search(f" {w.upper()} "):
+                problems.append(f"FIVE_RE 漏 {w}")
+        # 8b. `FIVE_TITLE_RE` 必须**只**命中 Title Case（这是它与 FIVE_RE 的分工）
+        if c.FIVE_TITLE_RE.search(" SELL ") or c.FIVE_TITLE_RE.search(" BUY "):
+            problems.append("FIVE_TITLE_RE 误命中全大写")
+        # 8c. 契约行正则必须能解析出末行档位
+        if not c.PROPOSAL_RE.search("FINAL TRANSACTION PROPOSAL: **HOLD**"):
+            problems.append("PROPOSAL_RE 解析失败")
+        # 8d. `Action` 标签必须**同时**容忍 Title Case 与大写（这正是历史事故的修复点）
+        for variant in ("**Action**: Sell", "**Action**: SELL"):
+            if not c.LABEL_PATTERNS["Action"].search(variant):
+                problems.append(f"Action 标签漏掉 {variant}")
+        # 8e. 五档标签用**长词优先**，`Overweight` 不能被 `Sell` 一类短词抢先截断
+        m = c.LABEL_PATTERNS["Recommendation"].search("**Recommendation**: Underweight")
+        if not m or m.group(1) != "Underweight":
+            problems.append(f"长词优先失效：{m.group(1) if m else None}")
+        ctx.check("契约常量：词表↔正则↔标签自洽", not problems,
+              "；".join(problems) if problems else "5 项检查通过")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("契约常量：词表↔正则↔标签自洽", False, f"加载失败 {e}")
+
+
+
+def _chk_12(ctx: _Ctx) -> None:
+    """9. 非 12 角色专用通道的豁免：判据同源 + 双向判别力（2026-10-10 新增）"""
+    # ---- 9. 非 12 角色专用通道的豁免：判据同源 + 双向判别力（2026-10-10 新增）----
+    # 背景：豁免表原先只有 `_reports_index.py` 认识，而 `_seal_run.py --orphans`
+    # 与 `_health.chk_transient_empty` 都不认识 ⇒ 三处对同一份 `TREASURY_<date>.*`
+    # 给出相反结论，其中 `--orphans --apply` 会**真的把它删掉**（删除雷）。
+    # 修法＝把豁免表上提为唯一定义源。**本断言守住「下一个人又本地重定义一遍」**——
+    # 纪律会忘，断言不会（与第 7 节同一思路）。
+    excl_consumers = [
+        HERE / "_reports_index.py",
+        HERE / "_seal_run.py",
+        HERE.parent / "scripts" / "_health.py",
+    ]
+    excl_bad = []
+    for p in excl_consumers:
+        src = p.read_text(encoding="utf-8")
+        if "is_non_tree_artifact" not in src:
+            excl_bad.append(f"{p.name}:未用豁免工具")
+        if re.search(r"^\s*NON_TREE_PREFIXES\s*=", src, re.M):
+            excl_bad.append(f"{p.name}:又本地定义 NON_TREE_PREFIXES")
+    ctx.check("豁免表同源：三消费方均用 _contract 且无本地重定义", not excl_bad,
+          "；".join(excl_bad) if excl_bad else "3/3")
+
+    try:
+        ce = load_module("_contract_ex", "_contract.py")
+        t_ok = ce.is_non_tree_artifact("TREASURY_2026-10-09.md") is True
+        f_ok = ce.is_non_tree_artifact("NVDA_2026-10-09.md") is False
+        ctx.check("is_non_tree_artifact：专用通道 True / 12 角色标的 False", t_ok and f_ok,
+              f"TREASURY→{ce.is_non_tree_artifact('TREASURY_2026-10-09.md')} / "
+              f"NVDA→{ce.is_non_tree_artifact('NVDA_2026-10-09.md')}")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("is_non_tree_artifact：专用通道 True / 12 角色标的 False", False, f"加载失败 {e}")
+
+    # `_health.chk_transient_empty` 双边：仅豁免件 ⇒ PASS；混入真散件 ⇒ WARN
+    try:
+        ht = load_module("_health_t", str(HERE.parent / "scripts" / "_health.py"))
+        fx = ctx.tmp / "fakeproj_transient"
+        evx = fx / "wb_analysis" / "evidence"
+        evx.mkdir(parents=True)
+        (evx / "TREASURY_2026-10-09.md").write_text("x", encoding="utf-8")
+        orig_root = ht.ROOT
+        ht.ROOT = fx
+        lvl_a, msg_a = ht.chk_transient_empty()
+        (evx / "FOO_2026-01-01.md").write_text("x", encoding="utf-8")
+        lvl_b, msg_b = ht.chk_transient_empty()
+        ht.ROOT = orig_root
+        ctx.check("health 瞬态：仅豁免件 PASS（且报豁免数）/ 真散件 WARN",
+              lvl_a == "PASS" and "豁免" in msg_a and lvl_b == "WARN",
+              f"{lvl_a} / {lvl_b} :: {msg_a[:40]}")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("health 瞬态：仅豁免件 PASS（且报豁免数）/ 真散件 WARN", False, f"加载失败 {e}")
+
+    # `_seal_run.orphans` 双边：豁免件不得被判孤儿；真孤儿必须被检出（这是删除雷的对偶）
+    try:
+        so = load_module("_seal_o", "_seal_run.py")
+        fy = ctx.tmp / "fakeproj_orphan"
+        (fy / "wb_analysis" / "drafts").mkdir(parents=True)
+        (fy / "wb_analysis" / "analysis").mkdir(parents=True)
+        (fy / "reports").mkdir(parents=True)
+        evy = fy / "wb_analysis" / "evidence"
+        evy.mkdir(parents=True)
+        (evy / "TREASURY_2026-10-09.md").write_text("x", encoding="utf-8")
+        # ★ 连 `ROOT` 一起换：`orphans()` 用 `f.relative_to(ROOT)` 生成归档名（L294），
+        #   只换 EVID/DRAFTS/... 而留 ROOT 指向真项目根 ⇒ 临时路径**不在 ROOT 之下**，
+        #   `relative_to` 抛 ValueError（2026-10-10 首跑即撞此坑）。夹具＝模拟一个完整假项目根。
+        saved = (so.ROOT, so.REPORTS, so.EVID, so.DRAFTS, so.ANALYSIS, so.ONEOFF)
+        so.ROOT = fy
+        so.REPORTS, so.EVID = fy / "reports", evy
+        so.DRAFTS = fy / "wb_analysis" / "drafts"
+        so.ANALYSIS = fy / "wb_analysis" / "analysis"
+        so.ONEOFF = fy / "scripts" / "_oneoff"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            so.orphans(False)
+        out_a = buf.getvalue()
+        (evy / "FOO_2026-01-01.md").write_text("x", encoding="utf-8")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            so.orphans(False)
+        out_b = buf.getvalue()
+        (so.ROOT, so.REPORTS, so.EVID,
+         so.DRAFTS, so.ANALYSIS, so.ONEOFF) = saved
+        ctx.check("seal --orphans：豁免件不报孤儿 / 真孤儿必被检出",
+              "无孤儿产物" in out_a and "发现 1 组孤儿" in out_b and "FOO" in out_b,
+              f"a={out_a.strip()[:24]} / b={out_b.strip()[:34]}")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("seal --orphans：豁免件不报孤儿 / 真孤儿必被检出", False, f"加载失败 {e}")
+
+
+
+def _chk_13(ctx: _Ctx) -> None:
+    """10. `reports/` 布局常量同源（2026-10-10 新增）"""
+    # ---- 10. `reports/` 布局常量同源（2026-10-10 新增）----
+    # 背景：`TREE_RE` 3 份、功能目录集 4 份、`ALLOWED_TOP` 1 份（函数内局部字面量）、
+    # 归档跳过表 4 份 —— 共 **11 处**各写一遍，已上提为 `wb_analysis/_paths.py`。
+    # 本条守住「下一个人又本地抄一遍」。**纪律会忘，断言不会**（与第 7 / 9 节同一思路）。
+    #
+    # ★ 判据拆成两层，且**扫描面自动枚举**（不写死路径）：
+    #   ① 全活跃面（`wb_analysis/*.py` + `scripts/*.py`）—— **任何**文件都不得用字面量
+    #      重写这些常量。自动枚举 ⇒ 日后归档/新增脚本都不会让本条失效
+    #      （首版写死 `scripts/_reorg_reports.py`，该文件一归档本条就 FileNotFoundError）。
+    #   ② 显式消费方名单 —— 必须真的 `import _paths`（防「删了重写但也没接上单一来源」，
+    #      即第 7 节所说「import 了再抄一份」的对偶形态）。
+    #   ⚠️ 两个**自豁免**，二者都必要：
+    #      · `_paths.py` = 常量定义处（本该有字面量）；
+    #      · `_selftest.py` = **检测器自身** —— 它的 `_FUNC_DIR_KEYS` 与双边夹具里
+    #        必然出现同样的字面量，自指检测器不排除自己就会恒红（首跑即撞此坑，30 项里红 1 项）。
+    #        检测器「是不是活的」由后面的双边夹具证明，不靠扫自己。
+    #   注：`_oneoff/**` **不扫** —— 那是冻结的历史快照，本就该保留当时的字面量。
+    SELF_EXEMPT = {"_paths.py", "_selftest.py"}
+    p_bad: list[str] = []
+    live = [p for p in sorted(HERE.glob("*.py")) if p.name not in SELF_EXEMPT]
+    live += sorted((HERE.parent / "scripts").glob("*.py"))
+    for p in live:
+        for hit in paths_literal_definitions(p.read_text(encoding="utf-8")):
+            p_bad.append(f"{p.name}:{hit}")
+    ctx.check(f"布局常量：全活跃面（{len(live)} 个 .py）无本地字面量重写", not p_bad,
+          "；".join(p_bad[:4]) if p_bad else "0 处（已豁免定义处 + 检测器自身）")
+
+    p_consumers = [
+        HERE / "_reports_index.py", HERE / "_scorecard.py", HERE / "_seal_run.py",
+        HERE / "_audit_values.py", HERE / "_check_residuals.py",
+        HERE / "_check_role_files.py", HERE / "_lint_drafts.py",
+    ]
+    p_miss = [p.name for p in p_consumers
+              if "_paths import" not in p.read_text(encoding="utf-8")]
+    ctx.check("布局常量：7 消费方均真的 import _paths", not p_miss,
+          f"未接上单一来源={p_miss}" if p_miss else f"{len(p_consumers)}/{len(p_consumers)}")
+
+    try:
+        pb = load_module("_paths_p", "_paths.py")
+        same = (set(pb.FUNC_DIRS) == {"_datasets", "_other", "_archive", "_audit"}
+                and set(pb.ALLOWED_TOP) == {"INDEX.md", "README.md", "QUALITY.csv"}
+                and tuple(pb.SKIP_ARCHIVE_DIRS) == ("_stale", "_archive"))
+        ctx.check("布局常量取值：功能目录 / 顶层白名单 / 归档跳过表均未漂移", same,
+              f"FUNC={sorted(pb.FUNC_DIRS)} / SKIP={tuple(pb.SKIP_ARCHIVE_DIRS)}")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("布局常量取值：功能目录 / 顶层白名单 / 归档跳过表均未漂移", False, f"加载失败 {e}")
+
+    try:
+        bad_src = ('TREE_RE = re.compile(r"^([A-Za-z0-9.\\-]+)_(\\d{8})_(\\d{6})$")\n'
+                   'SKIP_DIRS = {"_datasets", "_other", "_archive", "_audit"}\n'
+                   'ap.add_argument("--exclude", default=["_stale", "_archive"])\n')
+        good_src = ('from wb_analysis._paths import FUNC_DIRS, SKIP_ARCHIVE_DIRS\n'
+                    'SKIP_DIRS = FUNC_DIRS\n'
+                    'excludes = list(SKIP_ARCHIVE_DIRS)\n'
+                    '# 历史：这里曾写 ["_stale", "_archive"]，已收敛到 _paths\n')
+        hb = paths_literal_definitions(bad_src)
+        hg = paths_literal_definitions(good_src)
+        ctx.check("布局重写检测器：手抄值必检出 / 派生与注释留痕不误报",
+              len(hb) == 3 and hg == [], f"bad={hb} / good={hg}")
+    except Exception as e:                                   # noqa: BLE001
+        ctx.check("布局重写检测器：手抄值必检出 / 派生与注释留痕不误报", False, f"加载失败 {e}")
+
+    # ---- 10b. `iter_report_trees` 与 `_scorecard` 排除二级 `_archive` 回归守卫 ----
+    try:
+        sc_mod = load_module("_sc_mod", "_scorecard.py")
+        fake_rep = ctx.tmp / "fake_reports"
+        (fake_rep / "SKHY" / "SKHY_20261013_204423").mkdir(parents=True)
+        (fake_rep / "SKHY" / "_archive").mkdir(parents=True)
+        orig_rep, orig_csv = sc_mod.REPORTS, sc_mod.CSV
+        sc_mod.REPORTS = fake_rep
+        sc_mod.CSV = fake_rep / "QUALITY.csv"
+        sc_rows = sc_mod.collect()
+        sc_mod.REPORTS, sc_mod.CSV = orig_rep, orig_csv
+        ctx.check("scorecard: 二级 _archive 不入表（防空 ticker 幽灵行）",
+              len(sc_rows) == 1 and sc_rows[0]["ticker"] == "SKHY",
+              f"rows={[r['tree'] for r in sc_rows]}")
+    except Exception as e:  # noqa: BLE001
+        ctx.check("scorecard: 二级 _archive 不入表（防空 ticker 幽灵行）", False, f"加载失败 {e}")
+
+
+
+
+def _chk_14(ctx: _Ctx) -> None:
+    """11. 网络通道重试口径（2026-10-11 新增）"""
     # ---- 11. 网络通道重试口径（2026-10-11 新增）----
     # 起因：NFLX 采集时 yfinance **整片 403**，35 通道险些全废。归因＝本机出网走代理、
     # 节点间歇抖动（同 URL 连打：一次 403、一次 200），**不是** IP 永久封禁。
@@ -667,11 +718,11 @@ def main() -> int:
     try:
         cm = load_module("collect_retry_probe", "collect.py")
         _dflt = inspect.signature(cm._safe_call).parameters["retries"].default
-        check("网络重试：_safe_call 默认 = _NET_RETRIES 且 ≥1",
+        ctx.check("网络重试：_safe_call 默认 = _NET_RETRIES 且 ≥1",
               _dflt == cm._NET_RETRIES and cm._NET_RETRIES >= 1,
               f"_NET_RETRIES={cm._NET_RETRIES} / 默认={_dflt}")
     except Exception as e:                                       # noqa: BLE001
-        check("网络重试：_safe_call 默认 = _NET_RETRIES 且 ≥1", False, f"加载失败 {e}")
+        ctx.check("网络重试：_safe_call 默认 = _NET_RETRIES 且 ≥1", False, f"加载失败 {e}")
 
     # 三个**直连**网络块绕开了 `_safe_call`（返回 dict，塞不进占位串契约），
     # 最容易成为「修了一半」的漏网点 —— 它们同样走 yfinance。
@@ -680,11 +731,15 @@ def main() -> int:
         _need = ("_retry(fetch_option_structure", "_retry(fetch_volatility_proxies",
                  "_retry(_realtime_close_block")
         _miss = [n for n in _need if n not in csrc]
-        check("网络重试：期权/波动率代理/实时收盘三块均走 _retry", not _miss,
+        ctx.check("网络重试：期权/波动率代理/实时收盘三块均走 _retry", not _miss,
               f"漏={_miss}" if _miss else "3/3")
     except Exception as e:                                       # noqa: BLE001
-        check("网络重试：期权/波动率代理/实时收盘三块均走 _retry", False, f"读取失败 {e}")
+        ctx.check("网络重试：期权/波动率代理/实时收盘三块均走 _retry", False, f"读取失败 {e}")
 
+
+
+def _chk_15(ctx: _Ctx) -> None:
+    """12. 期权时点分支（2026-10-17 新增，CBOE 期权源接入配套）"""
     # ---- 12. 期权时点分支（2026-10-17 新增，CBOE 期权源接入配套）----
     # 起因：yfinance 的期权链只在美东 09:30–16:00 实时刷新；盘前/盘后它只返回上一交易日的
     # 残留挂单（bid/ask 格式合法但 lastTradeDate 陈旧数周）⇒ 期权维度整体不可用（NVDX 08:29
@@ -729,14 +784,14 @@ def main() -> int:
             if got_ph != want_ph or got_cboe is not want_cboe:
                 _bad.append(f"{label}: phase={got_ph}(期望{want_ph})/"
                             f"cboe={got_cboe}(期望{want_cboe})")
-        check("期权时点分支：盘中不切 / 盘前盘后非交易日切（含 09:30、16:00 边界）",
+        ctx.check("期权时点分支：盘中不切 / 盘前盘后非交易日切（含 09:30、16:00 边界）",
               not _bad, "；".join(_bad) if _bad else f"{len(_cases)}/{len(_cases)} 时点全部符合")
 
         # —— 说明文案必须写明「拿的是上一时段快照」，否则下游会当实时用 ——
         _use, _note = th.option_source_decision(
             _dt2.datetime(2026, 10, 16, 8, 29, tzinfo=ET2))
         _ok_note = _use and ("上一时段收盘快照" in _note) and ("非实时报价" in _note)
-        check("期权时点分支：切源说明必须写明「上一时段收盘快照 / 非实时」",
+        ctx.check("期权时点分支：切源说明必须写明「上一时段收盘快照 / 非实时」",
               _ok_note, f"note={_note[:70]}")
 
         # —— 坏夹具：把边界写成闭区间（`9.0 <= h <= 16.0`）必须能与正确实现区分 ——
@@ -752,7 +807,7 @@ def main() -> int:
         # 09:00（正确=盘前 / 错误=盘中）与 16:00（正确=盘后 / 错误=盘中）两处必须被区分
         _good_0900 = _phase_at(2026, 10, 16, 9, 0)
         _distinct = (_closed_interval(9.0) != _good_0900) and (_bad_1600 != _good_1600)
-        check("期权时点分支：闭区间错位夹具可被区分（证明检查是活的）",
+        ctx.check("期权时点分支：闭区间错位夹具可被区分（证明检查是活的）",
               _distinct,
               f"09:00 正确={_good_0900}/错误={_closed_interval(9.0)}；"
               f"16:00 正确={_good_1600}/错误={_bad_1600}")
@@ -761,23 +816,83 @@ def main() -> int:
         _src = (HERE / "collect_index.py").read_text(encoding="utf-8")
         _forward = ("from wb_analysis._thresholds import option_source_decision" in _src
                     and "def _should_use_cboe_source" in _src)
-        check("期权时点分支：collect_index 判据转发自 _thresholds（单一来源）",
+        ctx.check("期权时点分支：collect_index 判据转发自 _thresholds（单一来源）",
               _forward, "已转发" if _forward else "判据未收敛到 _thresholds")
 
         _opt_src = (HERE / "_option_source.py").read_text(encoding="utf-8")
         _opt_ok = all(k in _opt_src for k in
                       ("delayed_quotes", "MAX_TRIES", "cboe_delayed", "option_chain"))
-        check("期权源适配器：CBOE 端点/重试/来源标签/链接口齐备", _opt_ok,
+        ctx.check("期权源适配器：CBOE 端点/重试/来源标签/链接口齐备", _opt_ok,
               "齐备" if _opt_ok else "关键成员缺失")
 
         # —— 台账必须认得这个新通道（否则下游看不见「昨日快照」这件事）——
         _gl = load_module("_gap_ledger_probe", "_gap_ledger.py")
         _rule = _gl.RULES.get("CBOE_fallback_used")
         _rule_ok = bool(_rule) and _rule.get("decisive") is True and _rule.get("cls") == "B"
-        check("期权时点分支：台账已登记 CBOE_fallback_used（B 类 / 决定性）",
+        ctx.check("期权时点分支：台账已登记 CBOE_fallback_used（B 类 / 决定性）",
               _rule_ok, f"cls={(_rule or {}).get('cls')} decisive={(_rule or {}).get('decisive')}")
     except Exception as e:                                       # noqa: BLE001
-        check("期权时点分支：夹具执行", False, f"加载失败 {e}")
+        ctx.check("期权时点分支：夹具执行", False, f"加载失败 {e}")
+
+
+
+def _chk_16(ctx: _Ctx) -> None:
+    """13. noqa: F401 行级豁免预算与原因标注守卫（2026-10-23 新增）"""
+    # ---- 13. noqa: F401 行级豁免预算与原因标注守卫（2026-10-23 新增）----
+    try:
+        _f401_hits: list[str] = []
+        _f401_unannotated: list[str] = []
+        for _d in (HERE, HERE.parent / "scripts"):
+            for _p in sorted(_d.glob("*.py")):
+                for _ln, _line in enumerate(_p.read_text(encoding="utf-8").splitlines(), 1):
+                    if re.search(r"#\s*noqa\b[^\n]*\bF401\b", _line):
+                        _f401_hits.append(f"{_p.name}:{_ln}")
+                        if "re-export" not in _line:
+                            _f401_unannotated.append(f"{_p.name}:{_ln}")
+        ctx.check("noqa: F401 预算（≤8 处）且逐行带 # re-export 原因",
+              len(_f401_hits) <= 8 and not _f401_unannotated,
+              f"共 {len(_f401_hits)} 处，未标原因={_f401_unannotated}")
+    except Exception as e:                                       # noqa: BLE001
+        ctx.check("noqa: F401 预算（≤8 处）且逐行带 # re-export 原因", False, f"扫描失败 {e}")
+
+
+
+
+#: 检查项（顺序即输出顺序）。每项一个函数；有前序依赖的块已并入其生产者，
+#: 因此各函数之间**不共享任何隐式状态**。
+CHECKS = (
+    _chk_01,
+    _chk_02,
+    _chk_03,
+    _chk_04,
+    _chk_05,
+    _chk_06,
+    _chk_07,
+    _chk_08,
+    _chk_09,
+    _chk_10,
+    _chk_11,
+    _chk_12,
+    _chk_13,
+    _chk_14,
+    _chk_15,
+    _chk_16,
+)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="门禁自检")
+    ap.add_argument("-v", "--verbose", action="store_true", help="打印各夹具的完整输出")
+    args = ap.parse_args()
+
+    with tempfile.TemporaryDirectory(prefix="wb_selftest_") as tmp:
+        ctx = _Ctx(Path(tmp), args.verbose)
+        for check_fn in CHECKS:
+            check_fn(ctx)
+        if ctx.verbose:
+            print("\n----- lint 好夹具输出 -----\n" + ctx.lint_verbose[0][-800:])
+            print("\n----- lint 坏夹具输出 -----\n" + ctx.lint_verbose[1][-800:])
+        results = ctx.results  # 汇总段沿用它（原实现直接在 main 内累加）
 
     # ---- 汇总 ----
     print("=" * 74)

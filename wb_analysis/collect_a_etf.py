@@ -31,7 +31,6 @@ import argparse
 import datetime as dt
 import json
 import pathlib
-import re
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -44,7 +43,11 @@ EVID_DIR = ROOT / "wb_analysis" / "evidence"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from wb_analysis._channel import ok_of  # noqa: E402
+from wb_analysis._fmt import fnum, pct_str, wcode_of  # noqa: E402
+from wb_analysis._integrity import write_manifest  # noqa: E402
 from wb_analysis._log import log_gap  # noqa: E402
+
 # westock CLI 的统一接入层（路径解析 + 调用 + 表格解析），与 collect_hk_index.py 共用。
 from wb_analysis._westock import (  # noqa: E402
     WESTOCK,
@@ -52,6 +55,11 @@ from wb_analysis._westock import (  # noqa: E402
     parse_md_table,
     run_westock,
 )
+
+# 纯工具唯一定义源＝`_fmt.py`。历史名做别名，避免改动 40+ 处调用点；
+# `pct` 是**格式化**，与 `_derive_stock.pct`（算变动率）无关，故不合并。
+pct = pct_str
+_wcode_of = wcode_of
 
 # ── 标的档案表：名称 / 模式 / 行业板块 / 跟踪指数 显式登记 ──
 #    未登记的标的也能跑（--mode 由参数决定），但名称会标为 [未登记]，
@@ -81,52 +89,6 @@ UNKNOWN_NAME = "[未登记标的]"
 # 环境变量 `WESTOCK_BIN` → `PATH` → 本机约定路径。三者已在文件顶部 import。
 
 
-def fnum(v, default=None):
-    """安全转 float；失败返回 default（**绝不**用别的标的的数字兜底）。"""
-    try:
-        return float(str(v).replace(",", "").replace("%", "").strip())
-    except (TypeError, ValueError):
-        return default
-
-
-def pct(v, digits=2) -> str:
-    """带符号百分数字符串。"""
-    x = fnum(v)
-    return "—" if x is None else f"{x:+.{digits}f}%"
-
-
-def ok_of(raw: str) -> bool:
-    """通道是否真的取到了数据（**不是**「返回了非空文本」）。
-
-    ★ 2026-10-21 修（518880 黄金 ETF 实测，**假绿**）：
-      westock 在标的代码非法时返回的是**中文错误文本**，例如
-      「查询dayK线失败：[code=1620053001] error_type=2 suggest=3 msg=service error」——
-      它既不含 ``<westock`` 标签、又非空 ⇒ 旧判据 `("<westock" not in raw) and bool(raw)`
-      把 14 个通道**全部判成 ok**，证据包通篇「[未取到]」却报「成功 14/14」。
-      ⇒ 补三类失败签名：中文「失败」、``service error``、``error_type=``。
-    """
-    t = str(raw or "")
-    if not t.strip() or "<westock" in t:
-        return False
-    return not any(k in t for k in ("查询", "失败", "service error", "error_type="))
-
-
-def _wcode_of(ticker: str) -> str:
-    """把标的代码规范成 westock 的 ``sh``/``sz`` 前缀形式。
-
-    ★ 2026-10-21 修（518880 实测）：原实现只在**带后缀**时加前缀
-      （``512400.SS`` → ``sh512400``），未登记且不带后缀的代码（``518880``）
-      会**原样**传给 westock ⇒ 全部通道返回 service error，且因假绿判据照报 14/14。
-      ⇒ 判据：显式后缀优先（.SS/.SH→sh，.SZ→sz）；无后缀按代码首位推断
-        （5/6/9 开头 = 上交所，0/1/2/3 开头 = 深交所），无法判定时原样返回。
-    """
-    t = str(ticker).strip()
-    if "." in t:
-        code, _, suf = t.partition(".")
-        return ("sh" if suf.upper() in ("SS", "SH") else "sz") + code
-    if len(t) == 6 and t.isdigit():
-        return ("sh" if t[0] in "569" else "sz") + t
-    return t
 
 
 # ── 解读判语（数据驱动；数据不符时自动降级为中性，不出错话）──
@@ -755,6 +717,7 @@ def main(argv: list[str] | None = None) -> int:
     out_md = EVID_DIR / f"{ticker}_{date}.md"
     out_json = EVID_DIR / f"{ticker}_{date}.json"
     out_md.write_text(content_md, encoding="utf-8", newline="\n")
+    write_manifest(out_md)   # 只读清单：防角色回改证据包（AGENT_PROTOCOL §6）
     out_json.write_text(json.dumps(summary_json, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"  ✓ 证据包生成完毕: {out_md.relative_to(ROOT).as_posix()} ({len(content_md)} 字符)")

@@ -44,7 +44,6 @@
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -81,7 +80,13 @@ def _load_snapshot_raw(ticker: str, date: str, ev_path: Path | None = None) -> d
     if not ev.exists():
         return {}
     text = ev.read_text(encoding="utf-8")
-    m = re.search(r"## 3\. 基本面快照\s*```(.*?)```", text, re.S)
+    # ★ 2026-10-24 修：标题与围栏之间允许**空行与引用块**（`>` 开头的口径提示行）——
+    #   旧正则 `\s*``` 要求围栏紧跟标题；collect.py 在 §3 加入「口径提示」引用块后，
+    #   整个快照解析返回空 ⇒ 币种/forward 两项检测**静默失效**（铁律 32 的失效模式：
+    #   「检测器看着在工作，其实什么也没检」）。回归测试见
+    #   tests/test_wb_collect_assemble_pure.py::TestSnapshotConsistencyLayout。
+    #   版式约束：围栏前只允许空行与 `>` 引用行；出现普通段落仍不匹配（保持保守）。
+    m = re.search(r"## 3\. 基本面快照[ \t]*(?:\n[ \t]*(?:>[^\n]*)?)*```(.*?)```", text, re.S)
     if not m:
         return {}
     out: dict[str, str] = {}

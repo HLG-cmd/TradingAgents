@@ -43,6 +43,13 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# ★ 2026-10-24：篇幅门禁的**唯一定义源**在 `wb_analysis/_length.py`，
+#   此处只读不复制（此前两边各写一份 4,000/6,000，改一处必漏另一处）。
+from wb_analysis._length import MAX_CHARS, bounds_for  # noqa: E402
+
 DRAFTS = ROOT / "wb_analysis" / "drafts"
 EVID = ROOT / "wb_analysis" / "evidence"
 
@@ -107,8 +114,50 @@ RATING_RULE: dict[str, str] = {
 }
 
 
-def _readable(ticker: str, date: str, draft: Path) -> list[Path]:
-    """该角色可读的文件（绝对路径，存在才列）。"""
+#: 各角色本轮**应当**读到的前轮稿件（相对草稿目录）。
+#:
+#: ★ 2026-10-23 补：此前 `_readable()` 对所有角色返回同一份白名单
+#:   （brief / derived / evidence / FRAMEWORK），于是 manager / trader / 三风控 / PM 的
+#:   提示词写着「评判辩论质量」，白名单里却**没有 bull.md / bear.md / trader.md** ——
+#:   角色被要求评判自己读不到的东西。实测跑 GOOG_2026-10-23 时只能靠人工在子代理指令里
+#:   补文件清单，属流程性缺陷。判据取自 FRAMEWORK §3 的输入关系。
+#:
+#: 仍**不**把分析师稿给 bull/bear：R1 要求两派只从证据出发、互不预判（AGENT_PROTOCOL §3）。
+PRIOR_ROUND: dict[str, tuple[str, ...]] = {
+    "manager": ("2_research/bull.md", "2_research/bear.md"),
+    "trader": (
+        "1_analysts/market.md", "1_analysts/fundamentals.md",
+        "1_analysts/news.md", "1_analysts/sentiment.md",
+        "2_research/manager.md",
+    ),
+    "aggressive": (
+        "1_analysts/market.md", "2_research/bull.md",
+        "2_research/manager.md", "3_trading/trader.md",
+    ),
+    "conservative": (
+        "1_analysts/market.md", "2_research/bear.md",
+        "2_research/manager.md", "3_trading/trader.md",
+    ),
+    "neutral": (
+        "1_analysts/market.md", "2_research/bull.md", "2_research/bear.md",
+        "2_research/manager.md", "3_trading/trader.md",
+    ),
+    "portfolio_manager": (
+        "1_analysts/market.md", "1_analysts/fundamentals.md",
+        "1_analysts/news.md", "1_analysts/sentiment.md",
+        "2_research/bull.md", "2_research/bear.md", "2_research/manager.md",
+        "3_trading/trader.md",
+        "4_risk/aggressive.md", "4_risk/conservative.md", "4_risk/neutral.md",
+    ),
+}
+
+
+def _readable(ticker: str, date: str, draft: Path, role: str = "") -> list[Path]:
+    """该角色可读的文件（绝对路径，存在才列）。
+
+    `role` 非空时追加该角色**本轮的前置稿件**（见 `PRIOR_ROUND`）—— 缺一份不报错，
+    因为下游角色常在上一轮尚未写完时被提前生成提示词（那时白名单少几项是正常的）。
+    """
     cands = [
         draft / "0_brief.md",
         draft / "0_derived.md",
@@ -118,7 +167,14 @@ def _readable(ticker: str, date: str, draft: Path) -> list[Path]:
         EVID / f"{ticker}_{date}.derived.md",
         ROOT / "wb_analysis" / "FRAMEWORK.md",
     ]
-    return [p for p in cands if p.exists()]
+    cands += [draft / rel for rel in PRIOR_ROUND.get(role, ())]
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for p in cands:
+        if p.exists() and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
 
 
 def _forbidden(role: str, draft: Path) -> list[Path]:
@@ -149,7 +205,7 @@ def build(ticker: str, date: str, role: str) -> tuple[int, str]:
         print(f"✗ 缺 0_brief.md: {draft}（角色没有统一事实源）", file=sys.stderr)
         return 1, ""
 
-    readable = _readable(ticker, date, draft)
+    readable = _readable(ticker, date, draft, role)
     forbidden = _forbidden(role, draft)
     if role in ("bull", "bear"):
         # 对方稿件**始终列出**（即使尚未生成）—— 这条禁令不能依赖文件是否存在。
@@ -193,7 +249,9 @@ def build(ticker: str, date: str, role: str) -> tuple[int, str]:
              "不写死任何具体数值**——硬编码会让上一轮标的的数字渗入本轮，正是本项目禁止的跨轮污染）。")
     L.append("- 必须单独列一节「不利证据」，至少 3 条，针对你自己的结论做反向检验。")
     L.append("- 结论必须**条件式**：写清「若 A 则 X；若 B 则 Y」，不得给无条件方向。")
-    L.append("- **篇幅 4,000–4,800 字符**（硬下限 4,000，超过 6,000 会被判「偏长」）。")
+    _lo, _hi = bounds_for(ROLE_FILES[role].rsplit("/", 1)[-1])
+    _tier = "决策类" if _hi == _lo + 800 and _lo == 3000 else "分析师/辩论"
+    L.append(f"- **篇幅 {_lo:,}–{_hi:,} 字符**（{_tier}硬下限 {_lo:,}，超过 {MAX_CHARS:,} 会被判「偏长」）。")
     L.append("- **每句话都必须承载信息**：不得复述结论、不得重复同一句、不得用「综上所述」凑段。")
     L.append("- 不得写免责声明、合规声明或「本报告不含某某词」这类元话语。")
     L.append("- 数据缺失写「该项数据缺失」，不得臆造。")
@@ -204,7 +262,7 @@ def build(ticker: str, date: str, role: str) -> tuple[int, str]:
     L.append(f"python -c \"import pathlib;t=pathlib.Path(r'{out_path}').read_text(encoding='utf-8');print(len(t))\"")
     L.append("```")
     L.append("")
-    L.append("长度 <4,000 或 >6,000 时，**删减/补充内容本身**，不要用重复句凑数。")
+    L.append(f"长度 <{_lo:,} 或 >{MAX_CHARS:,} 时，**删减/补充内容本身**，不要用重复句凑数。")
     return 0, "\n".join(L) + "\n"
 
 

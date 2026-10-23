@@ -34,7 +34,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parents[1]
 PY = sys.executable
-SKIP = {".venv", ".git", "__pycache__", ".pytest_cache", ".cache", "node_modules"}
+SKIP = {".venv", ".git", "__pycache__", ".pytest_cache", ".cache", "node_modules", ".archive_local_backup"}
 
 # ★ 2026-10-10：非 12 角色专用通道的豁免表与 `_reports_index.py` / `_seal_run.py` **同源**
 #   （唯一定义源＝`wb_analysis/_contract.py`）。此前本检查只数文件数、不认豁免，
@@ -62,7 +62,7 @@ def chk_selftest() -> tuple[str, str]:
     m = re.search(r"全部\s*(\d+)\s*项通过", out)
     if rc == 0 and m:
         return "PASS", f"门禁自检 {m.group(1)}/{m.group(1)} 项通过"
-    tail = [l for l in out.splitlines() if l.strip().startswith(("✗", "✓"))]
+    tail = [line for line in out.splitlines() if line.strip().startswith(("✗", "✓"))]
     return "FAIL", (tail[-1][:70] if tail else "自检未通过")
 
 
@@ -82,8 +82,8 @@ def chk_lifecycle() -> tuple[str, str]:
     #   原先一律报「缺 lifecycle 或 serves 标记」，会把真实原因盖掉 —— 实测被误导两次。
     #   ⇒ 透传工具自己的输出，它才是唯一知道原因的一方。
     first = out.strip().splitlines()[0][:80] if out.strip() else "(无输出)"
-    bad = [l.strip() for l in out.splitlines()
-           if l.startswith("    ") and l.strip()]
+    bad = [line.strip() for line in out.splitlines()
+           if line.startswith("    ") and line.strip()]
     detail = ("：" + "、".join(bad[:3]) + ("…" if len(bad) > 3 else "")) if bad else f"：{first}"
     return "FAIL", f"_tidy_scripts.py --check 未通过（rc={rc}）{detail}"
 
@@ -117,7 +117,7 @@ def chk_reports() -> tuple[str, str]:
     # ① 先验「工具是否真的跑成功」—— 崩溃时不得把「无输出」读成「无问题」
     if rc not in (0, 1):
         return "FAIL", f"`_reports_index.py --check` 未正常退出（rc={rc}）⇒ 无法判断，首行：{first}"
-    lines = [l.strip() for l in out.splitlines() if l.strip().startswith("- [")]
+    lines = [line.strip() for line in out.splitlines() if line.strip().startswith("- [")]
     n = len(lines)
     if n == 0:
         m = re.search(r"报告树\s*(\d+)\s*棵", out)
@@ -134,7 +134,7 @@ def chk_reports() -> tuple[str, str]:
     #   此前只报「N 项待整理（孤儿/重复/散落）」，操作者得自己猜到该跑
     #   `_seal_run.py --orphans` —— 而该入口**早就存在**且已是「先打包回滚、校验不过即中止」
     #   的完整链路。检测与处置之间缺的只是一句指路，于是 TSM 那类残留能挂十多个小时没人动。
-    orphans = [l for l in lines if "孤儿" in l]
+    orphans = [line for line in lines if "孤儿" in line]
     parts = []
     if orphans:
         parts.append(f"孤儿 {len(orphans)} 项 → `_seal_run.py --orphans --apply`"
@@ -369,6 +369,13 @@ DISK_BUDGETS: list[tuple[str, str, float, str]] = [
     ("memory", ".workbuddy-ai/memory", 10.0, "旧日志归档进 _backup/ 并精简"),
     ("外部缓存", str(Path.home() / ".tradingagents"), 1024.0,
      "quant/cleanup_cache.py --status 先看占用，再选 --keep-edgar / --yes"),
+    # ★ 2026-10-23 补：`conftest.py` 把 `sys.pycache_prefix` 指到 `.cache/pycache`，
+    #   于是**跑测试时导入的第三方包**（pandas/numpy/langchain…）的 .pyc 全落在这里，
+    #   实测 51 MB。而 `_pyc_mb()` 只扫仓库内 `__pycache__` ⇒ 这 51 MB 对门禁**完全不可见**
+    #   （体检报 "pyc 1.3MB"，正是本文件自己警告过的「检测器恒 PASS」形态）。
+    #   它可随时删、下次运行自动重建 ⇒ 预算给足（只为可见 + 防失控），不参与 FAIL。
+    ("pycache", ".cache/pycache", 120.0,
+     "可随时删：rm -rf .cache/pycache（下次运行自动重建，不影响正确性）"),
 ]
 PYC_BUDGET_MB = 20.0  # .pyc 正常约 1 MB；超过 20 MB 属异常（不是"该清了"而是"哪里坏了"）
 
@@ -531,7 +538,14 @@ BASELINE_K = "not DeepSeekLive"
 #   - tests/test_wb_verify_ratings.py（5 项：评级词扫描 / 席位白名单 / 必需字段）
 #   - tests/test_wb_thresholds.py（+1 项：US_MARKET_HOLIDAYS 2024-2027 锚点测试）
 #   - tests/test_wb_contract.py（+5 项：FIVE_RE 小写英文正文不误报）
-BASELINE_PASSED = 1111
+# 2026-10-23：1111 → 1117 → 1143。
+#   · 新增 `tests/test_nan_daily_fix.py`（6 项）：锁定 `nan_daily_fix` 美股常规时段 vs 期货聚合、
+#     `as_of` 防未来数据前瞻泄漏、`Date` 列混合排序与 MultiIndex 修补；
+#   · 新增 `tests/test_channel_ok_of.py`（14 项）：锁定 `_channel.ok_of` 双向判据与采集器单一来源；
+#   · 新增 `tests/test_wb_collect_assemble_pure.py`（10 项）：锁定 `collect`/`assemble`/`_derive_stock` 纯函数；
+#   · `tests/quant/test_factor_backtest.py`（+1 项）：锁定 `stats_utils` 统计函数单一来源；
+#   · `tests/test_no_naive_clock.py`（+1 项）：禁止 `_clock.py` 外硬编码 `ZoneInfo` 时区字面量。
+BASELINE_PASSED = 1237
 # ★ 2026-10-21（第二次）：935 → 937。依据＝实测 `pytest tests/ -q` 输出「937 passed」，
 #   增量 2 项来自统一网络重试参数化测试：
 #   - test_retry_with_custom_retryable_tuple (支持异常元组)
@@ -621,7 +635,9 @@ def chk_tests() -> tuple[str, str]:
 # ⚠️ **不要加 `\b`** —— 首版写成 `\b\d{2,}\s*个\s*(...)\b`，
 #   而 `\b` 在「中文 ↔ 数字」边界上不可靠：`有 999 个单元测试` 实测**不匹配**，
 #   于是注入的真漂移被漏掉（双边测试才发现）。CJK 场景下用 `\d{2,}` 直接起头即可。
-_DOC_COUNT_RE = re.compile(r"\d{2,}\s*个\s*(单元测试|测试|脚本|\.py|通道)")
+_DOC_COUNT_RE = re.compile(
+    r"\d{2,}\s*(?:个\s*(?:单元测试|测试|脚本|\.py|通道)|条[^\n。；，]{0,12}铁律|passed\b)"
+)
 _DOC_BARE_CMD_RE = re.compile(r"\bpython\s+([A-Za-z_][A-Za-z0-9_]*)\.py")
 _DOC_BARE_IMP_RE = re.compile(r"^\s*from\s+([A-Za-z_][A-Za-z0-9_]*)\s+import", re.M)
 # ④ 行号引用 —— ★ 2026-10-10 新增。行号是**必然漂移**的引用方式：本轮实测 4 处
@@ -699,13 +715,17 @@ def _doc_drift_scope() -> list[Path]:
     sk = ROOT / ".workbuddy-ai" / "skills"
     if sk.exists():
         out += list(sk.glob("*/SKILL.md"))
-    for nm in ("README.md", "CHANGELOG.md"):
+    for nm in ("README.md", "CHANGELOG.md", "requirements.lock.txt"):
         p = ROOT / nm
         if p.exists():
             out.append(p)
     fw = ROOT / "wb_analysis" / "FRAMEWORK.md"
     if fw.exists():
         out.append(fw)
+    for pkg in ("quant", "wb_analysis", "scripts", "tests", "cli", "tradingagents"):
+        p = ROOT / pkg / "README.md"
+        if p.exists():
+            out.append(p)
     return sorted({p.resolve() for p in out})
 
 
@@ -749,7 +769,8 @@ def chk_doc_drift() -> tuple[str, str]:
     for d in sorted(docs):
         if d.name in EXEMPT:
             continue
-        hits += scan_doc_text(d.name, d.read_text(encoding="utf-8"), pkg_mods)
+        rel_name = d.relative_to(ROOT).as_posix() if d.is_relative_to(ROOT) else d.name
+        hits += scan_doc_text(rel_name, d.read_text(encoding="utf-8"), pkg_mods)
 
     if hits:
         head = "；".join(hits[:3])
@@ -774,13 +795,107 @@ def chk_scorecard() -> tuple[str, str]:
     if not csv.exists():
         return ("WARN", f"{n_trees} 轮交付但无记分卡 ⇒ 跑 wb_analysis/_scorecard.py") if n_trees else \
                ("PASS", "尚无交付轮次")
-    rows = [l for l in csv.read_text(encoding="utf-8").splitlines()[1:] if l.strip()]
-    bad_rows = [l for l in rows if l.startswith(",")]
+    rows = [line for line in csv.read_text(encoding="utf-8").splitlines()[1:] if line.strip()]
+    bad_rows = [line for line in rows if line.startswith(",")]
     if bad_rows:
         return "WARN", f"记分卡含 {len(bad_rows)} 条非报告树脏记录 ⇒ 重跑 wb_analysis/_scorecard.py"
     if len(rows) != n_trees:
         return "WARN", f"记分卡 {len(rows)} 轮 ≠ 交付 {n_trees} 轮 ⇒ 跑 wb_analysis/_scorecard.py 同步"
     return "PASS", f"记分卡覆盖 {len(rows)}/{n_trees} 轮（趋势看 _scorecard.py --trend）"
+
+
+# ── 长函数预算 ────────────────────────────────────────────────────────────────
+# 为什么要有这条（2026-10-23）：函数长度本身不是 bug，但**超长函数必然不可单测** ——
+#   `collect_index`（576 行）与 `collect_a_stock`（553 行）都是「取数 + 格式化 + 落盘」三合一，
+#   想测任何一段都得联网跑整条链路。拆它属于重构级动作，不能靠"记得拆"。
+# 做法与 `test_no_naive_clock.py` 的 KNOWN_FILES 同构：**基线 + 禁止新增**。
+#   减少 → WARN（提醒下调基线，别让预算变成摆设）；新增 → FAIL（新代码不该再堆长函数）。
+# 口径：≥120 行的函数；排除 `.venv/.git/.cache/__pycache__` 与 `_oneoff`（后者不入库）。
+LONG_FUNC_LINES = 120
+LONG_FUNC_BUDGET = 36  # 2026-10-23 实测（排除 _oneoff）；_selftest/collect_a_stock 拆分后 -1
+
+
+def _long_funcs() -> list[tuple[int, str, str]]:
+    """全仓 ≥LONG_FUNC_LINES 行的函数，按行数降序。"""
+    rows: list[tuple[int, str, str]] = []
+    for p in ROOT.rglob("*.py"):
+        rel = p.relative_to(ROOT).as_posix()
+        parts = rel.split("/")
+        if parts[0] in SKIP or "_oneoff" in parts:
+            continue
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            continue
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                ln = (n.end_lineno or n.lineno) - n.lineno + 1
+                if ln >= LONG_FUNC_LINES:
+                    rows.append((ln, rel, n.name))
+    return sorted(rows, reverse=True)
+
+
+def chk_eol() -> tuple[str, str]:
+    """工作区换行归一化：文本文件必须 LF（`.bat/.ps1/.cmd` 按 `.gitattributes` 保留 crlf）。
+
+    为什么要有这条（2026-10-24）：本机是 Windows，用 `Path.write_text()` 改文件时 Python 默认
+    把 `\n` 写成 `\r\n` —— 一次批量改写就把项目当天的 LF 归一化**悄悄回退**了 17 个文件，
+    而当时所有门禁都是绿的（git 只在 `git diff` 时打一行 `CRLF will be replaced by LF` 警告）。
+    这与铁律 3「静默失败」同类：**改动发生了，但没有任何检查在看它**。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "--eol"], cwd=str(ROOT),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return "WARN", f"git 不可用（{type(exc).__name__}），跳过"
+    if out.returncode != 0:
+        return "WARN", "git ls-files 失败（非 git 环境？），跳过"
+    bad: list[str] = []
+    for line in out.stdout.splitlines():
+        if "w/crlf" not in line and "w/mixed" not in line:
+            continue
+        path = line.split("\t", 1)[-1].strip()
+        if path.endswith((".bat", ".ps1", ".cmd")):
+            continue          # 规范要求保留 crlf
+        bad.append(path)
+    # ★ 未跟踪文件同样要查：新建文件用 `Path.write_text()` 写出来也是 CRLF，
+    #   而 `git ls-files --eol` 只看**已跟踪**文件 —— 实测有 3 个新文件就这样漏过了门禁。
+    others = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"], cwd=str(ROOT),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    ).stdout
+    for rel in others.splitlines():
+        rel = rel.strip()
+        if not rel or rel.endswith((".bat", ".ps1", ".cmd")):
+            continue
+        fp = ROOT / rel
+        try:
+            if fp.is_file() and b"\r\n" in fp.read_bytes():
+                bad.append(rel + "（未跟踪）")
+        except OSError:
+            continue
+    if bad:
+        return "FAIL", (
+            f"{len(bad)} 个文本文件不是 LF：{'、'.join(bad[:3])}"
+            f"{' 等' if len(bad) > 3 else ''}"
+            " ⇒ 跑 scripts/_normalize_eol.py（或手动把 CRLF 改回 LF）"
+        )
+    return "PASS", "工作区文本文件均为 LF（.bat/.ps1 按规范保留 crlf）"
+
+
+def chk_long_functions() -> tuple[str, str]:
+    """长函数预算：只许减少，不许新增。"""
+    rows = _long_funcs()
+    n = len(rows)
+    detail = f"{n} 个 ≥{LONG_FUNC_LINES} 行函数（基线 {LONG_FUNC_BUDGET}）"
+    if n > LONG_FUNC_BUDGET:
+        new = "、".join(f"{f}::{fn}({ln})" for ln, f, fn in rows[:3])
+        return "FAIL", f"{detail} ⇒ 新增长函数：{new}；请拆分，或同步上调基线并写明理由"
+    if n < LONG_FUNC_BUDGET:
+        return "WARN", f"{detail} ⇒ 已减少 {LONG_FUNC_BUDGET - n} 个，请下调 LONG_FUNC_BUDGET"
+    return "PASS", detail
 
 
 CHECKS = [
@@ -793,6 +908,8 @@ CHECKS = [
     ("版本库忽略", chk_gitignore),
     ("根目录整洁", chk_root_clean),
     ("堆积预算", chk_disk_budget),
+    ("换行归一化", chk_eol),
+    ("长函数预算", chk_long_functions),
     ("记忆体积", chk_memory_size),
     ("回归基线", chk_tests),
     ("文档漂移", chk_doc_drift),

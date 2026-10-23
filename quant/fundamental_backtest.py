@@ -41,6 +41,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from quant.edgar_fundamentals import cumulative_split_factor, fetch_facts, get_point_in_time
 from quant.screener_engine import FACTOR_WEIGHTS, MARGINAL_T, SIGNIFICANT_T
+from quant.stats_utils import quintile_spread, spearman, summarize
 from quant.stock_pools import get_latest_nasdaq_100, get_nasdaq100_sectors
 
 MAX_WORKERS = 5
@@ -152,38 +153,7 @@ def composite(f: pd.DataFrame, w: dict) -> pd.Series:
 
 
 # ── 统计 ─────────────────────────────────────────────────────────────────
-
-def spearman(x: pd.Series, y: pd.Series) -> float:
-    m = x.notna() & y.notna()
-    if m.sum() < 8:
-        return np.nan
-    rx, ry = x[m].rank().values, y[m].rank().values
-    if np.std(rx) == 0 or np.std(ry) == 0:
-        return np.nan
-    return float(np.corrcoef(rx, ry)[0, 1])
-
-
-def summarize(ic: pd.Series) -> dict:
-    ic = ic.dropna()
-    n = len(ic)
-    if n < 6:
-        return {"IC": np.nan, "ICIR": np.nan, "t": np.nan, "胜率": np.nan, "N": n}
-    m, sd = ic.mean(), ic.std(ddof=1)
-    return {"IC": m, "ICIR": m / sd if sd else np.nan,
-            "t": m / (sd / np.sqrt(n)) if sd else np.nan,
-            "胜率": (ic > 0).mean(), "N": n}
-
-
-def quintile_spread(f: pd.Series, fwd: pd.Series) -> float:
-    s = f.dropna()
-    common = s.index.intersection(fwd.dropna().index)
-    if len(common) < 10:
-        return np.nan
-    s, r = s[common], fwd[common]
-    hi, lo = s >= s.quantile(0.8), s <= s.quantile(0.2)
-    if hi.sum() == 0 or lo.sum() == 0:
-        return np.nan
-    return float(r[hi].mean() - r[lo].mean())
+# spearman / summarize / quintile_spread 已收敛至 quant.stats_utils（唯一定义源）
 
 
 # ── 主流程 ───────────────────────────────────────────────────────────────

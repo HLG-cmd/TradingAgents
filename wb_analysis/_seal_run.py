@@ -34,7 +34,6 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from datetime import datetime
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):

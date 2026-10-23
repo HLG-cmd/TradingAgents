@@ -7,6 +7,10 @@ import re
 
 import pytest
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:Model .* is not in the known model list:RuntimeWarning"
+)
+
 # Rich colorizes console output and highlights numbers and URLs, which splits
 # asserted substrings with escape codes ("port \x1b[1;33m11434"). Whether it
 # does so depends on the ambient terminal, so strip the codes to keep these

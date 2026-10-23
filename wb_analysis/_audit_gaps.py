@@ -309,8 +309,6 @@ def audit_series(md: str, as_of: str) -> list[dict]:
     这是 `_compact_series` 排序 bug 的回归检测 —— 该 bug 的表现就是
     「证据包的最后一行其实是倒数第二/第五行」。
     """
-    import pandas as pd
-    import yfinance as yf
 
     out = []
     for ind in ("close_50_sma", "rsi", "macd"):

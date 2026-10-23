@@ -8,7 +8,6 @@
 
 用法: ./.venv/Scripts/python.exe scripts/_scan_project.py
 """
-import json
 import re
 import sys
 from collections import Counter, defaultdict

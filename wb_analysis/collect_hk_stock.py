@@ -39,6 +39,7 @@ EVID = ROOT / "wb_analysis" / "evidence"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from wb_analysis._channel import ok_of  # noqa: E402
 from wb_analysis._westock import filter_news_asof, run_westock  # noqa: E402
 
 #: (章节标题, westock 子命令)
@@ -103,7 +104,7 @@ def collect(ticker: str, date: str) -> int:
             body = str(run_westock(argv)).strip()
         except Exception as e:  # noqa: BLE001
             body = f"(命令失败: {type(e).__name__}: {e})"
-        good = bool(body) and "数据为空" not in body and "(命令失败" not in body
+        good = ok_of(body)
         ok += good
         if not good:
             failed.append(title)

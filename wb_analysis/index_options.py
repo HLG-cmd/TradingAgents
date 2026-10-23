@@ -14,6 +14,7 @@ import datetime as dt
 import math
 import statistics
 
+from wb_analysis import _clock
 from wb_analysis._clock import market_date
 from wb_analysis._thresholds import (
     HUMP_MIN_PP,
@@ -21,7 +22,7 @@ from wb_analysis._thresholds import (
     market_session_phase,
     option_source_decision,
 )
-from wb_analysis.index_math import _bs_delta, _bs_price, _implied_vol
+from wb_analysis.index_math import _bs_delta, _implied_vol
 
 __all__ = [
     "VOL_PROXIES",
@@ -54,9 +55,7 @@ def probe_option_freshness(etf: str = ETF_PROXY_DEFAULT) -> dict:
            "in_session": None, "session_note": ""}
 
     try:
-        import zoneinfo
-
-        _now_ny = dt.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+        _now_ny = _clock.now()
         _phase = market_session_phase(_now_ny)
         out["session_phase"] = _phase
         out["in_session"] = (_phase == "in_session")

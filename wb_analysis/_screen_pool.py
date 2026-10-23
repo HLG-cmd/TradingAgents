@@ -59,7 +59,6 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-import datetime as dt  # noqa: E402
 
 import pandas as pd  # noqa: E402
 

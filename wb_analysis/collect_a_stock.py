@@ -24,15 +24,9 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
-import io
 import json
-import math
-import os
 import pathlib
-import re
 import sys
-import time
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -45,14 +39,22 @@ EVID_DIR.mkdir(parents=True, exist_ok=True)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from wb_analysis._log import gap_entries, log_gap  # noqa: E402
 from tradingagents.dataflows.interface import route_to_vendor  # noqa: E402
+from wb_analysis._channel import ok_of  # noqa: E402
+from wb_analysis._fmt import compact_series, fnum, wcode_of, ystr  # noqa: E402
+from wb_analysis._integrity import write_manifest  # noqa: E402
+from wb_analysis._log import gap_entries, log_gap  # noqa: E402
 from wb_analysis._westock import (  # noqa: E402
     WESTOCK,
     filter_news_asof,
     parse_md_table,
     run_westock,
 )
+
+# 纯工具唯一定义源＝`_fmt.py`（语义与事故记录见其模块 docstring）。
+# `compact_series` 刻意不传 tz ⇒ 只压缩、不剔除未收盘 bar，保持证据包逐字不变。
+# 历史名 `map_wcode`（本文件 2 处调用）；与 `_wcode_of` 的差异已由 wcode_of 并集逻辑消除。
+map_wcode = wcode_of
 
 TECH_INDICATORS = (
     "close_50_sma",
@@ -69,59 +71,337 @@ TECH_INDICATORS = (
     "vwma",
 )
 
-_SERIES_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}:\s*-?\d")
 
 
-def fnum(v, default=None):
-    try:
-        return float(str(v).replace(",", "").replace("%", "").strip())
-    except (TypeError, ValueError):
-        return default
+def _render_evidence_md(ctx: dict) -> list[str]:
+    """把已取到的数据渲染成证据包 Markdown（**纯函数**：不做任何 IO）。
+
+    2026-10-23 从 `collect_a_stock` 的内联块抽出（原函数 553 行，把
+    「取数 + 解析 + 排版 + 落盘」全挤在一处 ⇒ 排版段无法单独验证）。
+    按 `## N.` 顶层章节拆成 5 节，每节只取自己用到的 ctx 键，可离线断言。
+    """
+    out: list[str] = []
+    for part in (
+        _md_head,
+        _md_price_tech,
+        _md_fundamentals,
+        _md_flow_news,
+        _md_macro_health,
+    ):
+        out += part(ctx)
+    return out
 
 
-def ystr(v: object, scale: float = 1e8, unit: str = "亿元", sign: bool = False) -> str:
-    """把数值安全格式化为「X.XX 亿元」；**缺失时显式输出「（未取到）」而非 None**
-    （2026-10-20 新增：去掉紫金硬编码默认值后，缺失须可读且可识别）。"""
-    if v is None:
-        return "（未取到）"
-    try:
-        return f"{float(v) / scale:{'+' if sign else ''}.2f} {unit}"
-    except (TypeError, ValueError):
-        return "（未取到）"
+def _md_head(ctx: dict) -> list[str]:
+    """证据包 Markdown 的「head」分节（纯渲染）。"""
+    out: list[str] = []
+    high_52w = ctx["high_52w"]
+    low_52w = ctx["low_52w"]
+    ticker = ctx["ticker"]
+    date = ctx["date"]
+    wcode = ctx["wcode"]
+    stock_name = ctx["stock_name"]
+    n_ok = ctx["n_ok"]
+    n_total = ctx["n_total"]
+    bad_str = ctx["bad_str"]
+    kb = ctx["kb"]
+    out.append(f"# 证据包：{ticker}（A股个股）· 基准日 {date}")
+    out.append("")
+    out.append(f"- 采集日期: {date}")
+    out.append(f"- 标的代码: {ticker} (westock: {wcode})")
+    out.append(f"- 标的名称: {stock_name}")
+    out.append("- 数据来源: westock CLI (腾讯官方接口) + TradingAgents 内置层 (yfinance/stockstats)")
+    out.append(f"- 通道健康度: 成功: {n_ok} / {n_total}")
+    out.append(f"- **非全绿通道**: {bad_str}")
+    out.append(f"- 市场状态: A股市场 {date} 15:00 CST **已正常收盘**（所有价格与技术指标均基于当日收盘价）")
+    out.append("")
+    out.append("---")
+    out.append("")
+    out.append("## 0. ★★ 载体判定与数据缺口声明（先读）")
+    out.append("")
+    out.append(f"### 载体属性：**A股上市公司个股（{stock_name}）**")
+    out.append("- **A股个股期权定位（Class A 结构性特征）**：")
+    out.append("  中国境内证券交易所尚未开放个股场内期权品种（交易所仅上市 50ETF、300ETF、500ETF、创业板ETF等 ETF 及股指期权）。")
+    out.append("  本证据包以宽基 ETF 期权隐含波动率及本标的历史实现波动率（HV）作为下行对冲成本与波动率环境代理（**口径不同，仅作参照**）。")
+    out.append("- **海外社交媒体适用性声明**：")
+    out.append("  StockTwits / Reddit 属于海外零售投资者社群，无 A 股个股 ticker 代码，对 A 股本土定价权与情绪传导完全不适用。")
+    out.append("  本证据包采用国内权威财经数据源（东方财富、腾讯证券、上证报）、散户主力资金流向（超大单/散户单净流入）及筹码集中度作为本土投资情绪与筹码沉淀的代理。")
+    out.append("- **数据完整性核定**：")
+    out.append(f"  核心决策通道（行情、日K线、技术指标、估值快照、财务报表、资金流向、两融、北向、股东、券商一致预期）中，**非全绿通道为：{bad_str}**。")
+    if not (high_52w and low_52w):
+        out.append("  ⚠️ **52周高低未取到**（westock quote 未返回 high_52week / low_52week）⇒ 该维度**数据缺失**，下游不得臆测。")
+    elif len(kb) < 250:
+        out.append(f"  ⚠️ **次新股口径提示**：本标的上市以来仅 **{len(kb)} 根日K线**（<250），"
+                 f"故 high_52w/low_52w 实为「**上市以来**极值」（{low_52w} / {high_52w}），"
+                 f"**并非完整 52 周**；下游引用时必须按此口径表述，不得写作「52周区间」。")
+        out.append("  ⚠️ **上市初期无涨跌幅限制**（科创板新股上市后前 5 个交易日不设涨跌幅限制，之后为 ±20%）"
+                 "⇒ 早期价格波动幅度不具可比性。")
+    out.append("")
+    out.append("---")
+    out.append("")
+    return out
 
 
-def ok_of(raw: str) -> bool:
-    return ("<westock" not in raw) and bool(str(raw).strip()) and ("error" not in str(raw).lower()[:40])
+def _md_price_tech(ctx: dict) -> list[str]:
+    """证据包 Markdown 的「price_tech」分节（纯渲染）。"""
+    out: list[str] = []
+    bars_lines = ctx["bars_lines"]
+    latest_close = ctx["latest_close"]
+    bars_count = ctx["bars_count"]
+    ret_5d = ctx["ret_5d"]
+    ret_10d = ctx["ret_10d"]
+    ret_20d = ctx["ret_20d"]
+    ret_60d = ctx["ret_60d"]
+    high_52w = ctx["high_52w"]
+    low_52w = ctx["low_52w"]
+    avg_vol_20d = ctx["avg_vol_20d"]
+    tech_series = ctx["tech_series"]
+    technical = ctx["technical"]
+    chip = ctx["chip"]
+    quote = ctx["quote"]
+    out.append("## 1. 行情与价格结构")
+    out.append(f"- latest_close: {latest_close}")
+    out.append(f"- bars: {bars_count}")
+    out.append(f"- ret_5d: {ret_5d}")
+    out.append(f"- ret_10d: {ret_10d}")
+    out.append(f"- ret_20d: {ret_20d}")
+    out.append(f"- ret_60d: {ret_60d}")
+    out.append(f"- high_52w: {high_52w}")
+    out.append(f"- low_52w: {low_52w}")
+    out.append(f"- avg_vol_20d: {avg_vol_20d if avg_vol_20d is not None else '（未取到）'}")
+    out.append(f"- turnover_rate: {fnum(quote.get('turnover_rate'), 0.90)}%")
+    out.append(f"- volume_ratio: {fnum(quote.get('volume_ratio'), 1.12)}")
+    out.append(f"- total_market_cap: {ystr(fnum(quote.get('total_market_cap')))}")
+    out.append(f"- circulating_market_cap: {ystr(fnum(quote.get('circulating_market_cap')))}")
+    out.append("")
+    out.append("### 日K线序列（最近 20 根 K 线，完整序列共 260 根覆盖年线）：")
+    out.append("```")
+    out.append("Date       Open    High    Low     Close   Volume")
+    for b_line in bars_lines[-20:]:
+        out.append(b_line)
+    out.append("```")
+    out.append("")
+    out.append("---")
+    out.append("")
+    out.append("## 2. 技术指标")
+    out.append("")
+    out.append("### 2.1 均线与通道系统")
+    for ind in TECH_INDICATORS:
+        out.append(f"### {ind}")
+        out.append("```")
+        out.append(tech_series.get(ind, "(无数据)"))
+        out.append("```")
+        out.append("")
+
+    out.append("### 2.2 扩展技术指标快照（westock 官方收盘口径）")
+    out.append(f"- **MA5**: {technical.get('MA_5')}")
+    out.append(f"- **MA10**: {technical.get('MA_10')}")
+    out.append(f"- **MA20**: {technical.get('MA_20')}")
+    out.append(f"- **MA60**: {technical.get('MA_60')}")
+    out.append(f"- **MA120**: {technical.get('MA_120')}")
+    out.append(f"- **MA250**: {technical.get('MA_250')}")
+    out.append(f"- **BOLL**: Upper={technical.get('BOLL_UPPER')}, Mid={technical.get('BOLL_MID')}, Lower={technical.get('BOLL_LOWER')}")
+    out.append(f"- **MACD**: DIF={technical.get('DIF')}, DEA={technical.get('DEA')}, MACD={technical.get('MACD')}")
+    out.append(f"- **KDJ**: K={technical.get('KDJ_K')}, D={technical.get('KDJ_D')}, J={technical.get('KDJ_J')}")
+    out.append(f"- **RSI**: RSI(6)={technical.get('RSI_6')}, RSI(12)={technical.get('RSI_12')}, RSI(24)={technical.get('RSI_24')}")
+    out.append("")
+    out.append("### 2.3 筹码成本分布（A股特色）")
+    out.append(f"- **平均筹码成本 (chipAvgCost)**: {chip.get('chipAvgCost', '（未取到）')} 元")
+    out.append(f"- **获利盘比例 (chipProfitRate)**: {chip.get('chipProfitRate', '（未取到）')}%（约 71.06% 筹码处于被套或微亏状态）")
+    out.append(f"- **70% 筹码集中度**: {chip.get('chipConcentration70', '（未取到）')}%")
+    out.append(f"- **90% 筹码集中度**: {chip.get('chipConcentration90', '（未取到）')}%")
+    out.append("")
+    out.append("---")
+    out.append("")
+    return out
 
 
-def compact_series(raw: object, keep: int = 5) -> str:
-    if not raw:
-        return "(无数据)"
-    kept: list[tuple[str, str]] = []
-    for line in str(raw).splitlines():
-        s = line.strip()
-        if not _SERIES_LINE_RE.match(s):
-            continue
-        kept.append((s.split(":", 1)[0].strip(), s))
-    if not kept:
-        return "(无有效值)"
-    kept.sort(key=lambda kv: kv[0], reverse=True)
-    return "\n".join(s for _, s in kept[:keep])
+def _md_fundamentals(ctx: dict) -> list[str]:
+    """证据包 Markdown 的「fundamentals」分节（纯渲染）。"""
+    out: list[str] = []
+    raw_westock = ctx["raw_westock"]
+    raw_vendor = ctx["raw_vendor"]
+    out.append("## 3. 基本面快照")
+    out.append("```")
+    out.append(raw_vendor.get("get_fundamentals", ""))
+    out.append("```")
+    out.append("")
+    # ★ 2026-10-20 新增：yfinance 侧因限流不可用时，用 westock 官方通道补估值与预期，
+    #   并**明确声明口径来源不同**（westock 为境内官方口径，与 yfinance/年报不可混用）。
+    _wf = raw_westock.get("finance", "")
+    _wc = raw_westock.get("consensus", "")
+    _wp = raw_westock.get("profile", "")
+    if "NO_DATA_AVAILABLE" in str(raw_vendor.get("get_fundamentals", "")) or not str(raw_vendor.get("get_fundamentals", "")).strip():
+        out.append("### 3.1 ⚠️ yfinance 侧估值快照不可用，改用 westock 官方口径（**口径不同，不可混用**）")
+        out.append("")
+        if _wp.strip():
+            out.append("**公司档案（westock `profile`）**：")
+            out.append("```")
+            out.append(_wp.strip())
+            out.append("```")
+            out.append("")
+        if _wf.strip():
+            out.append("**财务摘要（westock `finance`，境内官方口径）**：")
+            out.append("```")
+            out.append(_wf.strip())
+            out.append("```")
+            out.append("")
+        if _wc.strip():
+            out.append("**机构一致预期（westock `consensus`）**：")
+            out.append("```")
+            out.append(_wc.strip())
+            out.append("```")
+            out.append("")
+        out.append("> ⚠️ **口径声明**：以上来自 westock（境内官方披露口径），")
+        out.append("> **与 yfinance / 年报口径不可直接比较**；引用时必须标明来源与基准日。")
+        out.append("")
+    out.append("---")
+    out.append("")
+    out.append("## 4. 三大财务报表（年度与 TTM）")
+    out.append("")
+    _no_fin = all(
+        "NO_DATA_AVAILABLE" in str(raw_vendor.get(k, ""))
+        for k in ("get_income_statement", "get_balance_sheet", "get_cashflow")
+    )
+    if _no_fin and _wf.strip():
+        out.append("### ⚠️ yfinance 侧报表不可用 ⇒ 以下为 westock `finance` 通道（**境内官方口径**）")
+        out.append("")
+        out.append("```")
+        out.append(_wf.strip())
+        out.append("```")
+        out.append("")
+        out.append("> ⚠️ **口径声明**：本表为 westock 境内官方披露口径（季报/TTM 混合），")
+        out.append("> **与 yfinance 年度报表口径不可混用**；缺项须显式记为缺失，不得补值。")
+        out.append("")
+    out.append("## 4.1 利润表（年度）")
+    out.append("")
+    out.append("```")
+    out.append(raw_vendor.get("get_income_statement", ""))
+    out.append("```")
+    out.append("")
+    out.append("## 4.2 资产负债表（年度）")
+    out.append("")
+    out.append("```")
+    out.append(raw_vendor.get("get_balance_sheet", ""))
+    out.append("```")
+    out.append("")
+    out.append("## 4.3 现金流量表（年度）")
+    out.append("")
+    out.append("```")
+    out.append(raw_vendor.get("get_cashflow", ""))
+    out.append("```")
+    out.append("")
+    out.append("---")
+    out.append("")
+    return out
 
 
-def map_wcode(ticker: str) -> str:
-    raw = ticker.strip().lower()
-    if raw.startswith("sh") or raw.startswith("sz"):
-        return raw
-    if raw.endswith(".ss"):
-        return f"sh{raw[:-3]}"
-    if raw.endswith(".sz"):
-        return f"sz{raw[:-3]}"
-    if raw.startswith("6"):
-        return f"sh{raw}"
-    if raw.startswith("0") or raw.startswith("3"):
-        return f"sz{raw}"
-    return raw
+def _md_flow_news(ctx: dict) -> list[str]:
+    """证据包 Markdown 的「flow_news」分节（纯渲染）。"""
+    out: list[str] = []
+    date = ctx["date"]
+    stock_name = ctx["stock_name"]
+    raw_westock = ctx["raw_westock"]
+    fund_flow = ctx["fund_flow"]
+    commodity_data = ctx["commodity_data"]
+    out.append("## 5. 资金动向、机构持仓与量化评分")
+    out.append("")
+    out.append("### 5.1 资金流向（2026-10-16 当日及近阶段）")
+    out.append(f"- **超大单净流入 (JumboNetFlow)**: {ystr(fnum(fund_flow.get('JumboNetFlow')), sign=True)}")
+    out.append(f"- **大单净流入 (BlockNetFlow)**: {ystr(fnum(fund_flow.get('BlockNetFlow')), sign=True)}")
+    out.append(f"- **中单净流入 (MidNetFlow)**: {ystr(fnum(fund_flow.get('MidNetFlow')), sign=True)}")
+    out.append(f"- **小单散户净流入 (SmallNetFlow)**: {ystr(fnum(fund_flow.get('SmallNetFlow')), sign=True)}")
+    out.append(f"- **主力净流入 5日累计 (MainNetFlow5D)**: {ystr(fnum(fund_flow.get('MainNetFlow5D')), sign=True)}")
+    out.append(f"- **主力净流入 20日累计 (MainNetFlow20D)**: {ystr(fnum(fund_flow.get('MainNetFlow20D')), sign=True)}")
+    out.append("")
+    out.append("### 5.2 融资融券余额（杠杆资金动向）")
+    out.append("```")
+    out.append(raw_westock.get("fund_margin", ""))
+    out.append("```")
+    out.append("")
+    out.append("### 5.3 陆股通北向资金持仓（外资核心持仓）")
+    out.append("```")
+    out.append(raw_westock.get("fund_north", ""))
+    out.append("```")
+    out.append("")
+    out.append("### 5.4 前十大股东与机构持股")
+    out.append("```")
+    out.append(raw_westock.get("shareholder", ""))
+    out.append("```")
+    out.append("")
+    out.append("### 5.5 历史分红方案与股息分配")
+    out.append("```")
+    out.append(raw_westock.get("dividend", ""))
+    out.append("```")
+    out.append("")
+    out.append("### 5.6 券商研报与机构一致预期")
+    out.append("```")
+    out.append(raw_westock.get("consensus", ""))
+    out.append("```")
+    out.append("")
+    out.append("### 5.7 量化综合评分")
+    out.append("```")
+    out.append(raw_westock.get("score", ""))
+    out.append("```")
+    out.append("")
+    out.append("---")
+    out.append("")
+    out.append("## 6. 新闻资讯与公司重大公告")
+    out.append("")
+    out.append("### 6.1 核心新闻资讯")
+    out.append("```")
+    _news_body, _n_drop = filter_news_asof(raw_westock.get("news", "").strip(), date)
+    out.append(_news_body)
+    if _n_drop:
+        out.append("")
+        out.append(f"> **as-of 过滤**：剔除 {_n_drop} 条晚于基准日 {date} 的条目"
+                 f"（资讯流按「当下」返回，不按 `--date` 截断；保留会造成前视偏差）。")
+    out.append("```")
+    out.append("")
+    out.append("### 6.2 公司重大公告（交易所法定披露）")
+    out.append("```")
+    out.append(raw_westock.get("notice", ""))
+    out.append("```")
+    out.append("")
+    out.append("---")
+    out.append("")
+    # ★ 2026-10-20：第 7 节原为**紫金矿业专属硬编码**（黄金/铜价格区间 + 紫金产销
+    #   敏感性）。对非矿业标的一律输出中性声明，避免把无关叙事写进他人报告。
+    if "紫金" in stock_name or "矿业" in stock_name:
+        out.append("## 7. 关联大宗商品定价联动（黄金与铜）")
+        out.append(f"- **全球黄金基准 (COMEX Gold, GC=F)**: {commodity_data.get('GC=F', '（未取到）')[:200]}")
+        out.append(f"- **全球精炼铜基准 (COMEX/LME Copper, HG=F)**: {commodity_data.get('HG=F', '（未取到）')[:200]}")
+        out.append(f"- **{stock_name}产销敏感性**: 详见公司公开披露之产量与成本指引；本证据包不代拟敏感性系数。")
+    else:
+        out.append("## 7. 关联大宗商品定价联动")
+        out.append(f"- **不适用**：本标的（{stock_name}）非大宗商品上游生产商，无黄金/铜等商品价格直接传导链条。")
+        out.append("- 如需商品联动分析，请以该标的实际主营（见 §profile / §news）为准，**不得套用其他标的的敏感性测算**。")
+    out.append("")
+    out.append("---")
+    out.append("")
+    return out
+
+
+def _md_macro_health(ctx: dict) -> list[str]:
+    """证据包 Markdown 的「macro_health」分节（纯渲染）。"""
+    out: list[str] = []
+    n_ok = ctx["n_ok"]
+    n_total = ctx["n_total"]
+    bad_str = ctx["bad_str"]
+    raw_westock = ctx["raw_westock"]
+    out.append("## 8. 中国宏观与利率流动性环境")
+    out.append(f"- **中国 10Y-1Y 国债期限利差**: {raw_westock.get('macro_term_spread', '').strip() or '约 78 bps（收益率曲线正常陡峭化）'}")
+    out.append(f"- **中国股债风险溢价率 (ERP)**: {raw_westock.get('macro_premium', '').strip() or '约 4.85%（处于历史后 20% 分位，权益资产风险溢价高）'}")
+    out.append("- **无风险基准利率**: 10年期国债收益率约 2.12%，央行处于稳健宽松周期。")
+    out.append("")
+    out.append("---")
+    out.append("")
+    out.append("## 通道健康度")
+    out.append(f"- 成功: {n_ok} / {n_total}")
+    out.append(f"- **非全绿通道**: {bad_str}")
+    out.append("")
+
+    return out
 
 
 def collect_a_stock(ticker: str, date: str) -> int:
@@ -316,256 +596,38 @@ def collect_a_stock(ticker: str, date: str) -> int:
     bad_str = ", ".join(bad_channels) if bad_channels else "无"
 
     # 5. 生成证据包 Markdown
-    L: list[str] = []
-    L.append(f"# 证据包：{ticker}（A股个股）· 基准日 {date}")
-    L.append("")
-    L.append(f"- 采集日期: {date}")
-    L.append(f"- 标的代码: {ticker} (westock: {wcode})")
-    L.append(f"- 标的名称: {stock_name}")
-    L.append("- 数据来源: westock CLI (腾讯官方接口) + TradingAgents 内置层 (yfinance/stockstats)")
-    L.append(f"- 通道健康度: 成功: {n_ok} / {n_total}")
-    L.append(f"- **非全绿通道**: {bad_str}")
-    L.append(f"- 市场状态: A股市场 {date} 15:00 CST **已正常收盘**（所有价格与技术指标均基于当日收盘价）")
-    L.append("")
-    L.append("---")
-    L.append("")
-    L.append("## 0. ★★ 载体判定与数据缺口声明（先读）")
-    L.append("")
-    L.append(f"### 载体属性：**A股上市公司个股（{stock_name}）**")
-    L.append("- **A股个股期权定位（Class A 结构性特征）**：")
-    L.append("  中国境内证券交易所尚未开放个股场内期权品种（交易所仅上市 50ETF、300ETF、500ETF、创业板ETF等 ETF 及股指期权）。")
-    L.append("  本证据包以宽基 ETF 期权隐含波动率及本标的历史实现波动率（HV）作为下行对冲成本与波动率环境代理（**口径不同，仅作参照**）。")
-    L.append("- **海外社交媒体适用性声明**：")
-    L.append("  StockTwits / Reddit 属于海外零售投资者社群，无 A 股个股 ticker 代码，对 A 股本土定价权与情绪传导完全不适用。")
-    L.append("  本证据包采用国内权威财经数据源（东方财富、腾讯证券、上证报）、散户主力资金流向（超大单/散户单净流入）及筹码集中度作为本土投资情绪与筹码沉淀的代理。")
-    L.append("- **数据完整性核定**：")
-    L.append(f"  核心决策通道（行情、日K线、技术指标、估值快照、财务报表、资金流向、两融、北向、股东、券商一致预期）中，**非全绿通道为：{bad_str}**。")
-    if not (high_52w and low_52w):
-        L.append("  ⚠️ **52周高低未取到**（westock quote 未返回 high_52week / low_52week）⇒ 该维度**数据缺失**，下游不得臆测。")
-    elif len(kb) < 250:
-        L.append(f"  ⚠️ **次新股口径提示**：本标的上市以来仅 **{len(kb)} 根日K线**（<250），"
-                 f"故 high_52w/low_52w 实为「**上市以来**极值」（{low_52w} / {high_52w}），"
-                 f"**并非完整 52 周**；下游引用时必须按此口径表述，不得写作「52周区间」。")
-        L.append("  ⚠️ **上市初期无涨跌幅限制**（科创板新股上市后前 5 个交易日不设涨跌幅限制，之后为 ±20%）"
-                 "⇒ 早期价格波动幅度不具可比性。")
-    L.append("")
-    L.append("---")
-    L.append("")
-    L.append("## 1. 行情与价格结构")
-    L.append(f"- latest_close: {latest_close}")
-    L.append(f"- bars: {bars_count}")
-    L.append(f"- ret_5d: {ret_5d}")
-    L.append(f"- ret_10d: {ret_10d}")
-    L.append(f"- ret_20d: {ret_20d}")
-    L.append(f"- ret_60d: {ret_60d}")
-    L.append(f"- high_52w: {high_52w}")
-    L.append(f"- low_52w: {low_52w}")
-    L.append(f"- avg_vol_20d: {avg_vol_20d if avg_vol_20d is not None else '（未取到）'}")
-    L.append(f"- turnover_rate: {fnum(quote.get('turnover_rate'), 0.90)}%")
-    L.append(f"- volume_ratio: {fnum(quote.get('volume_ratio'), 1.12)}")
-    L.append(f"- total_market_cap: {ystr(fnum(quote.get('total_market_cap')))}")
-    L.append(f"- circulating_market_cap: {ystr(fnum(quote.get('circulating_market_cap')))}")
-    L.append("")
-    L.append("### 日K线序列（最近 20 根 K 线，完整序列共 260 根覆盖年线）：")
-    L.append("```")
-    L.append("Date       Open    High    Low     Close   Volume")
-    for b_line in bars_lines[-20:]:
-        L.append(b_line)
-    L.append("```")
-    L.append("")
-    L.append("---")
-    L.append("")
-    L.append("## 2. 技术指标")
-    L.append("")
-    L.append("### 2.1 均线与通道系统")
-    for ind in TECH_INDICATORS:
-        L.append(f"### {ind}")
-        L.append("```")
-        L.append(tech_series.get(ind, "(无数据)"))
-        L.append("```")
-        L.append("")
-
-    L.append("### 2.2 扩展技术指标快照（westock 官方收盘口径）")
-    L.append(f"- **MA5**: {technical.get('MA_5')}")
-    L.append(f"- **MA10**: {technical.get('MA_10')}")
-    L.append(f"- **MA20**: {technical.get('MA_20')}")
-    L.append(f"- **MA60**: {technical.get('MA_60')}")
-    L.append(f"- **MA120**: {technical.get('MA_120')}")
-    L.append(f"- **MA250**: {technical.get('MA_250')}")
-    L.append(f"- **BOLL**: Upper={technical.get('BOLL_UPPER')}, Mid={technical.get('BOLL_MID')}, Lower={technical.get('BOLL_LOWER')}")
-    L.append(f"- **MACD**: DIF={technical.get('DIF')}, DEA={technical.get('DEA')}, MACD={technical.get('MACD')}")
-    L.append(f"- **KDJ**: K={technical.get('KDJ_K')}, D={technical.get('KDJ_D')}, J={technical.get('KDJ_J')}")
-    L.append(f"- **RSI**: RSI(6)={technical.get('RSI_6')}, RSI(12)={technical.get('RSI_12')}, RSI(24)={technical.get('RSI_24')}")
-    L.append("")
-    L.append("### 2.3 筹码成本分布（A股特色）")
-    L.append(f"- **平均筹码成本 (chipAvgCost)**: {chip.get('chipAvgCost', '（未取到）')} 元")
-    L.append(f"- **获利盘比例 (chipProfitRate)**: {chip.get('chipProfitRate', '（未取到）')}%（约 71.06% 筹码处于被套或微亏状态）")
-    L.append(f"- **70% 筹码集中度**: {chip.get('chipConcentration70', '（未取到）')}%")
-    L.append(f"- **90% 筹码集中度**: {chip.get('chipConcentration90', '（未取到）')}%")
-    L.append("")
-    L.append("---")
-    L.append("")
-    L.append("## 3. 基本面快照")
-    L.append("```")
-    L.append(raw_vendor.get("get_fundamentals", ""))
-    L.append("```")
-    L.append("")
-    # ★ 2026-10-20 新增：yfinance 侧因限流不可用时，用 westock 官方通道补估值与预期，
-    #   并**明确声明口径来源不同**（westock 为境内官方口径，与 yfinance/年报不可混用）。
-    _wf = raw_westock.get("finance", "")
-    _wc = raw_westock.get("consensus", "")
-    _wp = raw_westock.get("profile", "")
-    if "NO_DATA_AVAILABLE" in str(raw_vendor.get("get_fundamentals", "")) or not str(raw_vendor.get("get_fundamentals", "")).strip():
-        L.append("### 3.1 ⚠️ yfinance 侧估值快照不可用，改用 westock 官方口径（**口径不同，不可混用**）")
-        L.append("")
-        if _wp.strip():
-            L.append("**公司档案（westock `profile`）**：")
-            L.append("```")
-            L.append(_wp.strip())
-            L.append("```")
-            L.append("")
-        if _wf.strip():
-            L.append("**财务摘要（westock `finance`，境内官方口径）**：")
-            L.append("```")
-            L.append(_wf.strip())
-            L.append("```")
-            L.append("")
-        if _wc.strip():
-            L.append("**机构一致预期（westock `consensus`）**：")
-            L.append("```")
-            L.append(_wc.strip())
-            L.append("```")
-            L.append("")
-        L.append("> ⚠️ **口径声明**：以上来自 westock（境内官方披露口径），")
-        L.append("> **与 yfinance / 年报口径不可直接比较**；引用时必须标明来源与基准日。")
-        L.append("")
-    L.append("---")
-    L.append("")
-    L.append("## 4. 三大财务报表（年度与 TTM）")
-    L.append("")
-    _no_fin = all(
-        "NO_DATA_AVAILABLE" in str(raw_vendor.get(k, ""))
-        for k in ("get_income_statement", "get_balance_sheet", "get_cashflow")
-    )
-    if _no_fin and _wf.strip():
-        L.append("### ⚠️ yfinance 侧报表不可用 ⇒ 以下为 westock `finance` 通道（**境内官方口径**）")
-        L.append("")
-        L.append("```")
-        L.append(_wf.strip())
-        L.append("```")
-        L.append("")
-        L.append("> ⚠️ **口径声明**：本表为 westock 境内官方披露口径（季报/TTM 混合），")
-        L.append("> **与 yfinance 年度报表口径不可混用**；缺项须显式记为缺失，不得补值。")
-        L.append("")
-    L.append("## 4.1 利润表（年度）")
-    L.append("")
-    L.append("```")
-    L.append(raw_vendor.get("get_income_statement", ""))
-    L.append("```")
-    L.append("")
-    L.append("## 4.2 资产负债表（年度）")
-    L.append("")
-    L.append("```")
-    L.append(raw_vendor.get("get_balance_sheet", ""))
-    L.append("```")
-    L.append("")
-    L.append("## 4.3 现金流量表（年度）")
-    L.append("")
-    L.append("```")
-    L.append(raw_vendor.get("get_cashflow", ""))
-    L.append("```")
-    L.append("")
-    L.append("---")
-    L.append("")
-    L.append("## 5. 资金动向、机构持仓与量化评分")
-    L.append("")
-    L.append("### 5.1 资金流向（2026-10-16 当日及近阶段）")
-    L.append(f"- **超大单净流入 (JumboNetFlow)**: {ystr(fnum(fund_flow.get('JumboNetFlow')), sign=True)}")
-    L.append(f"- **大单净流入 (BlockNetFlow)**: {ystr(fnum(fund_flow.get('BlockNetFlow')), sign=True)}")
-    L.append(f"- **中单净流入 (MidNetFlow)**: {ystr(fnum(fund_flow.get('MidNetFlow')), sign=True)}")
-    L.append(f"- **小单散户净流入 (SmallNetFlow)**: {ystr(fnum(fund_flow.get('SmallNetFlow')), sign=True)}")
-    L.append(f"- **主力净流入 5日累计 (MainNetFlow5D)**: {ystr(fnum(fund_flow.get('MainNetFlow5D')), sign=True)}")
-    L.append(f"- **主力净流入 20日累计 (MainNetFlow20D)**: {ystr(fnum(fund_flow.get('MainNetFlow20D')), sign=True)}")
-    L.append("")
-    L.append("### 5.2 融资融券余额（杠杆资金动向）")
-    L.append("```")
-    L.append(raw_westock.get("fund_margin", ""))
-    L.append("```")
-    L.append("")
-    L.append("### 5.3 陆股通北向资金持仓（外资核心持仓）")
-    L.append("```")
-    L.append(raw_westock.get("fund_north", ""))
-    L.append("```")
-    L.append("")
-    L.append("### 5.4 前十大股东与机构持股")
-    L.append("```")
-    L.append(raw_westock.get("shareholder", ""))
-    L.append("```")
-    L.append("")
-    L.append("### 5.5 历史分红方案与股息分配")
-    L.append("```")
-    L.append(raw_westock.get("dividend", ""))
-    L.append("```")
-    L.append("")
-    L.append("### 5.6 券商研报与机构一致预期")
-    L.append("```")
-    L.append(raw_westock.get("consensus", ""))
-    L.append("```")
-    L.append("")
-    L.append("### 5.7 量化综合评分")
-    L.append("```")
-    L.append(raw_westock.get("score", ""))
-    L.append("```")
-    L.append("")
-    L.append("---")
-    L.append("")
-    L.append("## 6. 新闻资讯与公司重大公告")
-    L.append("")
-    L.append("### 6.1 核心新闻资讯")
-    L.append("```")
-    _news_body, _n_drop = filter_news_asof(raw_westock.get("news", "").strip(), date)
-    L.append(_news_body)
-    if _n_drop:
-        L.append("")
-        L.append(f"> **as-of 过滤**：剔除 {_n_drop} 条晚于基准日 {date} 的条目"
-                 f"（资讯流按「当下」返回，不按 `--date` 截断；保留会造成前视偏差）。")
-    L.append("```")
-    L.append("")
-    L.append("### 6.2 公司重大公告（交易所法定披露）")
-    L.append("```")
-    L.append(raw_westock.get("notice", ""))
-    L.append("```")
-    L.append("")
-    L.append("---")
-    L.append("")
-    # ★ 2026-10-20：第 7 节原为**紫金矿业专属硬编码**（黄金/铜价格区间 + 紫金产销
-    #   敏感性）。对非矿业标的一律输出中性声明，避免把无关叙事写进他人报告。
-    if "紫金" in stock_name or "矿业" in stock_name:
-        L.append("## 7. 关联大宗商品定价联动（黄金与铜）")
-        L.append(f"- **全球黄金基准 (COMEX Gold, GC=F)**: {commodity_data.get('GC=F', '（未取到）')[:200]}")
-        L.append(f"- **全球精炼铜基准 (COMEX/LME Copper, HG=F)**: {commodity_data.get('HG=F', '（未取到）')[:200]}")
-        L.append(f"- **{stock_name}产销敏感性**: 详见公司公开披露之产量与成本指引；本证据包不代拟敏感性系数。")
-    else:
-        L.append("## 7. 关联大宗商品定价联动")
-        L.append(f"- **不适用**：本标的（{stock_name}）非大宗商品上游生产商，无黄金/铜等商品价格直接传导链条。")
-        L.append("- 如需商品联动分析，请以该标的实际主营（见 §profile / §news）为准，**不得套用其他标的的敏感性测算**。")
-    L.append("")
-    L.append("---")
-    L.append("")
-    L.append("## 8. 中国宏观与利率流动性环境")
-    L.append(f"- **中国 10Y-1Y 国债期限利差**: {raw_westock.get('macro_term_spread', '').strip() or '约 78 bps（收益率曲线正常陡峭化）'}")
-    L.append(f"- **中国股债风险溢价率 (ERP)**: {raw_westock.get('macro_premium', '').strip() or '约 4.85%（处于历史后 20% 分位，权益资产风险溢价高）'}")
-    L.append("- **无风险基准利率**: 10年期国债收益率约 2.12%，央行处于稳健宽松周期。")
-    L.append("")
-    L.append("---")
-    L.append("")
-    L.append("## 通道健康度")
-    L.append(f"- 成功: {n_ok} / {n_total}")
-    L.append(f"- **非全绿通道**: {bad_str}")
-    L.append("")
-
+    # 5. 生成证据包 Markdown（渲染已抽成纯函数，见 _render_evidence_md）
+    L = _render_evidence_md({
+        "high_52w": high_52w,
+        "low_52w": low_52w,
+        "ticker": ticker,
+        "date": date,
+        "wcode": wcode,
+        "stock_name": stock_name,
+        "n_ok": n_ok,
+        "n_total": n_total,
+        "bad_str": bad_str,
+        "kb": kb,
+        "bars_lines": bars_lines,
+        "latest_close": latest_close,
+        "bars_count": bars_count,
+        "ret_5d": ret_5d,
+        "ret_10d": ret_10d,
+        "ret_20d": ret_20d,
+        "ret_60d": ret_60d,
+        "avg_vol_20d": avg_vol_20d,
+        "tech_series": tech_series,
+        "technical": technical,
+        "chip": chip,
+        "quote": quote,
+        "raw_westock": raw_westock,
+        "raw_vendor": raw_vendor,
+        "fund_flow": fund_flow,
+        "commodity_data": commodity_data,
+    })
     ev_md_path = EVID_DIR / f"{ticker}_{date}.md"
     ev_md_path.write_text("\n".join(L), encoding="utf-8")
+    write_manifest(ev_md_path)   # 只读清单：防角色回改证据包（AGENT_PROTOCOL §6）
     print(f"  ✓ 证据包已写入: {ev_md_path}")
 
     # 6. 生成证据包 JSON

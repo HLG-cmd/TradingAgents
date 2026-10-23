@@ -90,13 +90,10 @@ extend-exclude = [
 select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM", "BLE",]
 ignore = ["E501", "B905", "B023", "E402", "SIM102", "SIM105", "SIM108", "SIM300", "F841"]
 
-# TODO(治理)：F401(50) / E741(45) 暂缓 —— F401 多为 sys.path 引导导入，
-#            需逐条确认副作用后再修；E741 是 l/I/O 变量名风格问题。
-#            其余规则（BLE001 等）已强制，勿在此表里再放宽。
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]   # intentional re-exports
-"wb_analysis/**" = ["E501", "E741", "F401" ]
-"scripts/**" = ["E501", "E741", "F401" ]
+"wb_analysis/**" = ["E501"]
+"scripts/**" = ["E501"]
 "tradingagents/**" = ["BLE001"]
 "cli/**" = ["BLE001"]
 

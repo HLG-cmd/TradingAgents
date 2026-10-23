@@ -21,7 +21,6 @@ import re
 import sys
 import time
 import zipfile
-from datetime import datetime
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):

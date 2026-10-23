@@ -27,7 +27,6 @@ import argparse
 import json
 import re
 import sys
-from datetime import datetime
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):

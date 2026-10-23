@@ -45,6 +45,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from dotenv import load_dotenv
 
 from wb_analysis import _clock
+from wb_analysis._fmt import compact_series
+from wb_analysis._integrity import write_manifest
 from wb_analysis._log import log_gap
 
 load_dotenv(PROJECT_ROOT / ".env")
@@ -166,10 +168,6 @@ _PLACEHOLDER_MARKERS = (
 # 注意：正文回填后宏观新闻可能个别条目仍只有标题，这不影响该通道判 ok ——
 # 只要**至少有一条**内容，就该算成功。故这里只匹配「整段为空」的空态串。
 
-# 只认「YYYY-MM-DD: 数值」形式的真数据行。排除两类噪声：
-# 休市日的 ``N/A: Not a trading day``，以及尾部的指标说明提示词。
-_SERIES_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}:\s*-?\d")
-
 
 def _get_router():
     """延迟导入，避免无关调用时的加载开销与循环导入。"""
@@ -179,65 +177,31 @@ def _get_router():
 
 
 def _compact_series(raw: object, keep: int = 5) -> str:
-    """把指标输出压成「最近 keep 个有效值」。
+    """压成「最近 keep 个有效值」并剔除未收盘 bar。
 
-    原始输出混杂两类噪声：每个休市日一行 ``N/A: Not a trading day``，
-    以及尾部附带的一段指标说明文字（那是给 LLM 的提示词，不是数据）。
-    这里只保留形如 ``YYYY-MM-DD: 数值`` 的真数据行。
-
-    ⚠️ **顺序陷阱（2026-09-16 定位并修复）**
-
-    ``get_indicators`` 的输出是 **新 → 旧** 排列（标题行
-    ``## close_50_sma values from A to B`` 之后的**第一行就是最新交易日**）。
-    原实现直接 ``kept[-keep:]`` 取列表尾部，等于取走了窗口里**最旧**的 5 个交易日，
-    把最新值（以及倒数第二新值）丢在 keep 之外。
-
-    后果极具迷惑性：证据包里**所有**技术指标都比价格序列晚一个交易日，
-    看起来就像「stockstats 只用已完成 K 线」的固有行为，因而长期未被怀疑。
-    实测（``^NDX``，基准日 2026-09-16）：接口对 2026-09-15 明明有
-    ``close_50_sma = 29178.31``，而证据包只收录到 2026-09-14 的 29193.51。
-
-    现改为**按日期显式降序后取前 keep 个**，与来源的物理排序解耦；
-    无论上游改为升序还是降序，取到的都是最近若干个交易日。
+    实现与口径已收敛到 `wb_analysis/_fmt.compact_series`（唯一定义源）——
+    那里保留了「顺序陷阱」与「未收盘 bar」两段完整事故记录，勿在此处再写一份。
+    本包装只固定**美股**口径（16:00 ET），保持证据包输出逐字不变。
     """
-    if not raw:
-        return "(无数据)"
-    kept: list[tuple[str, str]] = []
-    for line in str(raw).splitlines():
-        s = line.strip()
-        if not _SERIES_LINE_RE.match(s):
-            continue
-        kept.append((s.split(":", 1)[0].strip(), s))
-    if not kept:
-        return "(无有效值)"
-    kept.sort(key=lambda kv: kv[0], reverse=True)
+    return compact_series(raw, keep, tz=_clock.MARKET_TZ, close_hour=16.0, tz_label="美东")
 
-    # --- ★ 未收盘 bar 剔除（2026-09-17 新增）---
-    # 盘中采集时，``get_indicators`` 会为**当天尚未收盘的 bar** 也算一个指标值。
-    # 该值基于盘中瞬时价，与收盘口径不可比。实测（^NDX 2026-09-17 盘中）：
-    #   RSI   44.02（9/16 收盘） → 52.30（9/17 盘中，未收盘）
-    #   ATR   376.16            → 382.79
-    #   50SMA 29173.75          → 29176.87
-    # 一个未收盘 bar 就能把「中性偏弱」改写成「中性偏强」，足以改变分析结论。
-    #
-    # 判据：末根值所属日期 == 今天（美东日期），且今天尚未收盘（美东 < 16:00）。
-    # 因本函数只拿到序列本身、拿不到成交量，故用**日期判定**而非量能判定；
-    # 价格侧的严格量能判据见 ``_price_summary``。二者互为补充。
-    try:
-        import zoneinfo
-        _now_ny = dt.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
-        _today_ny = _now_ny.date().isoformat()
-        _closed = (_now_ny.hour + _now_ny.minute / 60.0) >= 16.0
-        if kept and kept[0][0] == _today_ny and not _closed:
-            dropped_date = kept[0][0]
-            kept = kept[1:]
-            if kept:
-                return ("\n".join(s for _, s in kept[:keep])
-                        + f"\n⚠ 已剔除未收盘 bar（{dropped_date}，美东尚未收盘）")
-    except Exception as exc:  # noqa: BLE001
-        log_gap("collect.compact_series_unclosed_bar", exc)
 
-    return "\n".join(s for _, s in kept[:keep])
+
+
+def _indicator_health(status: str, compact: str) -> str:
+    """指标通道健康度：正文非空、但**一行有效数据都没有** ⇒ 降级 `unavailable`。
+
+    为什么需要（2026-10-23 实测）：`_safe_call` 只判断「有没有抛错 / 是不是占位串」，
+    而指标通道可能返回一大段正文（含标题与指标说明），其中数值行全为 N/A —— 典型是
+    bulk 计算瞬时失败后静默降级到 per-day（每天窗口太短，SMA-50 算不出来）。
+    实测 `GOOG_2026-10-23`：`close_50_sma` 整段 `(无有效值)`，而 health 仍记 ok、
+    健康度照报 36/36 ⇒ 下游会把「缺指标」读成「指标中性」（铁律 3 假绿）。
+
+    `(无数据)` 与 `(无有效值)` 是 `_compact_series` 的两个空态标记，语义都是「没有可用数值」。
+    """
+    if status == "ok" and compact in ("(无有效值)", "(无数据)"):
+        return "unavailable"
+    return status
 
 
 def _compact_statement(raw: object, key: str, max_rows: int = 34) -> str:
@@ -466,13 +430,11 @@ def _session_in_progress(bar_date: object) -> bool:
     只有在同一交易日的 16:00 之前，才回退到原有的量能判据。
     解析不出日期时返回 True（保守：维持旧行为）。
     """
-    import zoneinfo
-
     try:
         d = dt.date.fromisoformat(str(bar_date).strip()[:10])
     except Exception:  # noqa: BLE001
         return True
-    now = dt.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+    now = _clock.now()
     if d > now.date():
         return True
     if d < now.date():
@@ -643,12 +605,10 @@ def _extended_hours_block(ticker: str, as_of: str) -> tuple[str, dict]:
       - **扩展时段流动性低、点差宽，成交价不代表常规时段可成交价** ⇒
         只能作「事件反应 / 情绪」证据，**不得用于止损 / 目标 / 估值锚定**。
     """
-    import zoneinfo
-
     import pandas as pd
     import yfinance as yf
 
-    et = zoneinfo.ZoneInfo("America/New_York")
+    et = _clock.MARKET_TZ
     now_et = pd.Timestamp.now(tz=et)
     df = yf.Ticker(ticker).history(interval="1m", period="5d", prepost=True)
     if df is None or df.empty:
@@ -680,13 +640,13 @@ def _extended_hours_block(ticker: str, as_of: str) -> tuple[str, dict]:
         for label, seg in segs:
             if seg.empty:
                 continue
-            o, h, l, c = (float(seg["Open"].iloc[0]), float(seg["High"].max()),
-                          float(seg["Low"].min()), float(seg["Close"].iloc[-1]))
+            o, h, lo, c = (float(seg["Open"].iloc[0]), float(seg["High"].max()),
+                           float(seg["Low"].min()), float(seg["Close"].iloc[-1]))
             vol = float(seg["Volume"].sum()) if "Volume" in seg else 0.0
             ref = closes.get(day) if label == "盘后" else (closes.get(prev_days[-1]) if prev_days else None)
             chg = (c / ref - 1.0) * 100.0 if ref else None
             rows.append({"day": day.isoformat(), "label": label, "open": o, "high": h,
-                         "low": l, "last": c, "volume": vol, "bars": int(len(seg)),
+                         "low": lo, "last": c, "volume": vol, "bars": int(len(seg)),
                          "ref_close": ref, "chg_pct": chg})
 
     if not rows:
@@ -742,8 +702,6 @@ def _realtime_close_block(ticker: str, as_of: str) -> tuple[str, dict]:
     ⚠️ 本节**不重算技术指标** —— 自算一套指标会与 §2 的来源口径不一致，
     反而制造第二个不可对账的数字。指标一律以 §2 为准，差距在下方显式列出。
     """
-    import zoneinfo
-
     import pandas as pd
     import yfinance as yf
 
@@ -754,8 +712,8 @@ def _realtime_close_block(ticker: str, as_of: str) -> tuple[str, dict]:
     except Exception as exc:  # noqa: BLE001
         return f"(不可用: {type(exc).__name__}: {exc})", stats
 
-    ny = zoneinfo.ZoneInfo("America/New_York")
-    now_ny = dt.datetime.now(ny)
+    ny = _clock.MARKET_TZ
+    now_ny = _clock.now()
 
     # --- 实时字段所属的常规交易时段日期 ---
     sess_date = None
@@ -941,7 +899,7 @@ def _render_option_block(ticker: str, opts: dict) -> str:
     #   两个源的 IV/偏斜口径不同、数值不可混用，故必须显式标注。
     _src = (opts.get("source") or "").strip()
     _is_cboe = not _src.startswith("yfinance")
-    from wb_analysis.collect_index import _iv_method_label, _source_label
+    from wb_analysis.collect_index import _source_label
     lines.append(f"- **数据来源：{_source_label(_src)}**")
     lines.append(f"  - {opts.get('source_note') or '（未记录时点说明）'}")
     if _is_cboe:
@@ -1224,8 +1182,15 @@ def collect_one(
     ind_lines = []
     for ind in TECH_INDICATORS:
         st, txt = _safe_call("get_indicators", route, "get_indicators", ticker, ind, as_of, _INDICATOR_LOOKBACK)
+        compact = _compact_series(txt)
+        raw_st = st
+        st = _indicator_health(st, compact)
+        if raw_st == "ok" and st == "unavailable":
+            # 正文有内容、但一行有效数据都没有 ⇒ 铁律 3 的「假绿」通道级形态，必须留痕
+            log_gap(f"collect.indicator_empty:{ind}",
+                    f"{ind} 通道返回正文但无有效数据行（已降级 unavailable）")
         health[f"indicator:{ind}"] = st
-        ind_lines.append(f"### {ind}\n```\n{_compact_series(txt)}\n```")
+        ind_lines.append(f"### {ind}\n```\n{compact}\n```")
     blocks.append("## 2. 技术指标\n\n" + "\n\n".join(ind_lines))
 
     # --- 3. 基本面 ---
@@ -1241,7 +1206,14 @@ def collect_one(
     # 注意：不要把校验结果写进 health —— 它是「提示」不是「通道」，
     # 写进去会让分母 +1（如 29/30），看起来像掉了一个通道。
     blocks.append(
-        f"## 3. 基本面快照\n\n```\n{txt}\n```\n"
+        "## 3. 基本面快照\n\n"
+        # ★ 2026-10-23 补口径声明：本表是 yfinance `info` 的快照字段，其「52 周高低」
+        #   用 info 自身滚动窗口，与 §1 的**日线自算**口径会差几个点位（实测 GOOG 2026-10-23：
+        #   info 报 256.1 / 404.47，日线自算 252.11 / 403.96）。下游若把两处当同一字段，
+        #   会被 `_precheck` 判「同字段多值未声明」。⇒ 在此显式标注来源，引用须分别声明。
+        "> **口径提示**：本表为 yfinance `info` 的**快照字段**；其「52 周高低」按 info 自身滚动窗口计算，"
+        "与 §1「行情与价格结构」的**日线自算**口径可能相差数个点位。两者**不可混用**，引用时须声明来源。\n\n"
+        f"```\n{txt}\n```\n"
         + (f"\n```\n{sanity.strip()}\n```\n" if sanity else "")
     )
 
@@ -1331,8 +1303,7 @@ def collect_one(
         #    ⚠️ 这是「闸门在正确的时间误放/误伤」这一类问题的第四次复现
         #    （NDX×2 / SPX / SPCX），故改为入口即报。
         try:
-            import zoneinfo
-            _n = dt.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+            _n = _clock.now()
             _h = _n.hour + _n.minute / 60.0
             if _n.weekday() < 5 and 9.5 <= _h < 16.0:
                 print(f"  ✓ 期权时点闸门：美东 {_n:%H:%M} 处常规交易时段，期权链应实时刷新")
@@ -1456,6 +1427,7 @@ def collect_one(
     md_path = EV_DIR / f"{ticker}_{as_of}.md"
     json_path = EV_DIR / f"{ticker}_{as_of}.json"
     md_path.write_text(md, encoding="utf-8")
+    write_manifest(md_path)   # 只读清单：防角色回改证据包（AGENT_PROTOCOL §6）
     json_path.write_text(
         json.dumps(
             {
@@ -1493,8 +1465,7 @@ def today_eastern() -> str:
     本机 10-11 10:15 = 美东 10-10 22:15）。而数据源的 `today` 走美东日历
     ⇒ 默认值本身就是一个「未来日期」，会静默触发下面的 §3 扣留。
     """
-    import zoneinfo
-    return dt.datetime.now(zoneinfo.ZoneInfo("America/New_York")).date().isoformat()
+    return _clock.iso_today()
 
 
 def date_caliber_guard(date_str: str, allow_stale: bool) -> bool:
@@ -1508,13 +1479,12 @@ def date_caliber_guard(date_str: str, allow_stale: bool) -> bool:
 
     返回 True 表示可继续采集。
     """
-    import zoneinfo
     try:
         want = dt.date.fromisoformat(date_str)
     except ValueError:
         print(f"✗ --date 不是合法日期：{date_str!r}（应为 YYYY-MM-DD）")
         return False
-    now_ny = dt.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+    now_ny = _clock.now()
     today_ny = now_ny.date()
     print(f"[口径检查] --date={want} ｜ 美东当日={today_ny}"
           f"（采集时点 美东 {now_ny:%Y-%m-%d %H:%M %a}）")

@@ -24,7 +24,6 @@ from wb_analysis._contract import (  # noqa: E402
     LABEL_PATTERNS,
     PROPOSAL_RE,
     RATING_ALLOWED_FILES,
-    THREE_BOLD_UPPER_RE as THREE,
 )
 from wb_analysis._paths import is_archived_path  # noqa: E402
 
@@ -114,9 +113,9 @@ def main() -> int:
                 #     其余任何位置出现档位词才算违规。
                 body_wo_contract = PROPOSAL_RE.sub("", t)
                 lines = body_wo_contract.split("\n")
-                action_lines = [i for i, l in enumerate(lines) if LABEL_PATTERNS["Action"].search(l)]
+                action_lines = [i for i, line in enumerate(lines) if LABEL_PATTERNS["Action"].search(line)]
                 stray = list(RATING.findall(
-                    "\n".join(l for i, l in enumerate(lines) if i not in action_lines)))
+                    "\n".join(line for i, line in enumerate(lines) if i not in action_lines)))
                 if not action_lines and not PROPOSAL_RE.search(t):
                     flags.append("缺结论档位（交易员应在结论块首行或末行表态）")
                 if len(action_lines) > 1:
