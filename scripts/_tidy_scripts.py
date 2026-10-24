@@ -31,6 +31,7 @@ import argparse
 import ast
 import re
 import shutil
+import subprocess
 import sys
 import zipfile
 from datetime import datetime
@@ -87,6 +88,29 @@ def read_header(p: Path) -> dict:
     return out
 
 
+def git_ignored(paths: list[Path]) -> set[Path]:
+    """返回其中被 git 忽略的路径。
+
+    索引是**已提交的产物**，因此只能描述会被提交的文件：`scripts/_oneoff/` 这类
+    本地收件箱（.gitignore 忽略）一旦进索引，干净克隆里就会全部变成「已不存在」，
+    `--check` 在 CI 上必红（实测 gates job 首跑即红）。
+    """
+    if not paths:
+        return set()
+    try:
+        # ★ 必须用 `-z`：默认模式下 git 会给含特殊字符的路径**加引号**，
+        #   实测输出 `"D:/.../_normalize_eol.py"`（带引号）⇒ Path 比对全部失配、
+        #   过滤静默失效（正是本文件反复警告的「检查器静默失效」）。
+        r = subprocess.run(
+            ["git", "check-ignore", "--stdin", "-z"], cwd=str(ROOT),
+            input="\0".join(str(p) for p in paths),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+    except OSError:
+        return set()
+    return {Path(x) for x in r.stdout.split("\0") if x}
+
+
 def scan() -> tuple[list[tuple[Path, dict]], list[Path], list[Path]]:
     tagged, untagged, exempt = [], [], []
     for d in DIRS:
@@ -103,6 +127,12 @@ def scan() -> tuple[list[tuple[Path, dict]], list[Path], list[Path]]:
                 (p, h) if h.get("lifecycle") in VALID else p)
     tagged = [(p, h) for p, h in tagged]        # type: ignore[misc]
     untagged = [p for p in untagged if isinstance(p, Path)]
+    # ★ 2026-10-24：git 忽略的文件不进索引（它们是本地收件箱，不会随仓库分发）
+    ignored = git_ignored([p for p, _ in tagged] + untagged + exempt)
+    if ignored:
+        tagged = [(p, h) for p, h in tagged if p not in ignored]
+        untagged = [p for p in untagged if p not in ignored]
+        exempt = [p for p in exempt if p not in ignored]
     return tagged, untagged, exempt
 
 
@@ -193,6 +223,10 @@ def index_drift(tagged: list[tuple[Path, dict]], exempt: list[Path]) -> dict:
     text = INDEX.read_text(encoding="utf-8", errors="replace")
     # 索引里每行形如 | `wb_analysis/xxx.py` | 用途 | 用法 |
     indexed = set(re.findall(r"^\|\s*`([^`]+\.py)`", text, re.M))
+    # ★ 2026-10-24：索引里若有被 git 忽略的条目（历史残留），不算「多」——
+    #   它们在干净克隆里本就不存在，判失败只会制造跨机器假红。
+    _ign = git_ignored([ROOT / x for x in indexed])
+    indexed = {x for x in indexed if (ROOT / x) not in _ign}
     exempt_names = {p.relative_to(ROOT).as_posix() for p in exempt}
     sealed = {f"scripts/_oneoff/{n}" for n in sealed_oneoff_names()}
     expected = {p.relative_to(ROOT).as_posix() for p, _h in tagged}
