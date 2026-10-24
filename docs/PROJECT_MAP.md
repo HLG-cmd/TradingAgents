@@ -9,10 +9,14 @@
 
 | 层 | 谁写的 | 在哪 | 要不要动 |
 |---|---|---|---|
-| **上游本体**（TauricResearch 的 TradingAgents） | 开源作者 | `tradingagents/`、`cli/`、`tests/`、`assets/`、大部分根目录配置文件 | **尽量不动**（要能跟上游同步） |
+| **上游本体**（TauricResearch 的 TradingAgents） | 开源作者 | `tradingagents/`、`cli/`、`tests/`、`assets/`、大部分根目录配置文件 | **可改**（2026-10-24 起不再跟踪上游，见下） |
 | **我们自建的分析层**（真正干活的部分） | 我们 | `wb_analysis/`、`scripts/`、`reports/`、`quant/` | 随便改 |
 
 **一句话记忆**：`tradingagents/` 里是"别人的引擎"，`wb_analysis/` 里是"我们的流水线"。
+
+> **2026-10-24：已断开上游跟踪。** 移除了 `upstream` remote 与 5 个指向上游的悬空标签（v0.5.0–v0.7.0），只保留 `origin` = `HLG-cmd/TradingAgents`。
+> 因此 `tradingagents/`、`cli/` 这些原本"尽量不动"的目录**现在可以按需要改**——不再有合并上游的约束。
+> 注意两点：① 版权署名（`cli/` 里指向 TauricResearch 的链接、README 的 fork 说明）**保留**，这是派生项目的法务要求，不是"跟踪上游"；② 上游的依赖大版本跃迁（langchain 0.x→1.x、langgraph 0.x→1.x、pandas 2→3）不再考虑跟。
 
 ---
 
