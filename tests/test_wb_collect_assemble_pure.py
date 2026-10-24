@@ -184,3 +184,73 @@ class TestSnapshotConsistencyLayout:
         )
         labels = {f["label"] for f in vsc.check("TST", "2026-10-24", ev_path=ev)}
         assert "currency_mismatch" in labels
+
+
+@pytest.mark.unit
+class TestCodeRevision:
+    """渲染时把代码版本写进 RUN.json（2026-10-24 新增）。
+
+    动机：`_source.zip` 存了草稿与证据但**不存代码**，而代码行为直接决定报告里的数字
+    （`_price` 用 `re.match` 还是 `re.search`，决定决策卡目标价是 1.5272 还是「—」）。
+    没有这条绑定，「这棵树是哪版代码跑的」只能靠时间戳猜。
+    """
+
+    def test_shape_and_types(self):
+        from wb_analysis.assemble import code_revision
+
+        rev = code_revision()
+        assert set(rev) == {"commit", "dirty", "branch"}
+        if rev["commit"] is not None:          # 非 git 环境（如源码包）允许全 None
+            assert 7 <= len(rev["commit"]) <= 40
+            assert isinstance(rev["dirty"], bool)
+
+    def test_non_git_dir_returns_none_not_raise(self, tmp_path, monkeypatch):
+        from wb_analysis import assemble
+
+        monkeypatch.setattr(assemble, "PROJECT_ROOT", tmp_path)
+        assert assemble.code_revision() == {"commit": None, "dirty": None, "branch": None}
+
+    def test_dirty_flag_reflects_worktree(self, tmp_path, monkeypatch):
+        """未提交改动必须被标成 dirty —— 否则「改了一半的代码跑出正式报告」无法识别。"""
+        from wb_analysis import assemble
+
+        repo = tmp_path / "r"
+        (repo / ".git").mkdir(parents=True)
+        # 用真实 git 初始化，避免伪造 .git 造成误判
+        import subprocess
+
+        subprocess.run(["git", "init", "-q"], cwd=str(repo), check=False)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=False)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=False)
+        (repo / "a.txt").write_text("1", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=str(repo), check=False)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=str(repo), check=False)
+        monkeypatch.setattr(assemble, "PROJECT_ROOT", repo)
+        clean = assemble.code_revision()
+        if clean["commit"] is None:            # git 不可用则跳过
+            pytest.skip("git 不可用")
+        assert clean["dirty"] is False
+        (repo / "a.txt").write_text("2", encoding="utf-8")
+        assert assemble.code_revision()["dirty"] is True
+
+
+@pytest.mark.unit
+class TestSealReadsCodeRevision:
+    """封存环节要能读出 RUN.json 里的代码版本（dirty 时出声）。"""
+
+    def test_reads_code_block(self, tmp_path):
+        from wb_analysis._seal_run import _run_code
+
+        (tmp_path / "RUN.json").write_text(
+            '{"code": {"commit": "abc1234", "dirty": true, "branch": "main"}}', encoding="utf-8"
+        )
+        assert _run_code(tmp_path)["commit"] == "abc1234"
+
+    def test_missing_or_broken_returns_none(self, tmp_path):
+        from wb_analysis._seal_run import _run_code
+
+        assert _run_code(tmp_path) is None                    # 文件不存在
+        (tmp_path / "RUN.json").write_text("{not json", encoding="utf-8")
+        assert _run_code(tmp_path) is None                    # 损坏
+        (tmp_path / "RUN.json").write_text('{"ticker": "X"}', encoding="utf-8")
+        assert _run_code(tmp_path) is None                    # 旧树没有 code 字段

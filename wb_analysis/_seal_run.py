@@ -167,6 +167,14 @@ def _refresh_scorecard() -> None:
         print(f"      ⚠ 记分卡刷新异常：{type(e).__name__}")
 
 
+def _run_code(tree: Path) -> dict | None:
+    """读 RUN.json 里渲染时的代码版本（由 `assemble.py` 写入）；缺失/损坏返回 None。"""
+    try:
+        return json.loads((tree / "RUN.json").read_text(encoding="utf-8")).get("code")
+    except (OSError, ValueError):
+        return None
+
+
 def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
          rebuild: bool = False) -> int:
     d = DRAFTS / f"{ticker}_{date}"
@@ -178,6 +186,13 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
         print("       等静默期满再跑；确认无并发写入可加 --force 明确承担风险。")
         print("     （事故记录：2026-09-23 因过早封存导致交付树与审计包不一致）")
         return 3
+    # ★ 2026-10-24：渲染时工作区是 dirty 的话要出声 —— 报告可能来自改了一半的代码，
+    #   而外观与正式报告无异（同类问题：`_price` 的解析 bug 曾让决策卡静默显示「—」）。
+    code = _run_code(tree)
+    if code and code.get("dirty"):
+        print(f"  ⚠ 该树由 **dirty 工作区**渲染（commit {code.get('commit')} + 未提交改动）")
+        print("     ⇒ 报告可能来自改了一半的代码；要正式交付请先提交代码再重渲染。")
+
     groups = artifacts_for(ticker, date)
     total = sum(len(v) for v in groups.values())
     if total == 0:
@@ -279,6 +294,7 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
                     "ticker": ticker, "data_date": date,
                     "sealed_at": _clock.now().isoformat(timespec="seconds"),
                     "report_tree": tree.name, "n_entries": len(old_entries) + 1,
+                    "code": code,
                 }, ensure_ascii=False, indent=2) + "\n")
             with zipfile.ZipFile(zp) as zchk:
                 got = set(zchk.namelist())
@@ -359,6 +375,7 @@ def seal(ticker: str, date: str, tree: Path, apply: bool, force: bool = False,
         z.writestr("SEAL.json", json.dumps({
             "ticker": ticker, "data_date": date, "sealed_at": _clock.now().isoformat(timespec="seconds"),
             "report_tree": tree.name, "n_entries": len(expected) + 1,
+            "code": code,
         }, ensure_ascii=False, indent=2) + "\n")
 
     with zipfile.ZipFile(zp) as z:

@@ -160,7 +160,7 @@ reports/
 │                                 ⚠️ **草稿名与渲染名不同**：草稿是 `4_risk/portfolio_manager.md`，
 │                                    渲染后落到 `5_portfolio/decision.md`（刻意的，别当 bug 修）
 │       ├── complete_report.md    ★ 想读报告只看这一个文件
-│       ├── RUN.json              运行清单：数据基准日 / 来源草稿 / 证据文件 / 评级
+│       ├── RUN.json              运行清单：数据基准日 / 来源草稿 / 证据文件 / 评级 / **代码版本**
 │       └── _source.zip           审计包：证据包 + 草稿 + 分析 JSON（报告里每个数字都能在里面溯源）
 ├── _datasets/                   雷达表、回测表等数据产品
 ├── _other/                      非 12 角色的专题报告

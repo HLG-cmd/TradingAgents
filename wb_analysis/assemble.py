@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -463,6 +464,38 @@ def check_completeness(data: dict) -> list[str]:
     return empty
 
 
+def code_revision() -> dict:
+    """渲染时的代码版本：commit / 是否 dirty / 分支。
+
+    为什么写进 RUN.json：报告是审计产物，`_source.zip` 存了草稿与证据但**不存代码**，
+    而代码行为直接决定报告里的数字（例如 `_price` 用 `re.match` 还是 `re.search`，
+    决定决策卡目标价是 `1.5272` 还是 `—`）。没有这条绑定，
+    「这棵树是哪版代码跑的」只能靠时间戳猜。
+
+    `dirty=True` 表示渲染时工作区有未提交改动 ⇒ 报告可能来自改了一半的代码，
+    `_seal_run.py` 会据此提醒。非 git 环境返回全 None，不报错。
+    """
+    def _git(*args: str) -> str | None:
+        try:
+            r = subprocess.run(
+                ["git", *args], cwd=str(PROJECT_ROOT), capture_output=True,
+                text=True, encoding="utf-8", errors="replace", timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    commit = _git("rev-parse", "--short", "HEAD")
+    if not commit:
+        return {"commit": None, "dirty": None, "branch": None}
+    status = _git("status", "--porcelain")
+    return {
+        "commit": commit,
+        "dirty": bool(status) if status is not None else None,
+        "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="把分析结果渲染成 TradingAgents 同构报告树")
     ap.add_argument("target", nargs="?", help="ticker（如 NVDA）或分析结果 JSON 路径")
@@ -583,11 +616,17 @@ def main() -> int:
             "ratings": data.get("ratings", {}),
             "role_files": role_n,
             "layout": "flat" if args.flat else "nested",
+            "code": code_revision(),
         }
         (save_path / "RUN.json").write_text(
             json.dumps(run, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
         )
-        print(f"  [清单] RUN.json 已写入（数据基准日 {run['data_date'] or '未知'}，来源 {run['source_drafts'] or '—'}）")
+        _code = run["code"]
+        _tag = ""
+        if _code.get("commit"):
+            _tag = f"，代码 {_code['commit']}" + ("（**dirty**：有未提交改动）" if _code.get("dirty") else "")
+        print(f"  [清单] RUN.json 已写入（数据基准日 {run['data_date'] or '未知'}，"
+              f"来源 {run['source_drafts'] or '—'}{_tag}）")
     except Exception as exc:  # noqa: BLE001
         # 清单是辅助产物，写失败不应阻断交付 —— 但**必须出声**，不能静默。
         print(f"  [WARN] RUN.json 写入失败（不阻断交付）: {exc!r}")

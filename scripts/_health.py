@@ -545,7 +545,7 @@ BASELINE_K = "not DeepSeekLive"
 #   · 新增 `tests/test_wb_collect_assemble_pure.py`（10 项）：锁定 `collect`/`assemble`/`_derive_stock` 纯函数；
 #   · `tests/quant/test_factor_backtest.py`（+1 项）：锁定 `stats_utils` 统计函数单一来源；
 #   · `tests/test_no_naive_clock.py`（+1 项）：禁止 `_clock.py` 外硬编码 `ZoneInfo` 时区字面量。
-BASELINE_PASSED = 1237
+BASELINE_PASSED = 1242
 # ★ 2026-10-21（第二次）：935 → 937。依据＝实测 `pytest tests/ -q` 输出「937 passed」，
 #   增量 2 项来自统一网络重试参数化测试：
 #   - test_retry_with_custom_retryable_tuple (支持异常元组)
