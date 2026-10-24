@@ -13,9 +13,9 @@ import os
 from datetime import datetime, timedelta
 
 import pytz
-import requests
 
 from .errors import VendorNotConfiguredError
+from .net import get_scrubbed
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +134,17 @@ def _fred_today() -> str:
 
 def _request(path: str, params: dict) -> dict:
     """GET a FRED endpoint, surfacing FRED's JSON error body on a bad request."""
-    api_params = {**params, "api_key": get_api_key(), "file_type": "json"}
-    response = requests.get(
-        f"{FRED_API_BASE}/{path}", params=api_params, timeout=REQUEST_TIMEOUT
+    api_key = get_api_key()
+    # ★ 2026-10-24（移植上游 #1324）：FRED 用查询参数鉴权，requests 会把完整 URL
+    #   写进 HTTPError / ConnectionError / Timeout 的文本 ⇒ key 进日志与 traceback。
+    #   统一走 get_scrubbed：同类异常重抛、key 打码、不携带 request/response/异常链。
+    #   400 走 passthrough，交给下面的 JSON 错误体解析（保持原有可读报错）。
+    response = get_scrubbed(
+        f"{FRED_API_BASE}/{path}",
+        params={**params, "api_key": api_key, "file_type": "json"},
+        timeout=REQUEST_TIMEOUT,
+        secret=api_key,
+        passthrough=(400,),
     )
     # FRED returns 400 with a JSON {"error_message": ...} for unknown series IDs
     # or malformed params; turn that into a clear, actionable error.

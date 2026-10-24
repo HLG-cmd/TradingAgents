@@ -13,9 +13,13 @@ import pytest
 import tradingagents.dataflows.alpha_vantage_common as av
 import tradingagents.dataflows.alpha_vantage_fundamentals as avf
 import tradingagents.dataflows.alpha_vantage_stock as avs
+import tradingagents.dataflows.net as net
 
 
 class _FakeResponse:
+    # `get_scrubbed` 用 status_code 判断是否 passthrough，假响应必须带它
+    status_code = 200
+
     def __init__(self, text):
         self.text = text
 
@@ -34,7 +38,7 @@ def _patched_get(body, capture=None):
 @pytest.mark.unit
 def test_request_passes_timeout(monkeypatch):
     captured = {}
-    monkeypatch.setattr(av.requests, "get", _patched_get("Date,Close\n2025-01-02,1.0", captured))
+    monkeypatch.setattr(net.requests, "get", _patched_get("Date,Close\n2025-01-02,1.0", captured))
     av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
     assert captured.get("timeout") == av.REQUEST_TIMEOUT  # #990
 
@@ -42,7 +46,7 @@ def test_request_passes_timeout(monkeypatch):
 @pytest.mark.unit
 def test_rate_limit_detected(monkeypatch):
     body = '{"Information": "Our standard API rate limit is 25 requests per day. ... your API key ..."}'
-    monkeypatch.setattr(av.requests, "get", _patched_get(body))
+    monkeypatch.setattr(net.requests, "get", _patched_get(body))
     with pytest.raises(av.AlphaVantageRateLimitError):
         av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
 
@@ -53,11 +57,11 @@ def test_invalid_key_not_mislabeled_as_rate_limit(monkeypatch):
     # (transient) rate limit, but surface as a real configuration error (#991).
     body = ('{"Information": "the parameter apikey is invalid or missing. '
             'Please claim your free API key on (https://www.alphavantage.co/support/#api-key)."}')
-    monkeypatch.setattr(av.requests, "get", _patched_get(body))
+    monkeypatch.setattr(net.requests, "get", _patched_get(body))
     with pytest.raises(av.AlphaVantageNotConfiguredError):
         av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
     with pytest.raises(av.AlphaVantageRateLimitError):  # sanity: rate-limit path still distinct
-        monkeypatch.setattr(av.requests, "get", _patched_get('{"Note": "API call frequency is 5 calls per minute."}'))
+        monkeypatch.setattr(net.requests, "get", _patched_get('{"Note": "API call frequency is 5 calls per minute."}'))
         av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
 
 

@@ -4,9 +4,9 @@ from datetime import datetime
 from io import StringIO
 
 import pandas as pd
-import requests
 
 from .errors import VendorNotConfiguredError, VendorRateLimitError
+from .net import get_scrubbed
 
 API_BASE_URL = "https://www.alphavantage.co/query"
 
@@ -67,9 +67,10 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
     """
     # Create a copy of params to avoid modifying the original
     api_params = params.copy()
+    api_key = get_api_key()
     api_params.update({
         "function": function_name,
-        "apikey": get_api_key(),
+        "apikey": api_key,
         "source": "trading_agents",
     })
 
@@ -83,8 +84,13 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
         # Remove entitlement if it's None or empty
         api_params.pop("entitlement", None)
 
-    response = requests.get(API_BASE_URL, params=api_params, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
+    # ★ 2026-10-24（移植上游 #1324）：Alpha Vantage 用 `apikey` 查询参数鉴权，
+    #   requests 会把完整 URL 写进异常文本 ⇒ key 进日志。走 get_scrubbed 脱敏。
+    #   注意：AV 的「限流 / key 无效」是 **200 + JSON notice**，由下方正文分类处理，
+    #   与 HTTP 层异常无关，两条路径互不影响。
+    response = get_scrubbed(
+        API_BASE_URL, params=api_params, timeout=REQUEST_TIMEOUT, secret=api_key
+    )
 
     response_text = response.text
 
