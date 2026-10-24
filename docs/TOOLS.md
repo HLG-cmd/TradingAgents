@@ -1,6 +1,6 @@
 # 工具索引（自动生成，勿手改）
 
-- 生成时间：2026-10-24 11:05
+- 生成时间：2026-10-24 11:17
 - 覆盖目录：`quant/` · `wb_analysis/` · `scripts/`
 - **每个 `.py` 头部必须声明 `# lifecycle: reusable | maintenance | oneoff`**；
   新增探针用 `scripts/_tidy_scripts.py --new <名字> --serves <标的> <日期>` 生成。
@@ -90,7 +90,7 @@
 | 文件 | 用途 | 用法 / 服务于 |
 |---|---|---|
 | `scripts/_diff_evidence_pack.py` | 证据包等价性比对——用于 collect_index.py 拆分子模块前后的行为回归。 | — |
-| `scripts/_health.py` | 项目健康检查：**一条命令看整个项目状态**（把散落的各处门禁汇总成一个入口）。 | ./.venv/Scripts/python.exe scripts/_health.py [--quiet] |
+| `scripts/_health.py` | 项目健康检查：**一条命令看整个项目状态**（把散落的各处门禁汇总成一个入口）。 | ./.venv/Scripts/python.exe scripts/_health.py [--quiet] [--ci] |
 | `scripts/_memory_index.py` | 为本地运行痕迹目录（`.workbuddy-ai/memory/`）生成**主题索引**（`_INDEX.md`）。 | ./.venv/Scripts/python.exe scripts/_memory_index.py [--check] |
 | `scripts/_normalize_eol.py` | 把工作区里被误写成 CRLF 的**文本文件**恢复为 LF（.bat/.ps1 例外，规范要求 crlf）。 | python scripts/_oneoff/_normalize_eol.py   （把误写成 CRLF 的文本文件恢复为 LF） |
 | `scripts/_oneoff/_apply_governance.py` | 治理落地总执行器（默认干跑）。 | — |

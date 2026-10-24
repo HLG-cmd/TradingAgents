@@ -1,6 +1,6 @@
 # lifecycle: maintenance
 # created: 2026-09-23
-# usage: ./.venv/Scripts/python.exe scripts/_health.py [--quiet]
+# usage: ./.venv/Scripts/python.exe scripts/_health.py [--quiet] [--ci]
 """项目健康检查：**一条命令看整个项目状态**（把散落的各处门禁汇总成一个入口）。
 
 ## 为什么需要
@@ -18,6 +18,7 @@
 ## 用法
   ./.venv/Scripts/python.exe scripts/_health.py          # 完整输出
   ./.venv/Scripts/python.exe scripts/_health.py --quiet  # 只印非 PASS 项
+  ./.venv/Scripts/python.exe scripts/_health.py --ci     # 只跑仓库内生检查（CI 用）
 """
 import argparse
 import ast
@@ -916,16 +917,34 @@ CHECKS = [
     ("质量记分卡", chk_scorecard),
 ]
 
+#: `--ci` 模式只跑**仓库内生**的检查：不依赖本地 `reports/`、`.env`、缓存与记忆目录。
+#:
+#: ★ 2026-10-24 补：此前 CI 只跑 pytest + ruff，这 7 项门禁（含换行归一化、长函数预算、
+#:   文档漂移、脚本生命周期）**在 CI 上从未执行** ⇒ 换机器 / 别人 clone 后它们形同不存在。
+#:   而它们恰好是「长期不跑偏」唯一不依赖人记性的那一层。
+CI_CHECKS = {
+    "门禁自检",        # _selftest 的 41 项判据
+    "脚本生命周期",     # 每个脚本必须有 lifecycle 头 + 索引覆盖
+    "版本库忽略",       # 4 个瞬态目录确实被 git 忽略
+    "根目录整洁",       # 仓库根只允许白名单文件
+    "换行归一化",       # 文本文件必须 LF（含未跟踪）
+    "长函数预算",       # ≥120 行函数只减不增
+    "文档漂移",         # 19 份文档无硬编码计数 / 旧路径 / 行号
+}
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--quiet", action="store_true", help="只印非 PASS 项")
+    ap.add_argument("--ci", action="store_true",
+                    help="只跑仓库内生的检查（跳过依赖本地 reports/.env/缓存/记忆的项）")
     args = ap.parse_args()
 
-    rows = [(name, *fn()) for name, fn in CHECKS]
+    checks = [(n, f) for n, f in CHECKS if (n in CI_CHECKS if args.ci else True)]
+    rows = [(name, *fn()) for name, fn in checks]
     icon = {"PASS": "✓", "WARN": "△", "FAIL": "✗"}
     print("=" * 88)
-    print("TradingAgents 项目健康检查")
+    print("TradingAgents 项目健康检查" + ("（--ci：仅仓库内生项）" if args.ci else ""))
     print("=" * 88)
     if not args.quiet:
         print(f"\n  {'检查项':16s} {'结果':6s} 说明")

@@ -34,6 +34,29 @@ jobs:
       - name: Run test suite
         run: pytest -q --cov=tradingagents --cov=quant --cov=wb_analysis --cov-report=term-missing
 
+  gates:
+    name: repo-intrinsic gates (_health --ci)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Setup CI test environment
+        run: |
+          mkdir -p reports
+          cp .env.example .env
+          echo "SEC_USER_AGENT=CI_Runner ci_runner@example.com" >> .env
+      # 只跑不依赖本地状态的 7 项：门禁自检 / 脚本生命周期 / 版本库忽略 /
+      # 根目录整洁 / 换行归一化 / 长函数预算 / 文档漂移。
+      # 报告卫生、堆积预算、质量记分卡等依赖本地 reports/ 的项在 CI 上无意义，故跳过。
+      - name: Repo-intrinsic gates
+        run: python scripts/_health.py --ci
+
   smoke-install:
     name: clean-install smoke
     runs-on: ubuntu-latest
