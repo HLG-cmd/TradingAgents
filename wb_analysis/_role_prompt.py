@@ -82,19 +82,19 @@ ROLE_DUTY: dict[str, str] = {
     "bear": "构建看空证据链：估值风险、竞争侵蚀、财务隐患、宏观逆风；**逐条反驳牛派的具体论点**（引用对方用过的数字）。"
             "对话式辩论，不是数据清单。",
     "manager": "评判辩论质量（与发言顺序无关），产出研究计划。**文首必须是结论块**："
-               "`**Recommendation**: <五档>` / `**Rationale**: ...` / `**Strategic Actions**: ...`，之后才是论证。",
+               "`**Recommendation**: <五档英文词：Buy/Overweight/Hold/Underweight/Sell，仅此 1 次，写中文五档词下游门禁提取会失败>` / `**Rationale**: ...` / `**Strategic Actions**: ...`，之后才是论证（正文用中文：买入/增持/持有/减持/卖出）。",
     "trader": "把研究计划落成交易方案：入场价与止损必须是**绝对价格数字**（不得写百分比/区间）。"
               "**文首结论块**：`**Action**: <Buy|Hold|Sell>` / `**Reasoning**: ...` / `**Entry Price**: ...` / `**Stop Loss**: ...` / `**Position Sizing**: ...`；"
               "**末行必须是** `FINAL TRANSACTION PROPOSAL: **<BUY|HOLD|SELL>**`。",
     "aggressive": "主张放大敞口，强调错失成本，攻击保守方的过度谨慎。必须就交易员的**具体价位与仓位**争论。"
-                  "**文首**：`**Rating**: <五档>`。",
+                  "**文首**：`**Rating**: <五档英文词：Buy/Overweight/Hold/Underweight/Sell，仅此 1 次，写中文门禁提取会失败>`。",
     "conservative": "主张收缩敞口，强调本金保护与尾部风险，攻击激进方的风险低估。必须就交易员的**具体价位与仓位**争论。"
-                    "**文首**：`**Rating**: <五档>`。",
+                    "**文首**：`**Rating**: <五档英文词：Buy/Overweight/Hold/Underweight/Sell，仅此 1 次，写中文门禁提取会失败>`。",
     "neutral": "指出双方盲点，给出条件化的中间路径。必须就交易员的**具体价位与仓位**争论。"
-               "**文首**：`**Rating**: <五档>`。",
+               "**文首**：`**Rating**: <五档英文词：Buy/Overweight/Hold/Underweight/Sell，仅此 1 次，写中文门禁提取会失败>`。",
     "portfolio_manager": "综合风险辩论做终局决定：证据明确才给方向，平衡/冲突/不足时选持有。"
-                         "**文首结论块**：`**Rating**: <五档>` / `**Executive Summary**: ...` / `**Investment Thesis**: ...` / "
-                         "`**Price Target**: ...` / `**Time Horizon**: ...`。",
+                         "**文首结论块**：`**Rating`: <五档英文词：Buy/Overweight/Hold/Underweight/Sell，仅此 1 次，写中文门禁提取会失败>` / `**Executive Summary**: ...` / `**Investment Thesis**: ...` / "
+                         "`**Price Target`: <以数字开头，如 1.5272（…）>` / `**Time Horizon**: ...`。",
 }
 
 RATING_RULE: dict[str, str] = {
@@ -105,12 +105,12 @@ RATING_RULE: dict[str, str] = {
                  "**禁止**五档评级词。",
     "bull": "全文**禁止**出现五档英文词与 BUY/SELL/HOLD 大写。",
     "bear": "全文**禁止**出现五档英文词与 BUY/SELL/HOLD 大写。",
-    "manager": "五档词**只允许出现 1 次**，位于文首 `**Recommendation**:` 之后；正文一律中文（买入/增持/持有/减持/卖出）。",
+    "manager": "五档词（英文：Buy/Overweight/Hold/Underweight/Sell）**只允许出现 1 次**，位于文首 `**Recommendation**:` 之后；正文一律中文（买入/增持/持有/减持/卖出）。**标签后写中文五档词会导致下游门禁提取失败**。",
     "trader": "五档词**只允许 1 次**（`**Action**:` 之后）；末行 FINAL 行另计。正文一律中文。",
-    "aggressive": "五档词**只允许 1 次**，位于文首 `**Rating**:` 之后。",
-    "conservative": "五档词**只允许 1 次**，位于文首 `**Rating**:` 之后。",
-    "neutral": "五档词**只允许 1 次**，位于文首 `**Rating**:` 之后。",
-    "portfolio_manager": "五档词**只允许 1 次**，位于文首 `**Rating**:` 之后。",
+    "aggressive": "五档词（英文）**只允许 1 次**，位于文首 `**Rating**:` 之后；写中文（如「看空」）下游门禁提取会失败。",
+    "conservative": "五档词（英文）**只允许 1 次**，位于文首 `**Rating**:` 之后；写中文（如「看多」）下游门禁提取会失败。",
+    "neutral": "五档词（英文）**只允许 1 次**，位于文首 `**Rating**:` 之后；写中文下游门禁提取会失败。",
+    "portfolio_manager": "五档词（英文）**只允许 1 次**，位于文首 `**Rating**:` 之后；写中文下游门禁提取会失败。",
 }
 
 
