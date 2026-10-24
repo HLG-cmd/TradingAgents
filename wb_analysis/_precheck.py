@@ -319,7 +319,7 @@ def main() -> int:
     # ---- 0e. 收益质量硬闸门（Q3 负税 / Q4 正常化偏差 / Q5 非经营重估浮盈）----
     # 2026-10-10 接入：彻底杜绝「低 PE 陷阱」（GOOG 浮盈占 61%、WDC 分立利得 69%、DUOL 负税）。
     # 判据：若命中 FAIL，检查简报中是否已改用经营性口径/扣非/剥离非经常性利得。
-    is_etf_or_index = any(x in tk.upper() for x in ("SPX", "NDX", "HSTECH", "512", "515", "159", "^"))
+    is_etf_or_index = any(x in tk.upper() for x in ("SPX", "NDX", "HSTECH", "51", "56", "58", "159", "^"))
     if tk and not is_etf_or_index:
         rc, out = run([PY, str(HERE / "_verify_earnings_quality.py"), "--tickers", tk, "--exit-on-fail"])
         if crashed(out):
@@ -398,7 +398,7 @@ def main() -> int:
                         expanded_ev.append(cand)
         rc, out = run([PY, str(HERE / "_lint_drafts.py"), str(draft)] + [str(e) for e in expanded_ev])
         viol = [line.strip() for line in out.splitlines() if line.strip().startswith("✗")]
-        untraced = [line.strip() for line in out.splitlines() if "未溯源数字" in line]
+        untraced = [line.strip() for line in out.splitlines() if line.strip().startswith("未溯源数字")]
         if crashed(out):
             add("数字溯源/契约", "FAIL", "校验器自身报错")
         elif rc == 2:

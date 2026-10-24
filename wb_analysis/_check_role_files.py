@@ -25,6 +25,7 @@ from wb_analysis._contract import (  # noqa: E402
     PROPOSAL_RE,
     RATING_ALLOWED_FILES,
 )
+from wb_analysis._length import bounds_for  # noqa: E402
 from wb_analysis._paths import is_archived_path  # noqa: E402
 
 RATING_OK = set(RATING_ALLOWED_FILES)  # 只允许出现 1 次五档词的席位（结论块那处）
@@ -138,8 +139,9 @@ def main() -> int:
             #    那个情形已被上面的 RATING.findall 捕获。
             #    不列举词、只写「本报告不含五档英文评级词」是无害的表述，
             #    **不要**在这里再判一次（会造成误报，而误报过多的检测器等于没有检测器）。
-            if len(t) < 4000:
-                flags.append(f"篇幅偏短 {len(t)}")
+            min_chars, _ = bounds_for(f.name)
+            if len(t) < min_chars:
+                flags.append(f"篇幅偏短 {len(t)} < {min_chars}")
             miss = [lbl for lbl, pat in REQUIRED_SECTION.get(f.name, [])
                     if not re.search(pat, t, re.M)]
             if miss:

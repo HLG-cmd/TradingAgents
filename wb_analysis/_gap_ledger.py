@@ -345,6 +345,15 @@ RULES["extended_hours"] = {
     "fallback": "常规时段首根 15 分钟 bar 的开盘缺口（口径不同：只反映集合竞价结果）",
 }
 
+# ★ 2026-10-24 新增：商品型 ETF 持仓通道（商品 ETF 无权益股票持仓，为结构性不可用）。
+RULES["etf_holdings"] = {
+    "kw": ["etf_holdings", "持仓", "成分股", "成分"],
+    "cls": "A", "decisive": False,
+    "blocks": "商品型 ETF 标的为贵金属现货合约（如 Au99.99），无权益股票持仓穿透",
+    "remedy": "商品型 ETF 不适用股票持仓，直接以底层商品现货价格走势与产品要素为准",
+    "fallback": "底层商品现货（Au99.99 / 伦敦金）价格与契约要素",
+}
+
 BODY_NOTE = {"stale": "报价陈旧（超过新鲜度闸门）", "unavailable": "通道不可用", "missing": "无数据",
              "empty": "返回为空", "N/A": "上游未提供"}
 

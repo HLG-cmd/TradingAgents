@@ -80,6 +80,8 @@ KNOWN: dict[str, dict] = {
     #   是散户「积存金」需求在 A 股最直接的场内替代。
     #   ⚠️ 商品型：无盈利/无分红/无 PB ⇒ 禁止引用权益估值，只能比费率/跟踪误差/折溢价。
     "518880": {"wcode": "sh518880", "name": "黄金ETF华安", "mode": "commodity"},
+    "518850": {"wcode": "sh518850", "name": "黄金ETF华夏", "mode": "commodity"},
+    "sh518850": {"wcode": "sh518850", "name": "黄金ETF华夏", "mode": "commodity"},
 }
 UNKNOWN_NAME = "[未登记标的]"
 
